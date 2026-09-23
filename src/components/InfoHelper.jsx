@@ -1,5 +1,4 @@
 import React, { useState } from 'react';
-import { HelpCircle, ChevronDown, ChevronUp } from 'lucide-react';
 
 export function InfoHelper({ title, text, whyItMatters }) {
   const [isOpen, setIsOpen] = useState(false);
@@ -9,11 +8,12 @@ export function InfoHelper({ title, text, whyItMatters }) {
       <button
         type="button"
         onClick={() => setIsOpen(!isOpen)}
-        className="inline-flex items-center gap-1 text-sky-400 hover:text-sky-300 transition-colors font-medium cursor-pointer"
+        aria-expanded={isOpen}
+        aria-label="What is this?"
+        title="What is this?"
+        className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-zinc-800 border border-zinc-700 text-sky-400 hover:text-sky-300 hover:border-sky-500 transition-colors font-bold text-[10px] leading-none cursor-pointer"
       >
-        <HelpCircle className="w-3.5 h-3.5" />
-        <span>What is this?</span>
-        {isOpen ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+        ?
       </button>
 
       {isOpen && (

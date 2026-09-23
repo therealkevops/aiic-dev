@@ -635,7 +635,7 @@ export function calculateInfra(config) {
     perGpuActGb = activationOverheadGb / totalGpus;
 
     if (trainingType === "lora") {
-      perGpuWeightsGb = weightMemoryTotalGb / tp;
+      perGpuWeightsGb = weightMemoryTotalGb / (tp * pp);
       perGpuGradGb    = gradientMemoryTotalGb  / totalGpus;
       perGpuKvOrOptGb = optimizerMemoryTotalGb / totalGpus;
     } else {
@@ -962,7 +962,7 @@ export function calculateInfra(config) {
     const ttftSec = t_compute + t_allreduce + t_pipeline + t_kv_transfer; // seconds
     const ttftMs = Number((ttftSec * 1000).toFixed(2));
 
-    const promptTokensPerSecPerReplica = Math.round(contextLength / ttftSec);
+    const promptTokensPerSecPerReplica = Math.round(promptTokens / ttftSec);
     const promptTokensPerSecPerGpu = Math.round(promptTokensPerSecPerReplica / prefillTpCount);
     const clusterBatchPromptTps = isLlmd ? promptTokensPerSecPerReplica : Math.round(promptTokensPerSecPerReplica * dp);
 

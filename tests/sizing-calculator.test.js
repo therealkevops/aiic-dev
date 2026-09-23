@@ -397,6 +397,33 @@ describe('3. Training Memory, Gradient Checkpointing & ZeRO Sharding', () => {
     assert.equal(Math.round(res.memory.optimizerTotalGb * 100) / 100, Math.round(expectedOptGb * 100) / 100);
   });
 
+  it('LoRA per-GPU weights shard across both TP and PP (regression: previously only divided by TP)', () => {
+    const llama70b = getModel('llama3-70b');
+    const h100 = getGpu('h100-sxm');
+    const platform = getPlatform('cisco-c885a-h100');
+
+    const res = calculateInfra({
+      workloadType: 'training',
+      trainingType: 'lora',
+      model: llama70b,
+      precision: getPrecision('fp16'),
+      contextLength: 4096,
+      concurrency: 2,
+      gpu: h100,
+      platform,
+      tp: 4, pp: 2, dp: 1,
+      zeroStage: 0,
+      networkProtocol: 'rocev2'
+    });
+
+    const expectedPerGpuWeightsGb = res.memory.weightTotalGb / (4 * 2);
+    assert.equal(
+      Math.round(res.memory.perGpuWeightsGb * 100) / 100,
+      Math.round(expectedPerGpuWeightsGb * 100) / 100,
+      `Expected LoRA base weights to shard across TP*PP=8 (${expectedPerGpuWeightsGb.toFixed(2)} GB/GPU), got ${res.memory.perGpuWeightsGb.toFixed(2)} GB/GPU`
+    );
+  });
+
   it('S6: blocks combination of ZeRO-2/3 with PP > 1 and displays warning', () => {
     const llama70b = getModel('llama3-70b');
     const h100 = getGpu('h100-sxm');
@@ -698,6 +725,37 @@ describe('5. Inference Latency & Throughput Engine', () => {
     assert.ok(
       res1.throughput.tpotMs >= 6 && res1.throughput.tpotMs <= 12,
       `Expected TPOT between 6 and 12 ms, got ${res1.throughput.tpotMs} ms`
+    );
+  });
+
+  it('Prompt Ingestion Speed is measured against prompt tokens, not full context length (regression)', () => {
+    const llama70b = getModel('llama3-70b');
+    const h100 = getGpu('h100-sxm');
+    const platform = getPlatform('cisco-c885a-h100');
+
+    const res = calculateInfra({
+      workloadType: 'inference',
+      model: llama70b,
+      precision: getPrecision('fp16'),
+      promptTokenRatio: 0.8,
+      contextLength: 8192,
+      concurrency: 4,
+      gpu: h100,
+      platform,
+      tp: 8, pp: 1, dp: 1,
+      networkProtocol: 'rocev2'
+    });
+
+    const expectedTps = Math.round(res.memory.promptTokens / res.throughput.ttftSec);
+    assert.equal(
+      res.throughput.promptTokensPerSecPerReplica,
+      expectedTps,
+      `Expected promptTokensPerSecPerReplica to be promptTokens/ttftSec (${expectedTps}), got ${res.throughput.promptTokensPerSecPerReplica}`
+    );
+    // Guard against regressing back to dividing by the full context length (prompt + output tokens)
+    assert.notEqual(
+      res.throughput.promptTokensPerSecPerReplica,
+      Math.round(8192 / res.throughput.ttftSec)
     );
   });
 

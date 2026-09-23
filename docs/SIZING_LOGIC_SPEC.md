@@ -249,6 +249,8 @@ For Meta LLaMA 3.1 70B ($L=80, \text{hidden}=8192, \text{intermediate}=28672, r=
 
 $$\text{Memory}_{\text{LoRA}} = (P \times B_{\text{param}}) + (P_{\text{adapter}} \times 2\text{ B grads}) + (P_{\text{adapter}} \times 12\text{ B Adam}) + M_{\text{act}} \quad [\text{GB}]$$
 
+The frozen base weight term ($P \times B_{\text{param}}$) is sharded per-GPU using the same rule as Section 3.4 ($weights_{\text{per\_gpu}} = W / (TP \times PP) \times \text{CONFIG.ppImbalance}$) — Pipeline Parallelism still partitions the base model's layers across nodes under LoRA fine-tuning, exactly as it does for full SFT.
+
 ### 5.4 ZeRO Sharding Stages & Parallelism Compatibility
 
 Under Data Parallelism ($DP$), ZeRO partitions memory across all $N_{\text{gpus}} = TP \times PP \times DP$:

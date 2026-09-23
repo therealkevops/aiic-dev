@@ -960,7 +960,7 @@ export function calculateInfra(config) {
     const t_kv_transfer = isLlmd ? (llmdData?.kvTransfer?.kvTransferSec ?? ((llmdData?.kvTransfer?.kvTransferLatencyMs || 0) / 1000)) : 0; // seconds (C5)
 
     const ttftSec = t_compute + t_allreduce + t_pipeline + t_kv_transfer; // seconds
-    const ttftMs = Math.max(1, Math.round(ttftSec * 1000));
+    const ttftMs = Number((ttftSec * 1000).toFixed(2));
 
     const promptTokensPerSecPerReplica = Math.round(contextLength / ttftSec);
     const promptTokensPerSecPerGpu = Math.round(promptTokensPerSecPerReplica / prefillTpCount);

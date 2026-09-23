@@ -313,7 +313,7 @@ ${bom.activeParamsNote ? `- MoE Active Params: ${bom.activeParamsNote}\n` : ''}-
 - Datacenter Racks: ~${facility.totalRacks} standard 42U Racks (${facility.totalRuNeeded} RU)
 ${workloadType === 'inference' && throughput ? `
 6. ESTIMATED INFERENCE PERFORMANCE (PREFILL & DECODE)
-- Prefill TTFT (Prompt Latency): ~${throughput.ttftMs < 1000 ? `${throughput.ttftMs} ms` : `${throughput.ttftSec} s`} (at ${contextLength.toLocaleString()} tokens)${isLlmd ? ` [includes ~${throughput.kvTransferLatencyMs}ms RoCEv2 handoff]` : ''}
+- Prefill TTFT (Prompt Latency): ~${throughput.ttftMs < 1000 ? `${Number(throughput.ttftMs).toFixed(2)} ms` : `${Number(throughput.ttftSec).toFixed(2)} s`} (at ${contextLength.toLocaleString()} tokens)${isLlmd ? ` [includes ~${throughput.kvTransferLatencyMs}ms RoCEv2 handoff]` : ''}
 - Prompt Ingestion Speed: ~${throughput.promptTokensPerSecPerReplica?.toLocaleString()} prompt tok/s per replica
 - Generation Latency (TPOT): ~${throughput.tpotMs} ms/tok (~${throughput.tokensPerSecPerGpu} tok/s per stream)
 - Cluster Generation Throughput: ~${throughput.batchThroughputTps?.toLocaleString()} gen tok/s total (×${dp} DP × ${concurrency} streams)\n` : ''}=====================================================`;
@@ -2163,7 +2163,7 @@ ${workloadType === 'inference' && throughput ? `
                     <div className="bg-zinc-900/90 p-2 rounded border border-zinc-800">
                       <div className="text-[10px] text-zinc-400">Time to 1st Token (TTFT)</div>
                       <div className="font-bold text-sky-400 text-sm mt-0.5 font-mono">
-                        {throughput.ttftMs < 1000 ? `${throughput.ttftMs} ms` : `${throughput.ttftSec} s`}
+                        {throughput.ttftMs < 1000 ? `${Number(throughput.ttftMs).toFixed(2)} ms` : `${Number(throughput.ttftSec).toFixed(2)} s`}
                       </div>
                       <div className="text-[9px] text-zinc-500 mt-0.5">at {contextLength.toLocaleString()} tokens</div>
                     </div>

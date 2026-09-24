@@ -150,6 +150,10 @@ export function Meter({ segments, capacity, className = '' }) {
 }
 
 // ---------- Segmented toggle (2-3 option pill) ----------
+// For a genuine multi-way mode choice (e.g. "Owned Datacenter" vs "Colocation"). Segments are
+// always equal-width regardless of label length, so it never looks lopsided. For a plain
+// on/off setting, prefer Switch/ToggleRow below instead -- a two-button segmented control
+// reads as heavier UI than a boolean setting needs.
 export function SegmentedToggle({ options, value, onChange, className = '' }) {
   return (
     <div className={`flex p-0.5 bg-zinc-950 rounded-lg border border-zinc-800 text-xs ${className}`}>
@@ -158,13 +162,50 @@ export function SegmentedToggle({ options, value, onChange, className = '' }) {
           key={opt.value}
           type="button"
           onClick={() => onChange(opt.value)}
-          className={`px-3 py-1 rounded-md transition cursor-pointer whitespace-nowrap ${
+          className={`flex-1 px-3 py-1 rounded-md transition cursor-pointer whitespace-nowrap text-center ${
             value === opt.value ? 'bg-sky-600 text-white font-medium' : 'text-zinc-400 hover:text-white'
           }`}
         >
           {opt.label}
         </button>
       ))}
+    </div>
+  );
+}
+
+// ---------- Switch (boolean on/off) ----------
+export function Switch({ checked, onChange, disabled = false }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      disabled={disabled}
+      onClick={() => !disabled && onChange(!checked)}
+      className={`relative w-10 h-[22px] rounded-full shrink-0 transition-colors ${
+        disabled ? 'bg-zinc-800 cursor-not-allowed' : checked ? 'bg-sky-600 cursor-pointer' : 'bg-zinc-700 cursor-pointer'
+      }`}
+    >
+      <span
+        className={`absolute top-0.5 left-0.5 w-[18px] h-[18px] bg-white rounded-full shadow transition-transform ${
+          checked ? 'translate-x-[18px]' : 'translate-x-0'
+        }`}
+      />
+    </button>
+  );
+}
+
+// ---------- Toggle row (label + description on the left, Switch on the right) ----------
+// The standard "settings row" pattern for a boolean setting -- pairs a Switch with its label
+// and an optional one-line description, instead of cramming both into segmented-toggle labels.
+export function ToggleRow({ label, description, checked, onChange, disabled = false }) {
+  return (
+    <div className="flex items-center justify-between gap-3 py-0.5">
+      <div className="min-w-0">
+        <div className="text-xs font-medium text-zinc-300">{label}</div>
+        {description && <div className="text-[10.5px] text-zinc-500 mt-0.5">{description}</div>}
+      </div>
+      <Switch checked={checked} onChange={onChange} disabled={disabled} />
     </div>
   );
 }

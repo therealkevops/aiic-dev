@@ -46,6 +46,7 @@ export const USE_CASE_PRESETS = [
       networkHardwareAdderPct: 15, powerUsdPerKwh: 0.12,
       useColo: false, coloUsdPerKwPerMonth: 150,
       enableNvidiaAiEnterprise: true, supportPctPerYear: 15, tcoYears: 3,
+      enableMig: false, selectedMigProfileId: null,
     },
   },
   {
@@ -89,6 +90,7 @@ export const USE_CASE_PRESETS = [
       networkHardwareAdderPct: 15, powerUsdPerKwh: 0.12,
       useColo: false, coloUsdPerKwPerMonth: 150,
       enableNvidiaAiEnterprise: true, supportPctPerYear: 15, tcoYears: 3,
+      enableMig: false, selectedMigProfileId: null,
     },
   },
   {
@@ -132,6 +134,7 @@ export const USE_CASE_PRESETS = [
       networkHardwareAdderPct: 15, powerUsdPerKwh: 0.12,
       useColo: false, coloUsdPerKwPerMonth: 150,
       enableNvidiaAiEnterprise: false, supportPctPerYear: 15, tcoYears: 3,
+      enableMig: false, selectedMigProfileId: null,
     },
   },
   {
@@ -175,6 +178,7 @@ export const USE_CASE_PRESETS = [
       networkHardwareAdderPct: 15, powerUsdPerKwh: 0.12,
       useColo: false, coloUsdPerKwPerMonth: 150,
       enableNvidiaAiEnterprise: true, supportPctPerYear: 15, tcoYears: 3,
+      enableMig: false, selectedMigProfileId: null,
     },
   },
   {
@@ -218,6 +222,7 @@ export const USE_CASE_PRESETS = [
       networkHardwareAdderPct: 15, powerUsdPerKwh: 0.12,
       useColo: false, coloUsdPerKwPerMonth: 150,
       enableNvidiaAiEnterprise: true, supportPctPerYear: 15, tcoYears: 3,
+      enableMig: false, selectedMigProfileId: null,
     },
   },
   {
@@ -261,6 +266,7 @@ export const USE_CASE_PRESETS = [
       networkHardwareAdderPct: 15, powerUsdPerKwh: 0.12,
       useColo: false, coloUsdPerKwPerMonth: 150,
       enableNvidiaAiEnterprise: true, supportPctPerYear: 15, tcoYears: 3,
+      enableMig: false, selectedMigProfileId: null,
     },
   },
   {
@@ -304,6 +310,7 @@ export const USE_CASE_PRESETS = [
       networkHardwareAdderPct: 15, powerUsdPerKwh: 0.12,
       useColo: false, coloUsdPerKwPerMonth: 150,
       enableNvidiaAiEnterprise: false, supportPctPerYear: 15, tcoYears: 3,
+      enableMig: false, selectedMigProfileId: null,
     },
   },
 
@@ -349,6 +356,7 @@ export const USE_CASE_PRESETS = [
       networkHardwareAdderPct: 15, powerUsdPerKwh: 0.12,
       useColo: false, coloUsdPerKwPerMonth: 150,
       enableNvidiaAiEnterprise: true, supportPctPerYear: 15, tcoYears: 3,
+      enableMig: false, selectedMigProfileId: null,
     },
   },
   {
@@ -392,6 +400,7 @@ export const USE_CASE_PRESETS = [
       networkHardwareAdderPct: 15, powerUsdPerKwh: 0.12,
       useColo: false, coloUsdPerKwPerMonth: 150,
       enableNvidiaAiEnterprise: true, supportPctPerYear: 15, tcoYears: 3,
+      enableMig: false, selectedMigProfileId: null,
     },
   },
   {
@@ -435,6 +444,7 @@ export const USE_CASE_PRESETS = [
       networkHardwareAdderPct: 15, powerUsdPerKwh: 0.12,
       useColo: false, coloUsdPerKwPerMonth: 150,
       enableNvidiaAiEnterprise: true, supportPctPerYear: 15, tcoYears: 3,
+      enableMig: false, selectedMigProfileId: null,
     },
   },
   {
@@ -478,6 +488,7 @@ export const USE_CASE_PRESETS = [
       networkHardwareAdderPct: 15, powerUsdPerKwh: 0.12,
       useColo: false, coloUsdPerKwPerMonth: 150,
       enableNvidiaAiEnterprise: false, supportPctPerYear: 15, tcoYears: 3,
+      enableMig: false, selectedMigProfileId: null,
     },
   },
   {
@@ -521,6 +532,7 @@ export const USE_CASE_PRESETS = [
       networkHardwareAdderPct: 15, powerUsdPerKwh: 0.12,
       useColo: false, coloUsdPerKwPerMonth: 150,
       enableNvidiaAiEnterprise: true, supportPctPerYear: 15, tcoYears: 3,
+      enableMig: false, selectedMigProfileId: null,
     },
   },
 
@@ -566,6 +578,7 @@ export const USE_CASE_PRESETS = [
       networkHardwareAdderPct: 15, powerUsdPerKwh: 0.12,
       useColo: true, coloUsdPerKwPerMonth: 150,
       enableNvidiaAiEnterprise: false, supportPctPerYear: 15, tcoYears: 3,
+      enableMig: false, selectedMigProfileId: null,
     },
   },
   {
@@ -609,6 +622,7 @@ export const USE_CASE_PRESETS = [
       networkHardwareAdderPct: 15, powerUsdPerKwh: 0.12,
       useColo: true, coloUsdPerKwPerMonth: 150,
       enableNvidiaAiEnterprise: false, supportPctPerYear: 15, tcoYears: 3,
+      enableMig: false, selectedMigProfileId: null,
     },
   },
   {
@@ -652,6 +666,7 @@ export const USE_CASE_PRESETS = [
       networkHardwareAdderPct: 15, powerUsdPerKwh: 0.12,
       useColo: true, coloUsdPerKwPerMonth: 150,
       enableNvidiaAiEnterprise: false, supportPctPerYear: 15, tcoYears: 3,
+      enableMig: false, selectedMigProfileId: null,
     },
   },
 ];

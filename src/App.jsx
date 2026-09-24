@@ -20,7 +20,8 @@ import {
   Workflow,
   Database,
   Wand2,
-  DollarSign
+  DollarSign,
+  Grid2x2
 } from 'lucide-react';
 
 import { MODEL_PRESETS, PRECISION_OPTIONS } from './data/models';
@@ -29,13 +30,14 @@ import { PLATFORM_VENDORS, PLATFORM_SYSTEMS } from './data/platforms';
 import { STORAGE_TIERS } from './data/storage';
 import { GPU_PRICING, DEFAULT_GPU_PRICING, NVIDIA_AI_ENTERPRISE_USD_PER_GPU_PER_YEAR, DEFAULT_NETWORK_HARDWARE_ADDER_PCT, DEFAULT_SUPPORT_PCT_PER_YEAR, DEFAULT_POWER_USD_PER_KWH, DEFAULT_COLO_USD_PER_KW_PER_MONTH, DEFAULT_TCO_YEARS } from './data/pricing';
 import { USE_CASE_PRESETS } from './data/presets';
-import { calculateInfra, calculateStorage, calculateCost, recommendSharding } from './utils/calculator';
+import { MIG_PROFILES } from './data/mig';
+import { calculateInfra, calculateStorage, calculateCost, calculateMigConsolidation, recommendSharding } from './utils/calculator';
 import { InfoHelper } from './components/InfoHelper';
 import { TopologyDiagram } from './components/TopologyDiagram';
 import { GlossaryPage } from './components/GlossaryPage';
 import {
   Card, Disclosure, SectionLabel, KpiRow, Kpi, Rows, Row, Banner, Meter,
-  SegmentedToggle, Field, SliderField, ScaleField, ChoiceCard, Tag
+  SegmentedToggle, Switch, ToggleRow, Field, SliderField, ScaleField, ChoiceCard, Tag
 } from './components/ui';
 
 export default function App() {
@@ -137,6 +139,10 @@ export default function App() {
   const [supportPctPerYear, setSupportPctPerYear] = useState(DEFAULT_SUPPORT_PCT_PER_YEAR);
   const [tcoYears, setTcoYears] = useState(DEFAULT_TCO_YEARS);
 
+  // --- MIG (Multi-Instance GPU) Partitioning State ---
+  const [enableMig, setEnableMig] = useState(false);
+  const [selectedMigProfileId, setSelectedMigProfileId] = useState(null); // null = auto-select smallest fitting profile
+
   // --- Use-case preset (header dropdown) ---
   const [selectedPresetId, setSelectedPresetId] = useState('');
 
@@ -192,6 +198,8 @@ export default function App() {
     setEnableNvidiaAiEnterprise(c.enableNvidiaAiEnterprise);
     setSupportPctPerYear(c.supportPctPerYear);
     setTcoYears(c.tcoYears);
+    setEnableMig(c.enableMig);
+    setSelectedMigProfileId(c.selectedMigProfileId);
     setActiveInputTab('workload');
   };
 
@@ -388,7 +396,21 @@ export default function App() {
     enableKvOffload,
   ]);
 
-  // 4. Cost & TCO -- consumes the already-computed infra + storage results, prices nothing new
+  // 4. MIG Partitioning -- a "what if" overlay, only meaningful for single-GPU-per-replica
+  // (TP=1, PP=1) colocated inference on MIG-capable hardware; feeds an optional override into
+  // Cost below rather than mutating the main compute/network/power sizing.
+  const mig = useMemo(() => {
+    return calculateMigConsolidation({
+      infraResults: results,
+      gpu,
+      gpusPerChassis: platform.gpusPerChassis,
+      chassisTdpKw: platform.chassisTdpKw,
+      enabled: enableMig,
+      migProfileId: selectedMigProfileId,
+    });
+  }, [results, gpu, platform, enableMig, selectedMigProfileId]);
+
+  // 5. Cost & TCO -- consumes the already-computed infra + storage + MIG results, prices nothing new
   const decodeGpuId = memory.llmd?.decode?.gpu?.id;
   const decodeGpuPricing = decodeGpuId ? GPU_PRICING[decodeGpuId] : null;
   const cost = useMemo(() => {
@@ -408,6 +430,12 @@ export default function App() {
       licensingUsdPerGpuPerYear: NVIDIA_AI_ENTERPRISE_USD_PER_GPU_PER_YEAR,
       supportPctPerYear,
       tcoYears,
+      // Only override when MIG actually reduces the physical GPU count -- otherwise leave cost
+      // identical to the non-MIG case rather than showing a slightly different number driven by
+      // itPowerKw's coarser estimate (chassis power only, no network/switch power) with no real
+      // consolidation to justify it.
+      computeGpuCountOverride: (mig.eligible && mig.physicalGpusNeeded < mig.naiveGpuCount) ? mig.physicalGpusNeeded : null,
+      itPowerKwOverride: (mig.eligible && mig.physicalGpusNeeded < mig.naiveGpuCount) ? mig.itPowerKw : null,
     });
   }, [
     results,
@@ -423,6 +451,7 @@ export default function App() {
     enableNvidiaAiEnterprise,
     supportPctPerYear,
     tcoYears,
+    mig,
   ]);
 
   // Copy BOM to clipboard
@@ -510,6 +539,7 @@ ${workloadType === 'inference' && throughput ? `
     { id: 'fabric', label: 'Fabric & PUE', icon: Network, meta: protocol.name },
     { id: 'storage', label: 'Storage', icon: HardDrive, meta: storageTier.vendor },
     { id: 'stack', label: 'Serving Stack', icon: Workflow, meta: orchestrator.toUpperCase() },
+    { id: 'mig', label: 'MIG Partitioning', icon: Grid2x2, meta: mig.eligible ? mig.selectedProfile.id : (enableMig ? 'N/A' : 'Off') },
     { id: 'cost', label: 'Cost & TCO', icon: DollarSign, meta: `$${cost.effectiveUsdPerGpuHour.toFixed(2)}/GPU-hr` },
   ];
 
@@ -1387,13 +1417,12 @@ ${workloadType === 'inference' && throughput ? `
                       />
                     }
                   />
-                  <Field label="KV Cache Disk / CXL Offload">
-                    <SegmentedToggle
-                      options={[{ value: false, label: 'Disabled (VRAM only)' }, { value: true, label: 'Enabled' }]}
-                      value={enableKvOffload}
-                      onChange={setEnableKvOffload}
-                    />
-                  </Field>
+                  <ToggleRow
+                    label="KV Cache Disk / CXL Offload"
+                    description={enableKvOffload ? 'Paging beyond VRAM to disk/CXL tiering.' : 'KV cache stays VRAM-only.'}
+                    checked={enableKvOffload}
+                    onChange={setEnableKvOffload}
+                  />
                 </>
               )}
 
@@ -1679,17 +1708,86 @@ ${workloadType === 'inference' && throughput ? `
             </Card>
           )}
 
-          {/* 7. Cost & TCO */}
+          {/* 7. MIG (Multi-Instance GPU) Partitioning */}
+          {activeInputTab === 'mig' && (
+            <Card
+              icon={Grid2x2}
+              title="7. MIG Partitioning"
+              right={mig.enabled ? <Tag tone={mig.eligible ? 'good' : 'warn'}>{mig.eligible ? 'Eligible' : 'Not eligible'}</Tag> : <Tag>Off</Tag>}
+              className="space-y-4"
+            >
+              <Banner tone="info" icon={AlertTriangle}>
+                MIG (Multi-Instance GPU) splits one physical GPU into up to 7 isolated instances. It's most valuable when a single replica needs far less than a whole GPU — small models, low concurrency, or many isolated tenants — and only applies to colocated inference where TP=1 and PP=1 (MIG instances have no NVLink between them, so a replica sharded across GPUs can't span them).
+              </Banner>
+
+              <ToggleRow
+                label="MIG Partitioning"
+                description={enableMig ? 'Packing replicas onto isolated MIG instances where eligible.' : 'Each replica gets a dedicated whole GPU.'}
+                checked={enableMig}
+                onChange={setEnableMig}
+              />
+
+              {enableMig && !mig.eligible && (
+                <Banner tone="warn" icon={AlertTriangle}>
+                  {mig.reason}
+                </Banner>
+              )}
+
+              {enableMig && mig.eligible && (
+                <>
+                  <Field label="MIG Profile" helper={
+                    <InfoHelper
+                      title="MIG Profile"
+                      text="Each profile trades isolated compute/memory slice size for how many instances fit on one physical GPU. Smaller profiles pack more replicas per GPU but give each replica a proportionally smaller share of compute and memory bandwidth."
+                      whyItMatters="Picking a profile larger than needed wastes consolidation potential; picking one too small won't fit the workload at all. The smallest fitting profile maximizes physical GPU savings."
+                    />
+                  }>
+                    <div className="grid grid-cols-1 gap-1.5">
+                      {mig.availableProfiles.map((p) => (
+                        <ChoiceCard
+                          key={p.id}
+                          selected={mig.selectedProfile.id === p.id}
+                          onClick={() => setSelectedMigProfileId(p.id)}
+                          title={p.id}
+                          desc={`${p.slices}/7 compute slices · ${p.vramGb} GB VRAM · ${Math.floor(7 / p.slices)}x instances per physical GPU`}
+                        />
+                      ))}
+                    </div>
+                  </Field>
+
+                  <div className="pt-3 border-t border-zinc-800/70">
+                    <Rows>
+                      <Row k="Replica footprint" v={`${memory.perGpuTotalUsedGb.toFixed(1)} GB`} mono={false} />
+                      <Row k="Selected profile" v={`${mig.selectedProfile.id} (${mig.instancesPerPhysicalGpu}x per physical GPU)`} tone="accent" />
+                      <Row k="Naive dedicated GPUs" v={`${mig.naiveGpuCount}`} mono={false} />
+                      <Row k="MIG-consolidated physical GPUs" v={`${mig.physicalGpusNeeded}`} tone="good" />
+                      <Row k="Physical GPU savings" v={`${mig.gpuCountSavings} GPUs (${mig.savingsPct.toFixed(0)}%)`} tone="good" />
+                      <Row k="Physical nodes needed" v={`${mig.physicalNodesNeeded}`} mono={false} />
+                      <Row k="Per-instance throughput" v={`~${(mig.throughputScaleFactor * 100).toFixed(0)}% of a whole GPU's rate`} mono={false} />
+                    </Rows>
+                  </div>
+                </>
+              )}
+            </Card>
+          )}
+
+          {/* 8. Cost & TCO */}
           {activeInputTab === 'cost' && (
             <Card
               icon={DollarSign}
-              title="7. Cost & TCO"
+              title="8. Cost & TCO"
               right={<Tag tone={cost.buildVsBuySavingsUsd >= 0 ? 'good' : 'warn'}>{cost.buildVsBuySavingsUsd >= 0 ? 'Owning wins' : 'Cloud wins'}</Tag>}
               className="space-y-4"
             >
               <Banner tone="info" icon={AlertTriangle}>
                 Every figure below is an editable illustrative estimate, not a vendor quote — NVIDIA and enterprise storage vendors don't publish list prices. Replace with your actual quote for a real budget number.
               </Banner>
+
+              {mig.eligible && mig.physicalGpusNeeded < mig.naiveGpuCount && (
+                <Banner tone="good" icon={Grid2x2}>
+                  MIG partitioning is active: compute capex and power below are priced against {mig.physicalGpusNeeded} MIG-consolidated physical GPU{mig.physicalGpusNeeded === 1 ? '' : 's'} ({mig.selectedProfile.id}), not the {mig.naiveGpuCount} dedicated GPUs a non-MIG deployment would need — a {mig.savingsPct.toFixed(0)}% reduction. The cloud comparison stays priced at {mig.naiveGpuCount} GPU-hours (cloud rental doesn't get the same consolidation benefit unless the provider offers fractional MIG billing).
+                </Banner>
+              )}
 
               <div className="grid grid-cols-2 gap-3">
                 <Field label={`${gpu.name} — Unit Price (Capex)`}>
@@ -1726,9 +1824,16 @@ ${workloadType === 'inference' && throughput ? `
                 }
               />
 
-              <Field label="Power Billing Model">
+              <Field
+                label="Power Billing Model"
+                helper={
+                  <div className="text-[10.5px] text-zinc-500 mt-1.5">
+                    {useColo ? 'Billed $/kW/month against IT load.' : 'Billed $/kWh against PUE-adjusted facility load.'}
+                  </div>
+                }
+              >
                 <SegmentedToggle
-                  options={[{ value: false, label: 'Owned Datacenter ($/kWh)' }, { value: true, label: 'Colocation ($/kW/month)' }]}
+                  options={[{ value: false, label: 'Owned Datacenter' }, { value: true, label: 'Colocation' }]}
                   value={useColo}
                   onChange={setUseColo}
                 />
@@ -1756,13 +1861,12 @@ ${workloadType === 'inference' && throughput ? `
                 />
               )}
 
-              <Field label="NVIDIA AI Enterprise Software Licensing">
-                <SegmentedToggle
-                  options={[{ value: false, label: 'Open-Source Stack Only' }, { value: true, label: 'Include ($4,500/GPU/yr)' }]}
-                  value={enableNvidiaAiEnterprise}
-                  onChange={setEnableNvidiaAiEnterprise}
-                />
-              </Field>
+              <ToggleRow
+                label="NVIDIA AI Enterprise Software Licensing"
+                description={enableNvidiaAiEnterprise ? 'Included at $4,500/GPU/yr.' : 'Open-source stack only — no licensing cost.'}
+                checked={enableNvidiaAiEnterprise}
+                onChange={setEnableNvidiaAiEnterprise}
+              />
 
               <SliderField
                 label="Hardware Support & Maintenance:"
@@ -2040,6 +2144,18 @@ ${workloadType === 'inference' && throughput ? `
                   <Kpi label="Rack units" value={`${facility.totalRuNeeded}`} sub="servers + switches" />
                 </KpiRow>
               </Disclosure>
+
+              {mig.eligible && (
+                <Disclosure icon={Grid2x2} title="MIG partitioning" right={`${mig.gpuCountSavings} GPUs saved`}>
+                  <Rows>
+                    <Row k="Selected profile" v={`${mig.selectedProfile.id} (${mig.instancesPerPhysicalGpu}x per physical GPU)`} tone="accent" />
+                    <Row k="Naive dedicated GPUs" v={`${mig.naiveGpuCount}`} mono={false} />
+                    <Row k="MIG-consolidated physical GPUs" v={`${mig.physicalGpusNeeded}`} tone="good" />
+                    <Row k="Physical nodes needed" v={`${mig.physicalNodesNeeded}`} mono={false} />
+                    <Row k="Per-instance throughput" v={`~${(mig.throughputScaleFactor * 100).toFixed(0)}% of a whole GPU's rate`} mono={false} />
+                  </Rows>
+                </Disclosure>
+              )}
 
               <Disclosure icon={DollarSign} title="Cost & TCO (illustrative estimate)" right={`$${cost.effectiveUsdPerGpuHour.toFixed(2)}/GPU-hr`}>
                 <Rows>

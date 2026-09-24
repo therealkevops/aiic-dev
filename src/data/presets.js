@@ -55,6 +55,7 @@ export const USE_CASE_PRESETS = [
       enableGuardrails: true, selectedGuardModelId: 'llama-guard-3-8b',
       guardGpuId: 'l40s-pcie', guardGpuUnitPriceUsd: 8500,
       enableInputGuard: true, enableOutputGuard: true,
+      enableIngress: true, selectedIngressTierId: 'software-lb', egressUsdPerGb: 0.09,
     },
   },
   {
@@ -107,6 +108,7 @@ export const USE_CASE_PRESETS = [
       enableGuardrails: false, selectedGuardModelId: 'llama-guard-3-8b',
       guardGpuId: 'l40s-pcie', guardGpuUnitPriceUsd: 8500,
       enableInputGuard: true, enableOutputGuard: true,
+      enableIngress: true, selectedIngressTierId: 'software-lb', egressUsdPerGb: 0.09,
     },
   },
   {
@@ -159,6 +161,7 @@ export const USE_CASE_PRESETS = [
       enableGuardrails: true, selectedGuardModelId: 'shieldgemma-2b',
       guardGpuId: 'l40s-pcie', guardGpuUnitPriceUsd: 8500,
       enableInputGuard: true, enableOutputGuard: true,
+      enableIngress: true, selectedIngressTierId: 'cloud-managed-lb', egressUsdPerGb: 0.09,
     },
   },
   {
@@ -211,6 +214,7 @@ export const USE_CASE_PRESETS = [
       enableGuardrails: true, selectedGuardModelId: 'granite-guardian-3-8b',
       guardGpuId: 'l40s-pcie', guardGpuUnitPriceUsd: 8500,
       enableInputGuard: true, enableOutputGuard: true,
+      enableIngress: true, selectedIngressTierId: 'software-lb', egressUsdPerGb: 0.09,
     },
   },
   {
@@ -263,6 +267,7 @@ export const USE_CASE_PRESETS = [
       enableGuardrails: false, selectedGuardModelId: 'llama-guard-3-8b',
       guardGpuId: 'l40s-pcie', guardGpuUnitPriceUsd: 8500,
       enableInputGuard: true, enableOutputGuard: true,
+      enableIngress: false, selectedIngressTierId: 'software-lb', egressUsdPerGb: 0.09,
     },
   },
   {
@@ -315,6 +320,7 @@ export const USE_CASE_PRESETS = [
       enableGuardrails: false, selectedGuardModelId: 'llama-guard-3-8b',
       guardGpuId: 'l40s-pcie', guardGpuUnitPriceUsd: 8500,
       enableInputGuard: true, enableOutputGuard: true,
+      enableIngress: false, selectedIngressTierId: 'software-lb', egressUsdPerGb: 0.09,
     },
   },
   {
@@ -367,6 +373,7 @@ export const USE_CASE_PRESETS = [
       enableGuardrails: true, selectedGuardModelId: 'llama-guard-3-1b',
       guardGpuId: 'l40s-pcie', guardGpuUnitPriceUsd: 8500,
       enableInputGuard: true, enableOutputGuard: true,
+      enableIngress: true, selectedIngressTierId: 'software-lb', egressUsdPerGb: 0.09,
     },
   },
 
@@ -421,6 +428,7 @@ export const USE_CASE_PRESETS = [
       enableGuardrails: true, selectedGuardModelId: 'llama-guard-3-8b',
       guardGpuId: 'l40s-pcie', guardGpuUnitPriceUsd: 8500,
       enableInputGuard: true, enableOutputGuard: true,
+      enableIngress: true, selectedIngressTierId: 'api-gateway', egressUsdPerGb: 0.09,
     },
   },
   {
@@ -473,6 +481,7 @@ export const USE_CASE_PRESETS = [
       enableGuardrails: true, selectedGuardModelId: 'llama-guard-3-8b',
       guardGpuId: 'l40s-pcie', guardGpuUnitPriceUsd: 8500,
       enableInputGuard: true, enableOutputGuard: true,
+      enableIngress: true, selectedIngressTierId: 'software-lb', egressUsdPerGb: 0.09,
     },
   },
   {
@@ -525,6 +534,7 @@ export const USE_CASE_PRESETS = [
       enableGuardrails: true, selectedGuardModelId: 'granite-guardian-3-8b',
       guardGpuId: 'l40s-pcie', guardGpuUnitPriceUsd: 8500,
       enableInputGuard: true, enableOutputGuard: true,
+      enableIngress: true, selectedIngressTierId: 'api-gateway', egressUsdPerGb: 0.09,
     },
   },
   {
@@ -577,6 +587,7 @@ export const USE_CASE_PRESETS = [
       enableGuardrails: true, selectedGuardModelId: 'llama-guard-3-8b',
       guardGpuId: 'l40s-pcie', guardGpuUnitPriceUsd: 8500,
       enableInputGuard: true, enableOutputGuard: true,
+      enableIngress: true, selectedIngressTierId: 'api-gateway', egressUsdPerGb: 0.09,
     },
   },
   {
@@ -629,6 +640,7 @@ export const USE_CASE_PRESETS = [
       enableGuardrails: false, selectedGuardModelId: 'llama-guard-3-8b',
       guardGpuId: 'l40s-pcie', guardGpuUnitPriceUsd: 8500,
       enableInputGuard: true, enableOutputGuard: true,
+      enableIngress: false, selectedIngressTierId: 'software-lb', egressUsdPerGb: 0.09,
     },
   },
 
@@ -683,6 +695,7 @@ export const USE_CASE_PRESETS = [
       enableGuardrails: false, selectedGuardModelId: 'llama-guard-3-8b',
       guardGpuId: 'l40s-pcie', guardGpuUnitPriceUsd: 8500,
       enableInputGuard: true, enableOutputGuard: true,
+      enableIngress: false, selectedIngressTierId: 'software-lb', egressUsdPerGb: 0.09,
     },
   },
   {
@@ -735,6 +748,7 @@ export const USE_CASE_PRESETS = [
       enableGuardrails: true, selectedGuardModelId: 'llama-guard-3-8b',
       guardGpuId: 'l40s-pcie', guardGpuUnitPriceUsd: 8500,
       enableInputGuard: true, enableOutputGuard: true,
+      enableIngress: true, selectedIngressTierId: 'cdn-edge', egressUsdPerGb: 0.085,
     },
   },
   {
@@ -787,6 +801,7 @@ export const USE_CASE_PRESETS = [
       enableGuardrails: false, selectedGuardModelId: 'llama-guard-3-8b',
       guardGpuId: 'l40s-pcie', guardGpuUnitPriceUsd: 8500,
       enableInputGuard: true, enableOutputGuard: true,
+      enableIngress: false, selectedIngressTierId: 'software-lb', egressUsdPerGb: 0.09,
     },
   },
 ];

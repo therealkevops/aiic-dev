@@ -24,7 +24,8 @@ import {
   Grid2x2,
   Timer,
   Search,
-  Shield
+  Shield,
+  Globe
 } from 'lucide-react';
 
 import { MODEL_PRESETS, PRECISION_OPTIONS } from './data/models';
@@ -36,7 +37,8 @@ import { USE_CASE_PRESETS } from './data/presets';
 import { MIG_PROFILES } from './data/mig';
 import { EMBEDDING_MODELS, VECTOR_DB_PLATFORMS, DEFAULT_EMBEDDING_MODEL_ID, DEFAULT_VECTOR_DB_ID } from './data/rag';
 import { GUARDRAIL_MODELS, DEFAULT_GUARDRAIL_MODEL_ID } from './data/guardrails';
-import { calculateInfra, calculateStorage, calculateCost, calculateMigConsolidation, calculateSla, calculateRag, calculateGuardrails, recommendSharding } from './utils/calculator';
+import { INGRESS_TIERS, DEFAULT_INGRESS_TIER_ID, DEFAULT_EGRESS_USD_PER_GB } from './data/ingress';
+import { calculateInfra, calculateStorage, calculateCost, calculateMigConsolidation, calculateSla, calculateRag, calculateGuardrails, calculateIngress, recommendSharding } from './utils/calculator';
 import { InfoHelper } from './components/InfoHelper';
 import { TopologyDiagram } from './components/TopologyDiagram';
 import { GlossaryPage } from './components/GlossaryPage';
@@ -171,6 +173,11 @@ export default function App() {
   const [enableInputGuard, setEnableInputGuard] = useState(true);
   const [enableOutputGuard, setEnableOutputGuard] = useState(true);
 
+  // --- Ingress / Edge Networking State ---
+  const [enableIngress, setEnableIngress] = useState(false);
+  const [selectedIngressTierId, setSelectedIngressTierId] = useState(DEFAULT_INGRESS_TIER_ID);
+  const [egressUsdPerGb, setEgressUsdPerGb] = useState(DEFAULT_EGRESS_USD_PER_GB);
+
   // --- Use-case preset (header dropdown) ---
   const [selectedPresetId, setSelectedPresetId] = useState('');
 
@@ -245,6 +252,9 @@ export default function App() {
     setGuardGpuUnitPriceUsd(c.guardGpuUnitPriceUsd);
     setEnableInputGuard(c.enableInputGuard);
     setEnableOutputGuard(c.enableOutputGuard);
+    setEnableIngress(c.enableIngress);
+    setSelectedIngressTierId(c.selectedIngressTierId);
+    setEgressUsdPerGb(c.egressUsdPerGb);
     setActiveInputTab('workload');
   };
 
@@ -504,7 +514,20 @@ export default function App() {
     });
   }, [enableGuardrails, results, guardModel, guardGpu, guardGpuUnitPriceUsd, enableInputGuard, enableOutputGuard]);
 
-  // 9. Cost & TCO -- consumes the already-computed infra + storage + MIG + RAG + guardrails results, prices nothing new
+  // 9. Ingress / Edge -- load-balancing/TLS/edge layer in front of the cluster. Third Add-on
+  // Module: self-hosted tiers add capex/power like RAG/guardrails, and ALL tiers add a recurring
+  // annual opex term (egress bandwidth + managed-service fees) that feeds into Cost below.
+  const ingressTier = INGRESS_TIERS.find(t => t.id === selectedIngressTierId) || INGRESS_TIERS[0];
+  const ingress = useMemo(() => {
+    return calculateIngress({
+      enabled: enableIngress,
+      infraResults: results,
+      ingressTier,
+      egressUsdPerGb,
+    });
+  }, [enableIngress, results, ingressTier, egressUsdPerGb]);
+
+  // 10. Cost & TCO -- consumes the already-computed infra + storage + MIG + RAG + guardrails + ingress results, prices nothing new
   const decodeGpuId = memory.llmd?.decode?.gpu?.id;
   const decodeGpuPricing = decodeGpuId ? GPU_PRICING[decodeGpuId] : null;
   const cost = useMemo(() => {
@@ -534,6 +557,9 @@ export default function App() {
       ragItPowerKw: rag.eligible ? rag.ragItPowerKw : 0,
       guardrailsComputeCapexUsd: guardrails.eligible ? guardrails.guardrailsComputeCapexUsd : 0,
       guardrailsItPowerKw: guardrails.eligible ? guardrails.guardrailsItPowerKw : 0,
+      ingressComputeCapexUsd: ingress.eligible ? ingress.ingressComputeCapexUsd : 0,
+      ingressItPowerKw: ingress.eligible ? ingress.ingressItPowerKw : 0,
+      ingressAnnualOpexUsd: ingress.eligible ? ingress.ingressAnnualOpexUsd : 0,
     });
   }, [
     results,
@@ -550,6 +576,7 @@ export default function App() {
     supportPctPerYear,
     tcoYears,
     guardrails,
+    ingress,
     mig,
     rag,
   ]);
@@ -620,27 +647,33 @@ ${guardrails.eligible ? `
 - Guards Enabled: ${[guardrails.enableInputGuard ? 'Input' : null, guardrails.enableOutputGuard ? 'Output' : null].filter(Boolean).join(' + ')}
 - Guard GPUs Provisioned: ${guardrails.guardGpusNeeded}x ${guardGpu.name} (cluster request rate: ${guardrails.requestRatePerSec.toFixed(2)} req/s)
 - Added Latency (TTFT / Total Response): ${(guardrails.addedTtftSec * 1000).toFixed(1)} ms / ${(guardrails.addedTotalLatencySec * 1000).toFixed(1)} ms
-- Guardrails Capex / IT Power: $${Math.round(guardrails.guardrailsComputeCapexUsd).toLocaleString()} / ${guardrails.guardrailsItPowerKw.toFixed(2)} kW (included in Cost & TCO below)\n` : ''}
-8. FACILITY & POWER FOOTPRINT
+- Guardrails Capex / IT Power: $${Math.round(guardrails.guardrailsComputeCapexUsd).toLocaleString()} / ${guardrails.guardrailsItPowerKw.toFixed(2)} kW (included in Cost & TCO below)\n` : ''}${ingress.eligible ? `
+8. INGRESS & EDGE (LOAD BALANCING + EGRESS BANDWIDTH)
+- Ingress Tier: ${ingressTier.vendor} — ${ingressTier.name} (${ingressTier.type})
+- Ingress Nodes Provisioned: ${ingress.nodesNeeded}x ${ingressTier.name} (cluster request rate: ${ingress.requestRatePerSec.toFixed(2)} req/s)
+- Added Latency (TLS + Routing): +${ingress.addedLatencyMs} ms
+- Annual Egress Bandwidth: ${Math.round(ingress.annualEgressGb).toLocaleString()} GB/yr ($${Math.round(ingress.annualEgressCostUsd).toLocaleString()}/yr)
+- Ingress Capex / Annual Opex: $${Math.round(ingress.ingressComputeCapexUsd).toLocaleString()} / $${Math.round(ingress.ingressAnnualOpexUsd).toLocaleString()}/yr (included in Cost & TCO below)\n` : ''}
+9. FACILITY & POWER FOOTPRINT
 - Compute Power: ${facility.chassisPowerKw.toFixed(1)} kW
 - Network Power: ${facility.networkPowerKw.toFixed(1)} kW
 - Total IT Power: ${facility.totalItPowerKw.toFixed(1)} kW
 - Total Facility Power (${pue.toFixed(2)} PUE): ${facility.totalFacilityPowerKw.toFixed(1)} kW
 - Datacenter Racks: ~${facility.totalRacks} standard 42U Racks (${facility.totalRuNeeded} RU)
 
-9. COST & TCO (ILLUSTRATIVE ESTIMATE -- NOT A VENDOR QUOTE)
-- Total Capex: $${Math.round(cost.totalCapexUsd).toLocaleString()} (Compute $${Math.round(cost.computeCapexUsd).toLocaleString()} + Network/Storage $${Math.round(cost.networkHardwareCapexUsd + cost.storageCapexUsd).toLocaleString()}${rag.eligible ? ` + RAG $${Math.round(cost.ragCapexUsd).toLocaleString()}` : ''}${guardrails.eligible ? ` + Guardrails $${Math.round(cost.guardrailsCapexUsd).toLocaleString()}` : ''})
-- Annual Opex: $${Math.round(cost.annualOpexUsd).toLocaleString()}/yr (Power $${Math.round(cost.annualPowerCostUsd).toLocaleString()} + Licensing $${Math.round(cost.annualLicensingCostUsd).toLocaleString()} + Support $${Math.round(cost.annualSupportCostUsd).toLocaleString()})
+10. COST & TCO (ILLUSTRATIVE ESTIMATE -- NOT A VENDOR QUOTE)
+- Total Capex: $${Math.round(cost.totalCapexUsd).toLocaleString()} (Compute $${Math.round(cost.computeCapexUsd).toLocaleString()} + Network/Storage $${Math.round(cost.networkHardwareCapexUsd + cost.storageCapexUsd).toLocaleString()}${rag.eligible ? ` + RAG $${Math.round(cost.ragCapexUsd).toLocaleString()}` : ''}${guardrails.eligible ? ` + Guardrails $${Math.round(cost.guardrailsCapexUsd).toLocaleString()}` : ''}${ingress.eligible ? ` + Ingress $${Math.round(cost.ingressCapexUsd).toLocaleString()}` : ''})
+- Annual Opex: $${Math.round(cost.annualOpexUsd).toLocaleString()}/yr (Power $${Math.round(cost.annualPowerCostUsd).toLocaleString()} + Licensing $${Math.round(cost.annualLicensingCostUsd).toLocaleString()} + Support $${Math.round(cost.annualSupportCostUsd).toLocaleString()}${ingress.eligible ? ` + Ingress Egress/Fees $${Math.round(cost.ingressAnnualOpexUsd).toLocaleString()}` : ''})
 - ${cost.tcoYears}-Year TCO: $${Math.round(cost.tcoUsd).toLocaleString()} (~$${cost.effectiveUsdPerGpuHour.toFixed(2)}/GPU-hr effective)
 - vs. ${cost.tcoYears}-Yr Cloud Rental ($${cost.cloudEquivalentUsdPerHr.toFixed(2)}/hr cluster-wide): ${cost.buildVsBuySavingsUsd >= 0 ? `Owning saves $${Math.round(cost.buildVsBuySavingsUsd).toLocaleString()}` : `Cloud saves $${Math.round(-cost.buildVsBuySavingsUsd).toLocaleString()}`}
 - Capex Break-Even vs. Cloud: ${cost.breakEvenMonths != null ? `~${Math.round(cost.breakEvenMonths)} months` : 'Never — cloud is cheaper at these rates'}
 ${workloadType === 'inference' && throughput ? `
-10. ESTIMATED INFERENCE PERFORMANCE (PREFILL & DECODE)
+11. ESTIMATED INFERENCE PERFORMANCE (PREFILL & DECODE)
 - Prefill TTFT (Prompt Latency): ~${throughput.ttftMs < 1000 ? `${Number(throughput.ttftMs).toFixed(2)} ms` : `${Number(throughput.ttftSec).toFixed(2)} s`} (at ${contextLength.toLocaleString()} tokens)${isLlmd ? ` [includes ~${throughput.kvTransferLatencyMs}ms RoCEv2 handoff]` : ''}
 - Prompt Ingestion Speed: ~${throughput.promptTokensPerSecPerReplica?.toLocaleString()} prompt tok/s per replica
 - Generation Latency (TPOT): ~${throughput.tpotMs} ms/tok (~${throughput.tokensPerSecPerGpu} tok/s per stream)
 - Cluster Generation Throughput: ~${throughput.batchThroughputTps?.toLocaleString()} gen tok/s total (×${dp} DP × ${concurrency} streams)\n` : ''}${sla.eligible ? `
-11. SLA & TAIL LATENCY (M/M/c QUEUEING AT TARGET ρ=${(sla.targetUtilization * 100).toFixed(0)}%${sla.wasClamped ? ', clamped' : ''})
+12. SLA & TAIL LATENCY (M/M/c QUEUEING AT TARGET ρ=${(sla.targetUtilization * 100).toFixed(0)}%${sla.wasClamped ? ', clamped' : ''})
 - Concurrency per Replica (C): ${sla.concurrencyPerReplica}
 - P(Request Queues) — Erlang C: ${(sla.probabilityOfQueueing * 100).toFixed(1)}%
 - Mean Queueing Delay: ${(sla.meanWaitSec * 1000).toFixed(1)} ms
@@ -661,6 +694,7 @@ ${workloadType === 'inference' && throughput ? `
     { id: 'rag', label: 'RAG Pipeline', icon: Search, meta: rag.eligible ? `${rag.vectorDbNodesNeeded} DB nodes` : (enableRag ? 'N/A' : 'Off') },
     { id: 'stack', label: 'Serving Stack', icon: Workflow, meta: orchestrator.toUpperCase() },
     { id: 'guardrails', label: 'Guardrails', icon: Shield, meta: guardrails.eligible ? `${guardrails.guardGpusNeeded}x ${guardModel.name}` : (enableGuardrails ? 'N/A' : 'Off') },
+    { id: 'ingress', label: 'Ingress & Edge', icon: Globe, meta: ingress.eligible ? `${ingress.nodesNeeded}x ${ingressTier.name}` : (enableIngress ? 'N/A' : 'Off') },
     { id: 'mig', label: 'MIG Partitioning', icon: Grid2x2, meta: mig.eligible ? mig.selectedProfile.id : (enableMig ? 'N/A' : 'Off') },
     { id: 'sla', label: 'SLA & Tail Latency', icon: Timer, meta: sla.eligible ? `P99 ${sla.ttftP99Sec < 1 ? `${(sla.ttftP99Sec * 1000).toFixed(0)}ms` : `${sla.ttftP99Sec.toFixed(1)}s`}` : 'N/A' },
     { id: 'cost', label: 'Cost & TCO', icon: DollarSign, meta: `$${cost.effectiveUsdPerGpuHour.toFixed(2)}/GPU-hr` },
@@ -2152,11 +2186,100 @@ ${workloadType === 'inference' && throughput ? `
             </Card>
           )}
 
-          {/* 9. MIG (Multi-Instance GPU) Partitioning */}
+          {/* 9. Ingress & Edge: load-balancing/TLS-termination/edge layer in front of the cluster */}
+          {activeInputTab === 'ingress' && (
+            <Card
+              icon={Globe}
+              title="9. Ingress & Edge"
+              right={ingress.enabled ? <Tag tone={ingress.eligible ? 'good' : 'warn'}>{ingress.eligible ? 'Eligible' : 'Not eligible'}</Tag> : <Tag>Off</Tag>}
+              className="space-y-4"
+            >
+              <Banner tone="info" icon={AlertTriangle}>
+                The ingress/edge layer terminates TLS and load-balances every response leaving the cluster -- self-hosted appliances or software instances add real capex and power like RAG/guardrails; every tier (including fully-managed ones) adds a recurring annual bill for egress bandwidth, which can be a meaningful share of ongoing opex for high-throughput serving.
+              </Banner>
+
+              <ToggleRow
+                label="Ingress & Edge Sizing"
+                description={enableIngress ? 'Sizing a load-balancing/edge pool and its egress bandwidth bill against the cluster\'s request rate.' : 'No ingress infrastructure or egress bandwidth cost sized.'}
+                checked={enableIngress}
+                onChange={setEnableIngress}
+              />
+
+              {enableIngress && !ingress.eligible && (
+                <Banner tone="warn" icon={AlertTriangle}>
+                  {ingress.reason}
+                </Banner>
+              )}
+
+              {enableIngress && ingress.eligible && (
+                <>
+                  <Field label="Ingress Tier" helper={
+                    <InfoHelper
+                      title="Ingress Tier"
+                      text="How traffic is load-balanced and TLS-terminated in front of the cluster, from a self-hosted open-source proxy to a fully-managed CDN edge network."
+                      whyItMatters="Self-hosted tiers (software LB, hardware ADC, API gateway) add real capex and datacenter power; managed tiers (cloud LB, CDN edge) trade that for a recurring service fee and no hardware to operate. The CDN edge tier also reduces connection latency for geographically distributed users by terminating TLS closer to them."
+                    />
+                  }>
+                    <div className="grid grid-cols-1 gap-1.5">
+                      {INGRESS_TIERS.map((t) => (
+                        <ChoiceCard
+                          key={t.id}
+                          selected={selectedIngressTierId === t.id}
+                          onClick={() => setSelectedIngressTierId(t.id)}
+                          title={`${t.name} (${t.type === 'managed' ? 'Managed' : 'Self-Hosted'})`}
+                          desc={`${t.vendor} · ${t.throughputGbpsPerNode} Gbps/node · +${t.latencyOverheadMs}ms · ${t.notes}`}
+                        />
+                      ))}
+                    </div>
+                  </Field>
+
+                  <SliderField
+                    label="Egress Bandwidth Rate:"
+                    valueLabel={`$${egressUsdPerGb.toFixed(3)}/GB`}
+                    min="0.02" max="0.15" step="0.005"
+                    value={egressUsdPerGb}
+                    onChange={(e) => setEgressUsdPerGb(Number(e.target.value))}
+                    marks={['$0.02 (Negotiated Volume)', '$0.09 (Standard List)', '$0.15 (High-Cost Region)']}
+                    helper={
+                      <InfoHelper
+                        title="Egress Bandwidth Rate"
+                        text="The $/GB charged for data leaving the datacenter to the internet -- every response token streamed back to a user counts against this, regardless of which ingress tier fronts it. $0.09/GB is a commonly cited standard cloud list-price anchor; real negotiated rates vary by volume and provider, often dropping well below list at scale."
+                        whyItMatters="For a high-throughput API, egress can rival or exceed the ingress hardware's own cost -- it's a genuinely recurring bill, not a one-time capex line."
+                      />
+                    }
+                  />
+
+                  <div className="pt-3 border-t border-zinc-800/70">
+                    <SectionLabel>THROUGHPUT SIZING</SectionLabel>
+                    <Rows>
+                      <Row k="Cluster request rate" v={`${ingress.requestRatePerSec.toFixed(2)} req/s`} mono={false} />
+                      <Row k="Avg. response size" v={`${(ingress.avgResponseBytes / 1024).toFixed(1)} KB`} mono={false} />
+                      <Row k="Total egress bandwidth" v={`${(ingress.totalEgressGbps * 1000).toFixed(2)} Mbps`} mono={false} />
+                      <Row k="Ingress nodes needed" v={`${ingress.nodesNeeded}x ${ingressTier.name}`} tone="good" />
+                      <Row k="Added latency (TLS + routing)" v={`+${ingress.addedLatencyMs} ms`} mono={false} />
+                    </Rows>
+                  </div>
+
+                  <div className="pt-3 border-t border-zinc-800/70">
+                    <SectionLabel>INGRESS & EGRESS COST (FEEDS INTO COST & TCO)</SectionLabel>
+                    <Rows>
+                      <Row k="Ingress compute capex" v={`$${Math.round(ingress.ingressComputeCapexUsd).toLocaleString()}`} tone="good" />
+                      <Row k="Annual egress bandwidth cost" v={`$${Math.round(ingress.annualEgressCostUsd).toLocaleString()}/yr (${Math.round(ingress.annualEgressGb).toLocaleString()} GB/yr)`} tone="accent" />
+                      <Row k="Annual managed-service / support fee" v={`$${Math.round(ingress.annualManagedServiceCostUsd).toLocaleString()}/yr`} mono={false} />
+                      <Row k="Total ingress annual opex" v={`$${Math.round(ingress.ingressAnnualOpexUsd).toLocaleString()}/yr`} tone="good" />
+                      <Row k="Ingress IT power draw" v={`${ingress.ingressItPowerKw.toFixed(2)} kW`} mono={false} />
+                    </Rows>
+                  </div>
+                </>
+              )}
+            </Card>
+          )}
+
+          {/* 10. MIG (Multi-Instance GPU) Partitioning */}
           {activeInputTab === 'mig' && (
             <Card
               icon={Grid2x2}
-              title="9. MIG Partitioning"
+              title="10. MIG Partitioning"
               right={mig.enabled ? <Tag tone={mig.eligible ? 'good' : 'warn'}>{mig.eligible ? 'Eligible' : 'Not eligible'}</Tag> : <Tag>Off</Tag>}
               className="space-y-4"
             >
@@ -2215,11 +2338,11 @@ ${workloadType === 'inference' && throughput ? `
             </Card>
           )}
 
-          {/* 10. SLA / Tail-Latency Queueing */}
+          {/* 11. SLA / Tail-Latency Queueing */}
           {activeInputTab === 'sla' && (
             <Card
               icon={Timer}
-              title="10. SLA & Tail Latency"
+              title="11. SLA & Tail Latency"
               right={sla.eligible ? <Tag tone={sla.highUtilizationWarning ? 'warn' : 'good'}>{sla.highUtilizationWarning ? 'Near saturation' : 'Eligible'}</Tag> : <Tag>N/A</Tag>}
               className="space-y-4"
             >
@@ -2284,11 +2407,11 @@ ${workloadType === 'inference' && throughput ? `
             </Card>
           )}
 
-          {/* 11. Cost & TCO */}
+          {/* 12. Cost & TCO */}
           {activeInputTab === 'cost' && (
             <Card
               icon={DollarSign}
-              title="11. Cost & TCO"
+              title="12. Cost & TCO"
               right={<Tag tone={cost.buildVsBuySavingsUsd >= 0 ? 'good' : 'warn'}>{cost.buildVsBuySavingsUsd >= 0 ? 'Owning wins' : 'Cloud wins'}</Tag>}
               className="space-y-4"
             >
@@ -2409,8 +2532,14 @@ ${workloadType === 'inference' && throughput ? `
                   {guardrails.eligible && (
                     <Row k="Guardrails capex" v={`$${Math.round(cost.guardrailsCapexUsd).toLocaleString()}`} mono={false} />
                   )}
+                  {ingress.eligible && (
+                    <Row k="Ingress capex" v={`$${Math.round(cost.ingressCapexUsd).toLocaleString()}`} mono={false} />
+                  )}
                   <Row k="Total capex" v={`$${Math.round(cost.totalCapexUsd).toLocaleString()}`} tone="accent" />
                   <Row k="Annual opex" v={`$${Math.round(cost.annualOpexUsd).toLocaleString()}/yr`} mono={false} />
+                  {ingress.eligible && (
+                    <Row k="  incl. ingress egress/service fees" v={`$${Math.round(cost.ingressAnnualOpexUsd).toLocaleString()}/yr`} mono={false} />
+                  )}
                   <Row k={`${cost.tcoYears}-year TCO`} v={`$${Math.round(cost.tcoUsd).toLocaleString()}`} tone="accent" />
                   <Row k="Effective cost" v={`$${cost.effectiveUsdPerGpuHour.toFixed(2)}/GPU-hr`} tone="accent" />
                   <Row k="Cloud-equivalent rate" v={`$${cost.cloudEquivalentUsdPerHr.toFixed(2)}/hr cluster-wide`} mono={false} />
@@ -2677,6 +2806,18 @@ ${workloadType === 'inference' && throughput ? `
                     <Row k="Guard GPUs provisioned" v={`${guardrails.guardGpusNeeded}x ${guardGpu.name}`} tone="good" />
                     <Row k="Added latency (TTFT / total)" v={`${(guardrails.addedTtftSec * 1000).toFixed(0)} ms / ${(guardrails.addedTotalLatencySec * 1000).toFixed(0)} ms`} mono={false} />
                     <Row k="Guardrails capex / IT power" v={`$${Math.round(guardrails.guardrailsComputeCapexUsd).toLocaleString()} / ${guardrails.guardrailsItPowerKw.toFixed(2)} kW`} mono={false} />
+                  </Rows>
+                </Disclosure>
+              )}
+
+              {ingress.eligible && (
+                <Disclosure icon={Globe} title="Ingress & edge (load balancing + egress bandwidth)" right={`${ingress.nodesNeeded}x ${ingressTier.name}`}>
+                  <Rows>
+                    <Row k="Ingress tier" v={`${ingressTier.vendor} — ${ingressTier.name}`} tone="accent" />
+                    <Row k="Ingress nodes provisioned" v={`${ingress.nodesNeeded}x ${ingressTier.name}`} tone="good" />
+                    <Row k="Added latency" v={`+${ingress.addedLatencyMs} ms`} mono={false} />
+                    <Row k="Annual egress bandwidth" v={`${Math.round(ingress.annualEgressGb).toLocaleString()} GB/yr ($${Math.round(ingress.annualEgressCostUsd).toLocaleString()}/yr)`} mono={false} />
+                    <Row k="Ingress capex / annual opex" v={`$${Math.round(ingress.ingressComputeCapexUsd).toLocaleString()} / $${Math.round(ingress.ingressAnnualOpexUsd).toLocaleString()}/yr`} mono={false} />
                   </Rows>
                 </Disclosure>
               )}

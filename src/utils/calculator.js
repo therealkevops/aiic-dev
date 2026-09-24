@@ -1339,6 +1339,12 @@ export function calculateCost(config) {
     // RAG, applied to a second add-on module -- an input/output safety-classifier pool.
     guardrailsComputeCapexUsd = 0,
     guardrailsItPowerKw = 0,
+    // Ingress/edge overlay (see calculateIngress()): the same additive capex/power pattern as
+    // RAG and guardrails, plus a recurring annual opex term (egress bandwidth + managed-service
+    // fees) that RAG/guardrails don't have -- ingress cost isn't purely hardware-driven.
+    ingressComputeCapexUsd = 0,
+    ingressItPowerKw = 0,
+    ingressAnnualOpexUsd = 0,
   } = config;
 
   const isLlmd = !!infraResults.memory.llmd;
@@ -1361,22 +1367,22 @@ export function calculateCost(config) {
 
   const networkHardwareCapexUsd = computeCapexUsd * (networkHardwareAdderPct / 100);
   const storageCapexUsd = storageResults ? (storageResults.achievedCapacityTb * storageUsdPerTbRaw) : 0;
-  const totalCapexUsd = computeCapexUsd + networkHardwareCapexUsd + storageCapexUsd + ragComputeCapexUsd + guardrailsComputeCapexUsd;
+  const totalCapexUsd = computeCapexUsd + networkHardwareCapexUsd + storageCapexUsd + ragComputeCapexUsd + guardrailsComputeCapexUsd + ingressComputeCapexUsd;
 
   const hoursPerYear = 24 * 365;
   const baseItPowerKw = itPowerKwOverride != null ? itPowerKwOverride : infraResults.facility.totalItPowerKw;
-  const billedItPowerKw = baseItPowerKw + ragItPowerKw + guardrailsItPowerKw;
+  const billedItPowerKw = baseItPowerKw + ragItPowerKw + guardrailsItPowerKw + ingressItPowerKw;
   // Colo bills $/kW/month on IT load (the colo provider's own facility overhead/cooling is
   // baked into their rate); an owned DC bills the utility $/kWh on the PUE-adjusted total load.
   // The MIG IT-power override has no PUE figure of its own, so the owned-DC branch applies the
   // same PUE multiplier the rest of this deployment already uses. Add-on modules' (RAG,
-  // guardrails) own IT power gets the same PUE treatment -- they're colocated with the rest of
-  // the deployment, not a separate facility.
+  // guardrails, ingress) own IT power gets the same PUE treatment -- they're colocated with the
+  // rest of the deployment, not a separate facility.
   const impliedPue = infraResults.facility.totalItPowerKw > 0
     ? infraResults.facility.totalFacilityPowerKw / infraResults.facility.totalItPowerKw
     : 1;
   const baseFacilityPowerKw = itPowerKwOverride != null ? baseItPowerKw * impliedPue : infraResults.facility.totalFacilityPowerKw;
-  const billedFacilityPowerKw = baseFacilityPowerKw + ((ragItPowerKw + guardrailsItPowerKw) * impliedPue);
+  const billedFacilityPowerKw = baseFacilityPowerKw + ((ragItPowerKw + guardrailsItPowerKw + ingressItPowerKw) * impliedPue);
   const annualPowerCostUsd = useColo
     ? billedItPowerKw * coloUsdPerKwPerMonth * 12
     : billedFacilityPowerKw * hoursPerYear * powerUsdPerKwh;
@@ -1384,8 +1390,11 @@ export function calculateCost(config) {
   const annualLicensingCostUsd = enableNvidiaAiEnterprise
     ? infraResults.totalGpus * licensingUsdPerGpuPerYear
     : 0;
+  // Support % applies to hardware capex only (ingressComputeCapexUsd is already folded into
+  // totalCapexUsd above) -- ingressAnnualOpexUsd (egress bandwidth + managed-service fees) is a
+  // recurring bill, not a supportable asset, so it's added on top rather than run through support %.
   const annualSupportCostUsd = totalCapexUsd * (supportPctPerYear / 100);
-  const annualOpexUsd = annualPowerCostUsd + annualLicensingCostUsd + annualSupportCostUsd;
+  const annualOpexUsd = annualPowerCostUsd + annualLicensingCostUsd + annualSupportCostUsd + ingressAnnualOpexUsd;
 
   const tcoUsd = totalCapexUsd + (annualOpexUsd * tcoYears);
   const totalGpuHours = infraResults.totalGpus * hoursPerYear * tcoYears;
@@ -1408,6 +1417,8 @@ export function calculateCost(config) {
     storageCapexUsd,
     ragCapexUsd: ragComputeCapexUsd,
     guardrailsCapexUsd: guardrailsComputeCapexUsd,
+    ingressCapexUsd: ingressComputeCapexUsd,
+    ingressAnnualOpexUsd,
     totalCapexUsd,
     annualPowerCostUsd,
     annualLicensingCostUsd,
@@ -1806,5 +1817,83 @@ export function calculateGuardrails(config) {
     outputGuardLatencySec,
     addedTtftSec,
     addedTotalLatencySec,
+  };
+}
+
+// ─── Ingress / Edge Networking ─────────────────────────────────────────────────────────────────
+/**
+ * Sizes the load-balancing/TLS-termination/edge layer that sits in front of the LLM serving
+ * cluster: enough nodes (appliances, software instances, or managed-service units) to carry the
+ * cluster's outbound response bandwidth, plus the recurring egress bandwidth bill that traffic
+ * generates -- every response byte that leaves the datacenter is billed per GB regardless of
+ * which ingress tier fronts it. Like RAG and guardrails this is a real Add-on Module: self-hosted
+ * tiers add capex/power, and ALL tiers add a recurring annual opex term (egress + managed-service
+ * fees) that calculateCost() folds in directly, separate from the capex-driven support-cost base.
+ */
+export function calculateIngress(config) {
+  const {
+    enabled = false,
+    infraResults,
+    ingressTier,          // one of INGRESS_TIERS
+    egressUsdPerGb = 0.09,
+  } = config;
+
+  if (!enabled) {
+    return { enabled: false, eligible: false, reason: "Ingress/edge sizing is disabled." };
+  }
+
+  if (infraResults.workloadType !== "inference") {
+    return { enabled: true, eligible: false, reason: "Ingress/edge sizing applies to inference workloads -- training has no live request-serving traffic to front." };
+  }
+
+  const t = infraResults.throughput;
+  if (!t) {
+    return { enabled: true, eligible: false, reason: "No throughput data available for this configuration." };
+  }
+
+  // Same request-rate derivation as calculateGuardrails() -- every served request is one
+  // response leaving through ingress, 1:1 with LLM request volume.
+  const promptTokenRatio = infraResults.memory.promptTokenRatio;
+  const avgOutputTokens = Math.max(1, t.contextLength * (1 - promptTokenRatio));
+  const requestRatePerSec = t.clusterThroughput / avgOutputTokens;
+
+  // Response payload size: output tokens as UTF-8 text, plus SSE/JSON streaming framing overhead
+  // (event boundaries, field names) -- consistent with calculateRag()'s CHARS_PER_TOKEN estimate.
+  const CHARS_PER_TOKEN = 4;
+  const STREAMING_OVERHEAD_FACTOR = 1.15;
+  const avgResponseBytes = avgOutputTokens * CHARS_PER_TOKEN * STREAMING_OVERHEAD_FACTOR;
+
+  const totalEgressBitsPerSec = requestRatePerSec * avgResponseBytes * 8;
+  const totalEgressGbps = totalEgressBitsPerSec / 1e9;
+  const nodesNeeded = Math.max(1, Math.ceil(totalEgressGbps / ingressTier.throughputGbpsPerNode));
+
+  const secondsPerYear = 365 * 24 * 3600;
+  const annualEgressGb = (requestRatePerSec * avgResponseBytes * secondsPerYear) / 1e9;
+  const annualEgressCostUsd = annualEgressGb * egressUsdPerGb;
+
+  const ingressComputeCapexUsd = nodesNeeded * ingressTier.estimatedUsdPerNodeCapex;
+  const annualManagedServiceCostUsd = nodesNeeded * ingressTier.estimatedUsdPerNodeMonthlyOpex * 12;
+  const ingressAnnualOpexUsd = annualEgressCostUsd + annualManagedServiceCostUsd;
+
+  // Only self-hosted appliances/servers draw IT power on-prem; managed services run off-site.
+  const INGRESS_NODE_POWER_KW = 0.5; // typical 1U proxy/appliance server, illustrative
+  const ingressItPowerKw = ingressTier.type === "self-hosted" ? nodesNeeded * INGRESS_NODE_POWER_KW : 0;
+
+  return {
+    enabled: true,
+    eligible: true,
+    reason: null,
+    ingressTier,
+    requestRatePerSec,
+    avgResponseBytes,
+    totalEgressGbps,
+    nodesNeeded,
+    annualEgressGb,
+    annualEgressCostUsd,
+    annualManagedServiceCostUsd,
+    ingressComputeCapexUsd,
+    ingressAnnualOpexUsd,
+    ingressItPowerKw,
+    addedLatencyMs: ingressTier.latencyOverheadMs,
   };
 }

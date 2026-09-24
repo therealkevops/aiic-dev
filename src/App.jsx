@@ -393,7 +393,7 @@ ${bom.activeParamsNote ? `- MoE Active Params: ${bom.activeParamsNote}\n` : ''}-
 2. LOSSLESS COMPUTE FABRIC
 - Leaf Switches: ${bom.leafSwitchCount}x ${bom.leafSwitchModel}
 - Spine Switches: ${bom.spineSwitchCount}x ${bom.spineSwitchModel}
-- Bisection Bandwidth: ${network.totalClusterBisectionTbps.toFixed(1)} Tbps (${network.nicSpeedGbps}G × ${network.totalComputeNics} NICs × 2 directions)
+- Bisection Bandwidth: ${network.totalClusterBisectionTbps.toFixed(1)} Tbps (${network.nicSpeedGbps}G × ${network.totalComputeNics} NICs, 1:1 non-blocking)
 - NIC Speed: ${network.nicSpeedGbps}G per GPU (${network.nicSpeedGbps === 800 ? '800G ConnectX-8 Blackwell-class' : '400G ConnectX-7 Hopper-class'})
 - Lossless Protocol: ${network.protocol === 'rocev2' ? 'Lossless RoCEv2 (PFC 802.1Qbb + ECN)' : 'NVIDIA Quantum-2 Credit-Based Flow Control'}
 - Compute Cabling: ${bom.fabricCablesCount}x ${bom.fabricCablesType}

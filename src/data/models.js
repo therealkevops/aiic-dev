@@ -32,6 +32,22 @@ export const MODEL_PRESETS = [
     description: "Workhorse 70-billion parameter model. Standard production choice for enterprise AI."
   },
   {
+    id: "llama33-70b",
+    name: "Meta LLaMA 3.3 (70B)",
+    params: 70.6,
+    layers: 80,
+    numHeads: 64,  // Query heads
+    kvHeads: 8,    // GQA: 8 KV heads
+    headDim: 128,
+    hidden: 8192,
+    intermediate: 28672,
+    vocab: 128256,
+    maxContextLength: 131072, // 128k max native context
+    isMoe: false,
+    recommendedFor: "Latest enterprise-standard dense deployment; multilingual chat, tool use, long-form reasoning",
+    description: "Meta's updated 70B release — identical dense architecture and VRAM footprint to Llama 3.1 70B, with materially improved instruction-following and multilingual quality from refined post-training. Now the default choice for enterprises standardizing on a 70B-class Llama deployment."
+  },
+  {
     id: "llama3-405b",
     name: "Meta LLaMA 3.1 (405B)",
     params: 405.0,
@@ -107,6 +123,38 @@ export const MODEL_PRESETS = [
     isMoe: false,
     recommendedFor: "Coding, structured JSON output, math, multilingual chat",
     description: "High-performance open-weights dense 72B model with strong coding and math proficiency."
+  },
+  {
+    id: "mistral-large-2",
+    name: "Mistral Large 2 (123B)",
+    params: 123.0,
+    layers: 88,
+    numHeads: 96,  // Query heads
+    kvHeads: 8,    // GQA: 8 KV heads
+    headDim: 128,
+    hidden: 12288,
+    intermediate: 28672,
+    vocab: 32768,
+    maxContextLength: 131072, // 128k max native context
+    isMoe: false,
+    recommendedFor: "Enterprise on-premises flagship: multilingual reasoning, code generation, function calling, RAG",
+    description: "Mistral AI's flagship dense model, positioned explicitly for private / on-prem enterprise deployment with strong multilingual (12+ language) and code-generation performance."
+  },
+  {
+    id: "command-r-plus",
+    name: "Cohere Command R+ (104B)",
+    params: 104.0,
+    layers: 64,
+    numHeads: 96,  // Query heads (MHA-derived; hidden 12288 / 96 = 128 head_dim)
+    kvHeads: 8,    // GQA: 8 KV heads
+    headDim: 128,
+    hidden: 12288,
+    intermediate: 33792,
+    vocab: 256000, // Large multilingual tokenizer
+    maxContextLength: 131072, // 128k max native context
+    isMoe: false,
+    recommendedFor: "Enterprise RAG, multi-step tool use / agents, grounded generation with inline citations",
+    description: "Cohere's open-weights flagship, purpose-built for enterprise retrieval-augmented generation and tool-use workflows with native grounded-citation support."
   },
   {
     id: "custom",

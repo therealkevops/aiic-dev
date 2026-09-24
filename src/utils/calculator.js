@@ -1073,6 +1073,8 @@ export function calculateInfra(config) {
       tokensPerSecPerGpu:     Math.round(replicaThroughput / decodeTpCount),
       batchThroughputTps:     Math.round(clusterThroughput),
       C_rep,
+      decodeDp,
+      contextLength,
       decodeNote,
       // Prefill metrics (C4, C5)
       t_compute,
@@ -1495,5 +1497,102 @@ export function calculateMigConsolidation(config) {
     savingsPct,
     itPowerKw,
     throughputScaleFactor,
+  };
+}
+
+// Numerically-stable Erlang B recursion (avoids factorial/exponential overflow
+// at large c). B(0,a)=1; B(n,a) = (a*B(n-1,a)) / (n + a*B(n-1,a))
+function erlangB(c, a) {
+  let b = 1;
+  for (let n = 1; n <= c; n++) {
+    b = (a * b) / (n + a * b);
+  }
+  return b;
+}
+
+// Erlang C (probability an arriving request must queue) derived from Erlang B.
+function erlangC(c, a) {
+  const b = erlangB(c, a);
+  const rho = a / c;
+  return b / (1 - rho + rho * b);
+}
+
+// M/M/c waiting-time distribution is exponential for the fraction of requests
+// that queue at all: Wq_p = 0 for p <= 1-C (never queues), else the tail formula.
+function mmcWaitPercentile(c, a, mu, rho, C, p) {
+  if (p <= 1 - C) return 0;
+  return -Math.log((1 - p) / C) / (c * mu * (1 - rho));
+}
+
+export function calculateSla(config) {
+  const {
+    infraResults,
+    targetUtilization = 0.7, // rho: user-set target replica utilization (0-1)
+  } = config;
+
+  if (infraResults.workloadType !== "inference") {
+    return { eligible: false, reason: "SLA/tail-latency queueing applies to inference workloads (training has no request-serving concept)." };
+  }
+
+  if (infraResults.memory.llmd) {
+    return { eligible: false, reason: "Queueing is modeled per-replica and isn't yet extended to LLM-D disaggregated serving, which uses separate prefill/decode pools." };
+  }
+
+  const t = infraResults.throughput;
+  if (!t) {
+    return { eligible: false, reason: "No throughput data available for this configuration." };
+  }
+
+  const c = Math.max(1, Math.round(t.C_rep));
+  const ttftSec = t.ttftSec;
+  const tpotSec = t.t_step;
+  const contextLength = t.contextLength;
+  const promptTokenRatio = infraResults.memory.promptTokenRatio;
+  const avgOutputTokens = Math.max(1, contextLength * (1 - promptTokenRatio));
+
+  // Full slot-occupancy time: how long a request holds its concurrency slot,
+  // from admission (prefill) through the last decode step -- this, not just
+  // TTFT, is what determines how fast slots free up for queued requests.
+  const meanServiceTimeSec = ttftSec + avgOutputTokens * tpotSec;
+  const mu = 1 / meanServiceTimeSec; // service rate per slot, requests/sec
+
+  // Clamp rho away from 1.0 -- an M/M/c system is only stable for rho < 1,
+  // and wait times diverge as rho -> 1.
+  const rhoInput = targetUtilization;
+  const rho = Math.min(0.98, Math.max(0.001, rhoInput));
+  const wasClamped = rho !== rhoInput;
+  const a = rho * c; // offered load, in Erlangs
+
+  const C = erlangC(c, a);
+  const meanWaitSec = C / (c * mu * (1 - rho));
+
+  const p50WaitSec = mmcWaitPercentile(c, a, mu, rho, C, 0.50);
+  const p90WaitSec = mmcWaitPercentile(c, a, mu, rho, C, 0.90);
+  const p95WaitSec = mmcWaitPercentile(c, a, mu, rho, C, 0.95);
+  const p99WaitSec = mmcWaitPercentile(c, a, mu, rho, C, 0.99);
+
+  return {
+    eligible: true,
+    reason: null,
+    concurrencyPerReplica: c,
+    targetUtilization: rho,
+    wasClamped,
+    meanServiceTimeSec,
+    avgOutputTokens: Math.round(avgOutputTokens),
+    probabilityOfQueueing: C, // Erlang C: P(an arriving request must wait)
+    meanWaitSec,
+    p50WaitSec,
+    p90WaitSec,
+    p95WaitSec,
+    p99WaitSec,
+    // Queueing delay affects TTFT only -- once admitted to the running batch,
+    // TPOT/decode is the existing steady-state point estimate, unaffected.
+    ttftBaselineSec: ttftSec,
+    ttftP50Sec: ttftSec + p50WaitSec,
+    ttftP90Sec: ttftSec + p90WaitSec,
+    ttftP95Sec: ttftSec + p95WaitSec,
+    ttftP99Sec: ttftSec + p99WaitSec,
+    tpotSec, // unaffected by queueing, shown for reference
+    highUtilizationWarning: rho > 0.85,
   };
 }

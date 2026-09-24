@@ -21,7 +21,8 @@ import {
   Database,
   Wand2,
   DollarSign,
-  Grid2x2
+  Grid2x2,
+  Timer
 } from 'lucide-react';
 
 import { MODEL_PRESETS, PRECISION_OPTIONS } from './data/models';
@@ -31,7 +32,7 @@ import { STORAGE_TIERS, DURABILITY_SCHEMES } from './data/storage';
 import { GPU_PRICING, DEFAULT_GPU_PRICING, NVIDIA_AI_ENTERPRISE_USD_PER_GPU_PER_YEAR, DEFAULT_NETWORK_HARDWARE_ADDER_PCT, DEFAULT_SUPPORT_PCT_PER_YEAR, DEFAULT_POWER_USD_PER_KWH, DEFAULT_COLO_USD_PER_KW_PER_MONTH, DEFAULT_TCO_YEARS } from './data/pricing';
 import { USE_CASE_PRESETS } from './data/presets';
 import { MIG_PROFILES } from './data/mig';
-import { calculateInfra, calculateStorage, calculateCost, calculateMigConsolidation, recommendSharding } from './utils/calculator';
+import { calculateInfra, calculateStorage, calculateCost, calculateMigConsolidation, calculateSla, recommendSharding } from './utils/calculator';
 import { InfoHelper } from './components/InfoHelper';
 import { TopologyDiagram } from './components/TopologyDiagram';
 import { GlossaryPage } from './components/GlossaryPage';
@@ -144,6 +145,9 @@ export default function App() {
   const [enableMig, setEnableMig] = useState(false);
   const [selectedMigProfileId, setSelectedMigProfileId] = useState(null); // null = auto-select smallest fitting profile
 
+  // --- SLA / Tail-Latency Queueing State ---
+  const [targetUtilization, setTargetUtilization] = useState(0.7); // rho: target replica utilization (0-1)
+
   // --- Use-case preset (header dropdown) ---
   const [selectedPresetId, setSelectedPresetId] = useState('');
 
@@ -202,6 +206,7 @@ export default function App() {
     setTcoYears(c.tcoYears);
     setEnableMig(c.enableMig);
     setSelectedMigProfileId(c.selectedMigProfileId);
+    setTargetUtilization(c.targetUtilization);
     setActiveInputTab('workload');
   };
 
@@ -415,7 +420,17 @@ export default function App() {
     });
   }, [results, gpu, platform, enableMig, selectedMigProfileId]);
 
-  // 5. Cost & TCO -- consumes the already-computed infra + storage + MIG results, prices nothing new
+  // 5. SLA / Tail-Latency Queueing -- an M/M/c (Erlang C) queueing overlay at the replica level.
+  // Purely informational: it estimates how queueing delay grows TTFT at a target utilization, but
+  // doesn't change GPU count or feed into Cost (unlike MIG/durability, it doesn't change capex).
+  const sla = useMemo(() => {
+    return calculateSla({
+      infraResults: results,
+      targetUtilization,
+    });
+  }, [results, targetUtilization]);
+
+  // 6. Cost & TCO -- consumes the already-computed infra + storage + MIG results, prices nothing new
   const decodeGpuId = memory.llmd?.decode?.gpu?.id;
   const decodeGpuPricing = decodeGpuId ? GPU_PRICING[decodeGpuId] : null;
   const cost = useMemo(() => {
@@ -532,7 +547,13 @@ ${workloadType === 'inference' && throughput ? `
 - Prefill TTFT (Prompt Latency): ~${throughput.ttftMs < 1000 ? `${Number(throughput.ttftMs).toFixed(2)} ms` : `${Number(throughput.ttftSec).toFixed(2)} s`} (at ${contextLength.toLocaleString()} tokens)${isLlmd ? ` [includes ~${throughput.kvTransferLatencyMs}ms RoCEv2 handoff]` : ''}
 - Prompt Ingestion Speed: ~${throughput.promptTokensPerSecPerReplica?.toLocaleString()} prompt tok/s per replica
 - Generation Latency (TPOT): ~${throughput.tpotMs} ms/tok (~${throughput.tokensPerSecPerGpu} tok/s per stream)
-- Cluster Generation Throughput: ~${throughput.batchThroughputTps?.toLocaleString()} gen tok/s total (×${dp} DP × ${concurrency} streams)\n` : ''}=====================================================`;
+- Cluster Generation Throughput: ~${throughput.batchThroughputTps?.toLocaleString()} gen tok/s total (×${dp} DP × ${concurrency} streams)\n` : ''}${sla.eligible ? `
+9. SLA & TAIL LATENCY (M/M/c QUEUEING AT TARGET ρ=${(sla.targetUtilization * 100).toFixed(0)}%${sla.wasClamped ? ', clamped' : ''})
+- Concurrency per Replica (C): ${sla.concurrencyPerReplica}
+- P(Request Queues) — Erlang C: ${(sla.probabilityOfQueueing * 100).toFixed(1)}%
+- Mean Queueing Delay: ${(sla.meanWaitSec * 1000).toFixed(1)} ms
+- TTFT — Baseline / P50 / P95 / P99: ${(sla.ttftBaselineSec * 1000).toFixed(1)} / ${(sla.ttftP50Sec * 1000).toFixed(1)} / ${(sla.ttftP95Sec * 1000).toFixed(1)} / ${sla.ttftP99Sec < 1 ? `${(sla.ttftP99Sec * 1000).toFixed(1)} ms` : `${sla.ttftP99Sec.toFixed(2)} s`}
+- TPOT (unaffected by queueing): ${(sla.tpotSec * 1000).toFixed(2)} ms/tok\n` : ''}=====================================================`;
 
     navigator.clipboard.writeText(bomText);
     setCopiedBOM(true);
@@ -547,6 +568,7 @@ ${workloadType === 'inference' && throughput ? `
     { id: 'storage', label: 'Storage', icon: HardDrive, meta: storageTier.vendor },
     { id: 'stack', label: 'Serving Stack', icon: Workflow, meta: orchestrator.toUpperCase() },
     { id: 'mig', label: 'MIG Partitioning', icon: Grid2x2, meta: mig.eligible ? mig.selectedProfile.id : (enableMig ? 'N/A' : 'Off') },
+    { id: 'sla', label: 'SLA & Tail Latency', icon: Timer, meta: sla.eligible ? `P99 ${sla.ttftP99Sec < 1 ? `${(sla.ttftP99Sec * 1000).toFixed(0)}ms` : `${sla.ttftP99Sec.toFixed(1)}s`}` : 'N/A' },
     { id: 'cost', label: 'Cost & TCO', icon: DollarSign, meta: `$${cost.effectiveUsdPerGpuHour.toFixed(2)}/GPU-hr` },
   ];
 
@@ -1800,11 +1822,80 @@ ${workloadType === 'inference' && throughput ? `
             </Card>
           )}
 
-          {/* 8. Cost & TCO */}
+          {/* 8. SLA / Tail-Latency Queueing */}
+          {activeInputTab === 'sla' && (
+            <Card
+              icon={Timer}
+              title="8. SLA & Tail Latency"
+              right={sla.eligible ? <Tag tone={sla.highUtilizationWarning ? 'warn' : 'good'}>{sla.highUtilizationWarning ? 'Near saturation' : 'Eligible'}</Tag> : <Tag>N/A</Tag>}
+              className="space-y-4"
+            >
+              <Banner tone="info" icon={AlertTriangle}>
+                Point-estimate TTFT/TPOT above assume a request has a free batch slot the instant it arrives. In practice, a replica serves at most C concurrent requests (its continuous-batching concurrency) — anything beyond that queues for a slot. This uses an M/M/c (Erlang C) queueing model to estimate how much that queueing adds to TTFT at a target utilization. TPOT is unaffected: once a request is admitted to the running batch, decode proceeds at the same steady-state rate regardless of how busy the replica was before admission.
+              </Banner>
+
+              {!sla.eligible && (
+                <Banner tone="warn" icon={AlertTriangle}>
+                  {sla.reason}
+                </Banner>
+              )}
+
+              {sla.eligible && (
+                <>
+                  <div className="pt-1">
+                    <SliderField
+                      label="Target Replica Utilization (ρ):"
+                      valueLabel={`${(sla.targetUtilization * 100).toFixed(0)}%${sla.wasClamped ? ' (clamped)' : ''}`}
+                      min="0.05" max="0.99" step="0.01"
+                      value={targetUtilization}
+                      onChange={(e) => setTargetUtilization(Number(e.target.value))}
+                      marks={['5% (Idle)', '70% (Typical Target)', '99% (Saturated)']}
+                      helper={
+                        <InfoHelper
+                          title="Target Replica Utilization (ρ)"
+                          text="The fraction of each replica's concurrency slots (C) you expect to be busy on average, given your offered load. Offered load in Erlangs = ρ × C. Utilization is clamped below 100% — an M/M/c queue is only stable for ρ < 1, and wait times diverge as ρ → 1."
+                          whyItMatters="Higher utilization packs more requests per GPU (lower $/request) but tail latency grows sharply as you approach saturation. This is the classic throughput-vs-latency trade-off — pick the point that matches your SLA."
+                        />
+                      }
+                    />
+                  </div>
+
+                  {sla.highUtilizationWarning && (
+                    <Banner tone="warn" icon={AlertTriangle}>
+                      At ρ = {(sla.targetUtilization * 100).toFixed(0)}%, tail queueing delay grows sharply — the replica is close to saturation. Consider more replicas (higher DP) or a lower target utilization if P95/P99 latency matters.
+                    </Banner>
+                  )}
+
+                  <div className="pt-3 border-t border-zinc-800/70">
+                    <Rows>
+                      <Row k="Concurrency per replica (C)" v={`${sla.concurrencyPerReplica}`} mono={false} />
+                      <Row k="Mean service time / slot" v={`${(sla.meanServiceTimeSec * 1000).toFixed(0)} ms`} mono={false} />
+                      <Row k="P(request queues) — Erlang C" v={`${(sla.probabilityOfQueueing * 100).toFixed(1)}%`} tone="accent" />
+                      <Row k="Mean queueing delay" v={`${(sla.meanWaitSec * 1000).toFixed(1)} ms`} mono={false} />
+                    </Rows>
+                  </div>
+
+                  <div className="pt-3 border-t border-zinc-800/70">
+                    <SectionLabel>TTFT AT PERCENTILE (BASELINE + QUEUEING DELAY)</SectionLabel>
+                    <Rows>
+                      <Row k="Baseline TTFT (no queueing)" v={`${(sla.ttftBaselineSec * 1000).toFixed(1)} ms`} mono={false} />
+                      <Row k="P50 TTFT" v={`${(sla.ttftP50Sec * 1000).toFixed(1)} ms`} mono={false} />
+                      <Row k="P90 TTFT" v={`${(sla.ttftP90Sec * 1000).toFixed(1)} ms`} mono={false} />
+                      <Row k="P95 TTFT" v={`${(sla.ttftP95Sec * 1000).toFixed(1)} ms`} tone="accent" />
+                      <Row k="P99 TTFT" v={`${sla.ttftP99Sec < 1 ? `${(sla.ttftP99Sec * 1000).toFixed(1)} ms` : `${sla.ttftP99Sec.toFixed(2)} s`}`} tone="warn" />
+                      <Row k="TPOT (unaffected by queueing)" v={`${(sla.tpotSec * 1000).toFixed(2)} ms/tok`} mono={false} />
+                    </Rows>
+                  </div>
+                </>
+              )}
+            </Card>
+          )}
+
+          {/* 9. Cost & TCO */}
           {activeInputTab === 'cost' && (
             <Card
               icon={DollarSign}
-              title="8. Cost & TCO"
+              title="9. Cost & TCO"
               right={<Tag tone={cost.buildVsBuySavingsUsd >= 0 ? 'good' : 'warn'}>{cost.buildVsBuySavingsUsd >= 0 ? 'Owning wins' : 'Cloud wins'}</Tag>}
               className="space-y-4"
             >
@@ -2184,6 +2275,18 @@ ${workloadType === 'inference' && throughput ? `
                     <Row k="MIG-consolidated physical GPUs" v={`${mig.physicalGpusNeeded}`} tone="good" />
                     <Row k="Physical nodes needed" v={`${mig.physicalNodesNeeded}`} mono={false} />
                     <Row k="Per-instance throughput" v={`~${(mig.throughputScaleFactor * 100).toFixed(0)}% of a whole GPU's rate`} mono={false} />
+                  </Rows>
+                </Disclosure>
+              )}
+
+              {sla.eligible && (
+                <Disclosure icon={Timer} title="SLA & tail latency (M/M/c queueing)" right={`P99 ${sla.ttftP99Sec < 1 ? `${(sla.ttftP99Sec * 1000).toFixed(0)}ms` : `${sla.ttftP99Sec.toFixed(1)}s`}`}>
+                  <Rows>
+                    <Row k="Target utilization (ρ)" v={`${(sla.targetUtilization * 100).toFixed(0)}%${sla.wasClamped ? ' (clamped)' : ''}`} tone="accent" />
+                    <Row k="Concurrency per replica" v={`${sla.concurrencyPerReplica}`} mono={false} />
+                    <Row k="P(request queues)" v={`${(sla.probabilityOfQueueing * 100).toFixed(1)}%`} mono={false} />
+                    <Row k="Mean queueing delay" v={`${(sla.meanWaitSec * 1000).toFixed(1)} ms`} mono={false} />
+                    <Row k="TTFT P50 / P95 / P99" v={`${(sla.ttftP50Sec * 1000).toFixed(0)} / ${(sla.ttftP95Sec * 1000).toFixed(0)} / ${sla.ttftP99Sec < 1 ? `${(sla.ttftP99Sec * 1000).toFixed(0)}ms` : `${sla.ttftP99Sec.toFixed(2)}s`}`} tone={sla.highUtilizationWarning ? 'warn' : 'good'} />
                   </Rows>
                 </Disclosure>
               )}

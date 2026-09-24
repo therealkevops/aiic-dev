@@ -49,6 +49,9 @@ export const USE_CASE_PRESETS = [
       enableNvidiaAiEnterprise: true, supportPctPerYear: 15, tcoYears: 3,
       enableMig: false, selectedMigProfileId: null,
       targetUtilization: 0.65,
+      enableRag: true, textExtractionRatio: 0.2, avgChunkTokens: 512,
+      selectedEmbeddingModelId: 'bge-large-en-v1.5', embeddingGpuId: 'l40s-pcie', embeddingGpuUnitPriceUsd: 8500,
+      ingestionTargetHours: 24, ragQueryQps: 8, selectedVectorDbId: 'milvus',
     },
   },
   {
@@ -95,6 +98,9 @@ export const USE_CASE_PRESETS = [
       enableNvidiaAiEnterprise: true, supportPctPerYear: 15, tcoYears: 3,
       enableMig: false, selectedMigProfileId: null,
       targetUtilization: 0.6,
+      enableRag: true, textExtractionRatio: 0.6, avgChunkTokens: 256,
+      selectedEmbeddingModelId: 'gte-large-en-v1.5', embeddingGpuId: 'l40s-pcie', embeddingGpuUnitPriceUsd: 8500,
+      ingestionTargetHours: 4, ragQueryQps: 15, selectedVectorDbId: 'qdrant',
     },
   },
   {
@@ -141,6 +147,9 @@ export const USE_CASE_PRESETS = [
       enableNvidiaAiEnterprise: false, supportPctPerYear: 15, tcoYears: 3,
       enableMig: false, selectedMigProfileId: null,
       targetUtilization: 0.65,
+      enableRag: true, textExtractionRatio: 0.5, avgChunkTokens: 256,
+      selectedEmbeddingModelId: 'bge-large-en-v1.5', embeddingGpuId: 'l40s-pcie', embeddingGpuUnitPriceUsd: 8500,
+      ingestionTargetHours: 12, ragQueryQps: 20, selectedVectorDbId: 'qdrant',
     },
   },
   {
@@ -187,6 +196,9 @@ export const USE_CASE_PRESETS = [
       enableNvidiaAiEnterprise: true, supportPctPerYear: 15, tcoYears: 3,
       enableMig: false, selectedMigProfileId: null,
       targetUtilization: 0.75,
+      enableRag: true, textExtractionRatio: 0.15, avgChunkTokens: 1024,
+      selectedEmbeddingModelId: 'nv-embed-v2', embeddingGpuId: 'l40s-pcie', embeddingGpuUnitPriceUsd: 8500,
+      ingestionTargetHours: 48, ragQueryQps: 3, selectedVectorDbId: 'milvus',
     },
   },
   {
@@ -233,6 +245,9 @@ export const USE_CASE_PRESETS = [
       enableNvidiaAiEnterprise: true, supportPctPerYear: 15, tcoYears: 3,
       enableMig: false, selectedMigProfileId: null,
       targetUtilization: 0.7,
+      enableRag: false, textExtractionRatio: 0.2, avgChunkTokens: 512,
+      selectedEmbeddingModelId: 'bge-large-en-v1.5', embeddingGpuId: 'l40s-pcie', embeddingGpuUnitPriceUsd: 8500,
+      ingestionTargetHours: 24, ragQueryQps: 5, selectedVectorDbId: 'milvus',
     },
   },
   {
@@ -279,6 +294,9 @@ export const USE_CASE_PRESETS = [
       enableNvidiaAiEnterprise: true, supportPctPerYear: 15, tcoYears: 3,
       enableMig: false, selectedMigProfileId: null,
       targetUtilization: 0.7,
+      enableRag: false, textExtractionRatio: 0.2, avgChunkTokens: 512,
+      selectedEmbeddingModelId: 'bge-large-en-v1.5', embeddingGpuId: 'l40s-pcie', embeddingGpuUnitPriceUsd: 8500,
+      ingestionTargetHours: 24, ragQueryQps: 5, selectedVectorDbId: 'milvus',
     },
   },
   {
@@ -325,6 +343,9 @@ export const USE_CASE_PRESETS = [
       enableNvidiaAiEnterprise: false, supportPctPerYear: 15, tcoYears: 3,
       enableMig: false, selectedMigProfileId: null,
       targetUtilization: 0.7,
+      enableRag: false, textExtractionRatio: 0.25, avgChunkTokens: 512,
+      selectedEmbeddingModelId: 'bge-large-en-v1.5', embeddingGpuId: 'l40s-pcie', embeddingGpuUnitPriceUsd: 8500,
+      ingestionTargetHours: 24, ragQueryQps: 2, selectedVectorDbId: 'pgvector',
     },
   },
 
@@ -373,6 +394,9 @@ export const USE_CASE_PRESETS = [
       enableNvidiaAiEnterprise: true, supportPctPerYear: 15, tcoYears: 3,
       enableMig: false, selectedMigProfileId: null,
       targetUtilization: 0.6,
+      enableRag: true, textExtractionRatio: 0.3, avgChunkTokens: 512,
+      selectedEmbeddingModelId: 'bge-large-en-v1.5', embeddingGpuId: 'l40s-pcie', embeddingGpuUnitPriceUsd: 8500,
+      ingestionTargetHours: 24, ragQueryQps: 10, selectedVectorDbId: 'qdrant',
     },
   },
   {
@@ -419,6 +443,9 @@ export const USE_CASE_PRESETS = [
       enableNvidiaAiEnterprise: true, supportPctPerYear: 15, tcoYears: 3,
       enableMig: false, selectedMigProfileId: null,
       targetUtilization: 0.6,
+      enableRag: true, textExtractionRatio: 0.65, avgChunkTokens: 256,
+      selectedEmbeddingModelId: 'gte-large-en-v1.5', embeddingGpuId: 'l40s-pcie', embeddingGpuUnitPriceUsd: 8500,
+      ingestionTargetHours: 8, ragQueryQps: 12, selectedVectorDbId: 'qdrant',
     },
   },
   {
@@ -465,6 +492,9 @@ export const USE_CASE_PRESETS = [
       enableNvidiaAiEnterprise: true, supportPctPerYear: 15, tcoYears: 3,
       enableMig: false, selectedMigProfileId: null,
       targetUtilization: 0.75,
+      enableRag: true, textExtractionRatio: 0.2, avgChunkTokens: 1024,
+      selectedEmbeddingModelId: 'nv-embed-v2', embeddingGpuId: 'l40s-pcie', embeddingGpuUnitPriceUsd: 8500,
+      ingestionTargetHours: 24, ragQueryQps: 4, selectedVectorDbId: 'milvus',
     },
   },
   {
@@ -511,6 +541,9 @@ export const USE_CASE_PRESETS = [
       enableNvidiaAiEnterprise: false, supportPctPerYear: 15, tcoYears: 3,
       enableMig: false, selectedMigProfileId: null,
       targetUtilization: 0.65,
+      enableRag: true, textExtractionRatio: 0.25, avgChunkTokens: 512,
+      selectedEmbeddingModelId: 'bge-large-en-v1.5', embeddingGpuId: 'l40s-pcie', embeddingGpuUnitPriceUsd: 8500,
+      ingestionTargetHours: 24, ragQueryQps: 8, selectedVectorDbId: 'weaviate',
     },
   },
   {
@@ -557,6 +590,9 @@ export const USE_CASE_PRESETS = [
       enableNvidiaAiEnterprise: true, supportPctPerYear: 15, tcoYears: 3,
       enableMig: false, selectedMigProfileId: null,
       targetUtilization: 0.7,
+      enableRag: false, textExtractionRatio: 0.2, avgChunkTokens: 512,
+      selectedEmbeddingModelId: 'bge-large-en-v1.5', embeddingGpuId: 'l40s-pcie', embeddingGpuUnitPriceUsd: 8500,
+      ingestionTargetHours: 24, ragQueryQps: 5, selectedVectorDbId: 'milvus',
     },
   },
 
@@ -605,6 +641,9 @@ export const USE_CASE_PRESETS = [
       enableNvidiaAiEnterprise: false, supportPctPerYear: 15, tcoYears: 3,
       enableMig: false, selectedMigProfileId: null,
       targetUtilization: 0.7,
+      enableRag: false, textExtractionRatio: 0.2, avgChunkTokens: 512,
+      selectedEmbeddingModelId: 'bge-large-en-v1.5', embeddingGpuId: 'l40s-pcie', embeddingGpuUnitPriceUsd: 8500,
+      ingestionTargetHours: 24, ragQueryQps: 5, selectedVectorDbId: 'milvus',
     },
   },
   {
@@ -651,6 +690,9 @@ export const USE_CASE_PRESETS = [
       enableNvidiaAiEnterprise: false, supportPctPerYear: 15, tcoYears: 3,
       enableMig: false, selectedMigProfileId: null,
       targetUtilization: 0.8,
+      enableRag: false, textExtractionRatio: 0.2, avgChunkTokens: 512,
+      selectedEmbeddingModelId: 'bge-large-en-v1.5', embeddingGpuId: 'l40s-pcie', embeddingGpuUnitPriceUsd: 8500,
+      ingestionTargetHours: 24, ragQueryQps: 5, selectedVectorDbId: 'milvus',
     },
   },
   {
@@ -697,6 +739,9 @@ export const USE_CASE_PRESETS = [
       enableNvidiaAiEnterprise: false, supportPctPerYear: 15, tcoYears: 3,
       enableMig: false, selectedMigProfileId: null,
       targetUtilization: 0.75,
+      enableRag: false, textExtractionRatio: 0.2, avgChunkTokens: 512,
+      selectedEmbeddingModelId: 'bge-large-en-v1.5', embeddingGpuId: 'l40s-pcie', embeddingGpuUnitPriceUsd: 8500,
+      ingestionTargetHours: 24, ragQueryQps: 5, selectedVectorDbId: 'milvus',
     },
   },
 ];

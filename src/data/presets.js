@@ -48,6 +48,7 @@ export const USE_CASE_PRESETS = [
       useColo: false, coloUsdPerKwPerMonth: 150,
       enableNvidiaAiEnterprise: true, supportPctPerYear: 15, tcoYears: 3,
       enableMig: false, selectedMigProfileId: null,
+      targetUtilization: 0.65,
     },
   },
   {
@@ -93,6 +94,7 @@ export const USE_CASE_PRESETS = [
       useColo: false, coloUsdPerKwPerMonth: 150,
       enableNvidiaAiEnterprise: true, supportPctPerYear: 15, tcoYears: 3,
       enableMig: false, selectedMigProfileId: null,
+      targetUtilization: 0.6,
     },
   },
   {
@@ -138,6 +140,7 @@ export const USE_CASE_PRESETS = [
       useColo: false, coloUsdPerKwPerMonth: 150,
       enableNvidiaAiEnterprise: false, supportPctPerYear: 15, tcoYears: 3,
       enableMig: false, selectedMigProfileId: null,
+      targetUtilization: 0.65,
     },
   },
   {
@@ -183,6 +186,7 @@ export const USE_CASE_PRESETS = [
       useColo: false, coloUsdPerKwPerMonth: 150,
       enableNvidiaAiEnterprise: true, supportPctPerYear: 15, tcoYears: 3,
       enableMig: false, selectedMigProfileId: null,
+      targetUtilization: 0.75,
     },
   },
   {
@@ -228,6 +232,7 @@ export const USE_CASE_PRESETS = [
       useColo: false, coloUsdPerKwPerMonth: 150,
       enableNvidiaAiEnterprise: true, supportPctPerYear: 15, tcoYears: 3,
       enableMig: false, selectedMigProfileId: null,
+      targetUtilization: 0.7,
     },
   },
   {
@@ -273,6 +278,7 @@ export const USE_CASE_PRESETS = [
       useColo: false, coloUsdPerKwPerMonth: 150,
       enableNvidiaAiEnterprise: true, supportPctPerYear: 15, tcoYears: 3,
       enableMig: false, selectedMigProfileId: null,
+      targetUtilization: 0.7,
     },
   },
   {
@@ -318,6 +324,7 @@ export const USE_CASE_PRESETS = [
       useColo: false, coloUsdPerKwPerMonth: 150,
       enableNvidiaAiEnterprise: false, supportPctPerYear: 15, tcoYears: 3,
       enableMig: false, selectedMigProfileId: null,
+      targetUtilization: 0.7,
     },
   },
 
@@ -365,6 +372,7 @@ export const USE_CASE_PRESETS = [
       useColo: false, coloUsdPerKwPerMonth: 150,
       enableNvidiaAiEnterprise: true, supportPctPerYear: 15, tcoYears: 3,
       enableMig: false, selectedMigProfileId: null,
+      targetUtilization: 0.6,
     },
   },
   {
@@ -410,6 +418,7 @@ export const USE_CASE_PRESETS = [
       useColo: false, coloUsdPerKwPerMonth: 150,
       enableNvidiaAiEnterprise: true, supportPctPerYear: 15, tcoYears: 3,
       enableMig: false, selectedMigProfileId: null,
+      targetUtilization: 0.6,
     },
   },
   {
@@ -455,6 +464,7 @@ export const USE_CASE_PRESETS = [
       useColo: false, coloUsdPerKwPerMonth: 150,
       enableNvidiaAiEnterprise: true, supportPctPerYear: 15, tcoYears: 3,
       enableMig: false, selectedMigProfileId: null,
+      targetUtilization: 0.75,
     },
   },
   {
@@ -500,6 +510,7 @@ export const USE_CASE_PRESETS = [
       useColo: false, coloUsdPerKwPerMonth: 150,
       enableNvidiaAiEnterprise: false, supportPctPerYear: 15, tcoYears: 3,
       enableMig: false, selectedMigProfileId: null,
+      targetUtilization: 0.65,
     },
   },
   {
@@ -545,6 +556,7 @@ export const USE_CASE_PRESETS = [
       useColo: false, coloUsdPerKwPerMonth: 150,
       enableNvidiaAiEnterprise: true, supportPctPerYear: 15, tcoYears: 3,
       enableMig: false, selectedMigProfileId: null,
+      targetUtilization: 0.7,
     },
   },
 
@@ -592,6 +604,7 @@ export const USE_CASE_PRESETS = [
       useColo: true, coloUsdPerKwPerMonth: 150,
       enableNvidiaAiEnterprise: false, supportPctPerYear: 15, tcoYears: 3,
       enableMig: false, selectedMigProfileId: null,
+      targetUtilization: 0.7,
     },
   },
   {
@@ -637,6 +650,7 @@ export const USE_CASE_PRESETS = [
       useColo: true, coloUsdPerKwPerMonth: 150,
       enableNvidiaAiEnterprise: false, supportPctPerYear: 15, tcoYears: 3,
       enableMig: false, selectedMigProfileId: null,
+      targetUtilization: 0.8,
     },
   },
   {
@@ -682,6 +696,7 @@ export const USE_CASE_PRESETS = [
       useColo: true, coloUsdPerKwPerMonth: 150,
       enableNvidiaAiEnterprise: false, supportPctPerYear: 15, tcoYears: 3,
       enableMig: false, selectedMigProfileId: null,
+      targetUtilization: 0.75,
     },
   },
 ];

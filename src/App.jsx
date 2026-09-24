@@ -767,6 +767,13 @@ ${workloadType === 'inference' && throughput ? `
                       value={promptTokenRatio}
                       onChange={(e) => setPromptTokenRatio(Number(e.target.value))}
                       marks={['10% (Agentic / Code & Reasoning)', '50% (Chat)', '90% (RAG & Docs)']}
+                      helper={
+                        <InfoHelper
+                          title="Workload Profile (Prompt vs. Output Split)"
+                          text="Sets what share of each request's context window is input (prompt) tokens versus generated (output) tokens. RAG/document workloads skew high (mostly prompt, little generation); agentic and reasoning workloads skew low (a small prompt drives a long chain of generated tool calls and reasoning tokens)."
+                          whyItMatters="Prefill (prompt) and decode (output) are sized differently: prefill is compute-bound and scales with prompt tokens, while decode is bandwidth-bound and scales with output tokens. Shifting this ratio shifts where the bottleneck falls and changes both throughput and KV cache growth per stream."
+                        />
+                      }
                     />
                   </div>
                 </>

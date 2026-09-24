@@ -19,15 +19,17 @@ import {
   Boxes,
   Workflow,
   Database,
-  Wand2
+  Wand2,
+  DollarSign
 } from 'lucide-react';
 
 import { MODEL_PRESETS, PRECISION_OPTIONS } from './data/models';
 import { GPU_CATALOG, NETWORK_PROTOCOLS } from './data/hardware';
 import { PLATFORM_VENDORS, PLATFORM_SYSTEMS } from './data/platforms';
 import { STORAGE_TIERS } from './data/storage';
+import { GPU_PRICING, DEFAULT_GPU_PRICING, NVIDIA_AI_ENTERPRISE_USD_PER_GPU_PER_YEAR, DEFAULT_NETWORK_HARDWARE_ADDER_PCT, DEFAULT_SUPPORT_PCT_PER_YEAR, DEFAULT_POWER_USD_PER_KWH, DEFAULT_COLO_USD_PER_KW_PER_MONTH, DEFAULT_TCO_YEARS } from './data/pricing';
 import { USE_CASE_PRESETS } from './data/presets';
-import { calculateInfra, calculateStorage, recommendSharding } from './utils/calculator';
+import { calculateInfra, calculateStorage, calculateCost, recommendSharding } from './utils/calculator';
 import { InfoHelper } from './components/InfoHelper';
 import { TopologyDiagram } from './components/TopologyDiagram';
 import { GlossaryPage } from './components/GlossaryPage';
@@ -122,6 +124,19 @@ export default function App() {
   const [corpusSizeGb, setCorpusSizeGb] = useState(0);
   const [enableKvOffload, setEnableKvOffload] = useState(false);
 
+  // --- Cost & TCO State ---
+  // Defaults match the default platform's GPU (h200-sxm); every figure here is an editable
+  // illustrative estimate (see src/data/pricing.js), not a vendor quote.
+  const [gpuUnitPriceUsd, setGpuUnitPriceUsd] = useState(DEFAULT_GPU_PRICING.estimatedUnitPriceUsd);
+  const [cloudRateUsdPerHr, setCloudRateUsdPerHr] = useState(DEFAULT_GPU_PRICING.estimatedCloudRateUsdPerHr);
+  const [networkHardwareAdderPct, setNetworkHardwareAdderPct] = useState(DEFAULT_NETWORK_HARDWARE_ADDER_PCT);
+  const [powerUsdPerKwh, setPowerUsdPerKwh] = useState(DEFAULT_POWER_USD_PER_KWH);
+  const [useColo, setUseColo] = useState(false);
+  const [coloUsdPerKwPerMonth, setColoUsdPerKwPerMonth] = useState(DEFAULT_COLO_USD_PER_KW_PER_MONTH);
+  const [enableNvidiaAiEnterprise, setEnableNvidiaAiEnterprise] = useState(false);
+  const [supportPctPerYear, setSupportPctPerYear] = useState(DEFAULT_SUPPORT_PCT_PER_YEAR);
+  const [tcoYears, setTcoYears] = useState(DEFAULT_TCO_YEARS);
+
   // --- Use-case preset (header dropdown) ---
   const [selectedPresetId, setSelectedPresetId] = useState('');
 
@@ -168,6 +183,15 @@ export default function App() {
     setModelRepoTargetLoadTimeSec(c.modelRepoTargetLoadTimeSec);
     setCorpusSizeGb(c.corpusSizeGb);
     setEnableKvOffload(c.enableKvOffload);
+    setGpuUnitPriceUsd(c.gpuUnitPriceUsd);
+    setCloudRateUsdPerHr(c.cloudRateUsdPerHr);
+    setNetworkHardwareAdderPct(c.networkHardwareAdderPct);
+    setPowerUsdPerKwh(c.powerUsdPerKwh);
+    setUseColo(c.useColo);
+    setColoUsdPerKwPerMonth(c.coloUsdPerKwPerMonth);
+    setEnableNvidiaAiEnterprise(c.enableNvidiaAiEnterprise);
+    setSupportPctPerYear(c.supportPctPerYear);
+    setTcoYears(c.tcoYears);
     setActiveInputTab('workload');
   };
 
@@ -364,6 +388,43 @@ export default function App() {
     enableKvOffload,
   ]);
 
+  // 4. Cost & TCO -- consumes the already-computed infra + storage results, prices nothing new
+  const decodeGpuId = memory.llmd?.decode?.gpu?.id;
+  const decodeGpuPricing = decodeGpuId ? GPU_PRICING[decodeGpuId] : null;
+  const cost = useMemo(() => {
+    return calculateCost({
+      infraResults: results,
+      storageResults: storage,
+      gpuUnitPriceUsd,
+      cloudRateUsdPerHr,
+      decodeGpuUnitPriceUsd: decodeGpuPricing?.estimatedUnitPriceUsd ?? null,
+      decodeCloudRateUsdPerHr: decodeGpuPricing?.estimatedCloudRateUsdPerHr ?? null,
+      networkHardwareAdderPct,
+      storageUsdPerTbUsable: storageTier.estimatedUsdPerTbUsable,
+      powerUsdPerKwh,
+      useColo,
+      coloUsdPerKwPerMonth,
+      enableNvidiaAiEnterprise,
+      licensingUsdPerGpuPerYear: NVIDIA_AI_ENTERPRISE_USD_PER_GPU_PER_YEAR,
+      supportPctPerYear,
+      tcoYears,
+    });
+  }, [
+    results,
+    storage,
+    gpuUnitPriceUsd,
+    cloudRateUsdPerHr,
+    decodeGpuPricing,
+    networkHardwareAdderPct,
+    storageTier,
+    powerUsdPerKwh,
+    useColo,
+    coloUsdPerKwPerMonth,
+    enableNvidiaAiEnterprise,
+    supportPctPerYear,
+    tcoYears,
+  ]);
+
   // Copy BOM to clipboard
   const handleCopyBOM = () => {
     const isDisagg = bom.isDisaggregated;
@@ -423,8 +484,15 @@ ${storage.breakdown.map(b => `  * ${b.label}: ${b.capacityTb.toFixed(2)} TB — 
 - Total IT Power: ${facility.totalItPowerKw.toFixed(1)} kW
 - Total Facility Power (${pue.toFixed(2)} PUE): ${facility.totalFacilityPowerKw.toFixed(1)} kW
 - Datacenter Racks: ~${facility.totalRacks} standard 42U Racks (${facility.totalRuNeeded} RU)
+
+7. COST & TCO (ILLUSTRATIVE ESTIMATE -- NOT A VENDOR QUOTE)
+- Total Capex: $${Math.round(cost.totalCapexUsd).toLocaleString()} (Compute $${Math.round(cost.computeCapexUsd).toLocaleString()} + Network/Storage $${Math.round(cost.networkHardwareCapexUsd + cost.storageCapexUsd).toLocaleString()})
+- Annual Opex: $${Math.round(cost.annualOpexUsd).toLocaleString()}/yr (Power $${Math.round(cost.annualPowerCostUsd).toLocaleString()} + Licensing $${Math.round(cost.annualLicensingCostUsd).toLocaleString()} + Support $${Math.round(cost.annualSupportCostUsd).toLocaleString()})
+- ${cost.tcoYears}-Year TCO: $${Math.round(cost.tcoUsd).toLocaleString()} (~$${cost.effectiveUsdPerGpuHour.toFixed(2)}/GPU-hr effective)
+- vs. ${cost.tcoYears}-Yr Cloud Rental ($${cost.cloudEquivalentUsdPerHr.toFixed(2)}/hr cluster-wide): ${cost.buildVsBuySavingsUsd >= 0 ? `Owning saves $${Math.round(cost.buildVsBuySavingsUsd).toLocaleString()}` : `Cloud saves $${Math.round(-cost.buildVsBuySavingsUsd).toLocaleString()}`}
+- Capex Break-Even vs. Cloud: ${cost.breakEvenMonths != null ? `~${Math.round(cost.breakEvenMonths)} months` : 'Never — cloud is cheaper at these rates'}
 ${workloadType === 'inference' && throughput ? `
-7. ESTIMATED INFERENCE PERFORMANCE (PREFILL & DECODE)
+8. ESTIMATED INFERENCE PERFORMANCE (PREFILL & DECODE)
 - Prefill TTFT (Prompt Latency): ~${throughput.ttftMs < 1000 ? `${Number(throughput.ttftMs).toFixed(2)} ms` : `${Number(throughput.ttftSec).toFixed(2)} s`} (at ${contextLength.toLocaleString()} tokens)${isLlmd ? ` [includes ~${throughput.kvTransferLatencyMs}ms RoCEv2 handoff]` : ''}
 - Prompt Ingestion Speed: ~${throughput.promptTokensPerSecPerReplica?.toLocaleString()} prompt tok/s per replica
 - Generation Latency (TPOT): ~${throughput.tpotMs} ms/tok (~${throughput.tokensPerSecPerGpu} tok/s per stream)
@@ -442,6 +510,7 @@ ${workloadType === 'inference' && throughput ? `
     { id: 'fabric', label: 'Fabric & PUE', icon: Network, meta: protocol.name },
     { id: 'storage', label: 'Storage', icon: HardDrive, meta: storageTier.vendor },
     { id: 'stack', label: 'Serving Stack', icon: Workflow, meta: orchestrator.toUpperCase() },
+    { id: 'cost', label: 'Cost & TCO', icon: DollarSign, meta: `$${cost.effectiveUsdPerGpuHour.toFixed(2)}/GPU-hr` },
   ];
 
   if (page === 'glossary') {
@@ -1610,6 +1679,133 @@ ${workloadType === 'inference' && throughput ? `
             </Card>
           )}
 
+          {/* 7. Cost & TCO */}
+          {activeInputTab === 'cost' && (
+            <Card
+              icon={DollarSign}
+              title="7. Cost & TCO"
+              right={<Tag tone={cost.buildVsBuySavingsUsd >= 0 ? 'good' : 'warn'}>{cost.buildVsBuySavingsUsd >= 0 ? 'Owning wins' : 'Cloud wins'}</Tag>}
+              className="space-y-4"
+            >
+              <Banner tone="info" icon={AlertTriangle}>
+                Every figure below is an editable illustrative estimate, not a vendor quote — NVIDIA and enterprise storage vendors don't publish list prices. Replace with your actual quote for a real budget number.
+              </Banner>
+
+              <div className="grid grid-cols-2 gap-3">
+                <Field label={`${gpu.name} — Unit Price (Capex)`}>
+                  <div className="relative">
+                    <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-zinc-500">$</span>
+                    <input type="number" min="0" step="500" value={gpuUnitPriceUsd}
+                      onChange={(e) => setGpuUnitPriceUsd(Math.max(0, Number(e.target.value) || 0))}
+                      className="w-full bg-zinc-950 border border-zinc-700 rounded-lg pl-5 pr-2 py-2 text-xs text-white focus:outline-none focus:border-sky-500 font-mono" />
+                  </div>
+                </Field>
+                <Field label={`${gpu.name} — Cloud Rate ($/GPU-hr)`}>
+                  <div className="relative">
+                    <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-zinc-500">$</span>
+                    <input type="number" min="0" step="0.05" value={cloudRateUsdPerHr}
+                      onChange={(e) => setCloudRateUsdPerHr(Math.max(0, Number(e.target.value) || 0))}
+                      className="w-full bg-zinc-950 border border-zinc-700 rounded-lg pl-5 pr-2 py-2 text-xs text-white focus:outline-none focus:border-sky-500 font-mono" />
+                  </div>
+                </Field>
+              </div>
+
+              <SliderField
+                label="Network + Storage Hardware Adder:"
+                valueLabel={`${networkHardwareAdderPct}%`}
+                min="5" max="30" step="1"
+                value={networkHardwareAdderPct}
+                onChange={(e) => setNetworkHardwareAdderPct(Number(e.target.value))}
+                marks={['5% (Minimal)', '15% (Typical)', '30% (Heavy Fabric)']}
+                helper={
+                  <InfoHelper
+                    title="Network + Storage Hardware Adder"
+                    text="Switches, cabling, transceivers, and out-of-band management hardware, modeled as a percentage of compute (GPU) capex rather than pricing every switch SKU individually — per-SKU enterprise networking pricing is just as opaque as GPU pricing. 10-20% is a commonly cited industry range for a well-architected AI cluster."
+                    whyItMatters="This is on top of, not instead of, the GPU cost — skipping it understates capex by a meaningful margin, especially for large rail-optimized fabrics."
+                  />
+                }
+              />
+
+              <Field label="Power Billing Model">
+                <SegmentedToggle
+                  options={[{ value: false, label: 'Owned Datacenter ($/kWh)' }, { value: true, label: 'Colocation ($/kW/month)' }]}
+                  value={useColo}
+                  onChange={setUseColo}
+                />
+              </Field>
+
+              {useColo ? (
+                <Field label="Colocation Rate ($/kW/month)">
+                  <div className="relative">
+                    <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-zinc-500">$</span>
+                    <input type="number" min="0" step="5" value={coloUsdPerKwPerMonth}
+                      onChange={(e) => setColoUsdPerKwPerMonth(Math.max(0, Number(e.target.value) || 0))}
+                      className="w-full bg-zinc-950 border border-zinc-700 rounded-lg pl-5 pr-2 py-2 text-xs text-white focus:outline-none focus:border-sky-500 font-mono" />
+                  </div>
+                  <div className="text-[10.5px] text-zinc-500 mt-1">Billed against IT load — the colo provider's own cooling/facility overhead is baked into their rate.</div>
+                </Field>
+              ) : (
+                <SliderField
+                  label="Electricity Rate ($/kWh):"
+                  valueLabel={`$${powerUsdPerKwh.toFixed(2)}`}
+                  min="0.05" max="0.30" step="0.01"
+                  value={powerUsdPerKwh}
+                  onChange={(e) => setPowerUsdPerKwh(Number(e.target.value))}
+                  marks={['$0.05 (Low-Cost Region)', '$0.12 (US Average)', '$0.30 (High-Cost Region)']}
+                  helper={<div className="text-[10.5px] text-zinc-500 mt-1">Billed against PUE-adjusted facility load (IT load × PUE) — your own cooling overhead is on your meter.</div>}
+                />
+              )}
+
+              <Field label="NVIDIA AI Enterprise Software Licensing">
+                <SegmentedToggle
+                  options={[{ value: false, label: 'Open-Source Stack Only' }, { value: true, label: 'Include ($4,500/GPU/yr)' }]}
+                  value={enableNvidiaAiEnterprise}
+                  onChange={setEnableNvidiaAiEnterprise}
+                />
+              </Field>
+
+              <SliderField
+                label="Hardware Support & Maintenance:"
+                valueLabel={`${supportPctPerYear}% of capex/yr`}
+                min="5" max="25" step="1"
+                value={supportPctPerYear}
+                onChange={(e) => setSupportPctPerYear(Number(e.target.value))}
+                marks={['5% (Minimal)', '15% (Typical)', '25% (Premium SLA)']}
+              />
+
+              <SliderField
+                label="TCO Planning Horizon:"
+                valueLabel={`${tcoYears} year${tcoYears > 1 ? 's' : ''}`}
+                min="1" max="5" step="1"
+                value={tcoYears}
+                onChange={(e) => setTcoYears(Number(e.target.value))}
+                marks={['1 yr', '3 yr (Typical)', '5 yr']}
+              />
+
+              <div className="pt-3 border-t border-zinc-800/70">
+                <Rows>
+                  <Row k="Compute capex" v={`$${Math.round(cost.computeCapexUsd).toLocaleString()}`} tone="accent" />
+                  <Row k="Network + storage capex" v={`$${Math.round(cost.networkHardwareCapexUsd + cost.storageCapexUsd).toLocaleString()}`} mono={false} />
+                  <Row k="Total capex" v={`$${Math.round(cost.totalCapexUsd).toLocaleString()}`} tone="accent" />
+                  <Row k="Annual opex" v={`$${Math.round(cost.annualOpexUsd).toLocaleString()}/yr`} mono={false} />
+                  <Row k={`${cost.tcoYears}-year TCO`} v={`$${Math.round(cost.tcoUsd).toLocaleString()}`} tone="accent" />
+                  <Row k="Effective cost" v={`$${cost.effectiveUsdPerGpuHour.toFixed(2)}/GPU-hr`} tone="accent" />
+                  <Row k="Cloud-equivalent rate" v={`$${cost.cloudEquivalentUsdPerHr.toFixed(2)}/hr cluster-wide`} mono={false} />
+                  <Row
+                    k={`vs. ${cost.tcoYears}-yr cloud rental`}
+                    v={cost.buildVsBuySavingsUsd >= 0 ? `Owning saves $${Math.round(cost.buildVsBuySavingsUsd).toLocaleString()}` : `Cloud saves $${Math.round(-cost.buildVsBuySavingsUsd).toLocaleString()}`}
+                    tone={cost.buildVsBuySavingsUsd >= 0 ? 'good' : 'warn'}
+                  />
+                  <Row
+                    k="Capex break-even vs. cloud"
+                    v={cost.breakEvenMonths != null ? `~${Math.round(cost.breakEvenMonths)} months` : 'Never — cloud is cheaper'}
+                    mono={false}
+                  />
+                </Rows>
+              </div>
+            </Card>
+          )}
+
         </main>
 
         {/* PANE 3: Right Results Pane (Independently Scrollable) */}
@@ -1843,6 +2039,25 @@ ${workloadType === 'inference' && throughput ? `
                   <Kpi label="Racks" value={`~${facility.totalRacks}`} sub="42U standard" />
                   <Kpi label="Rack units" value={`${facility.totalRuNeeded}`} sub="servers + switches" />
                 </KpiRow>
+              </Disclosure>
+
+              <Disclosure icon={DollarSign} title="Cost & TCO (illustrative estimate)" right={`$${cost.effectiveUsdPerGpuHour.toFixed(2)}/GPU-hr`}>
+                <Rows>
+                  <Row k="Total capex" v={`$${Math.round(cost.totalCapexUsd).toLocaleString()}`} tone="accent" />
+                  <Row k="Annual opex" v={`$${Math.round(cost.annualOpexUsd).toLocaleString()}/yr`} mono={false} />
+                  <Row k={`${cost.tcoYears}-year TCO`} v={`$${Math.round(cost.tcoUsd).toLocaleString()}`} tone="accent" />
+                  <Row k="Effective cost" v={`$${cost.effectiveUsdPerGpuHour.toFixed(2)}/GPU-hr`} tone="accent" />
+                  <Row
+                    k={`vs. ${cost.tcoYears}-yr cloud rental`}
+                    v={cost.buildVsBuySavingsUsd >= 0 ? `Owning saves $${Math.round(cost.buildVsBuySavingsUsd).toLocaleString()}` : `Cloud saves $${Math.round(-cost.buildVsBuySavingsUsd).toLocaleString()}`}
+                    tone={cost.buildVsBuySavingsUsd >= 0 ? 'good' : 'warn'}
+                  />
+                  <Row
+                    k="Capex break-even vs. cloud"
+                    v={cost.breakEvenMonths != null ? `~${Math.round(cost.breakEvenMonths)} months` : 'Never — cloud is cheaper'}
+                    mono={false}
+                  />
+                </Rows>
               </Disclosure>
             </div>
           </div>

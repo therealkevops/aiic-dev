@@ -3,6 +3,11 @@
 // used to size how many RU of a given tier are needed to hit both a capacity and a
 // throughput target (whichever is larger wins, same "binding constraint" pattern used
 // for GPU sharding).
+//
+// estimatedUsdPerTbUsable is an illustrative capex estimate, not a vendor quote -- enterprise
+// storage pricing is just as opaque/negotiated as GPU pricing, with no published list prices.
+// Editable in the UI; defaults are round numbers reflecting each tier's relative positioning
+// (NVMe parallel-fs performance tiers command a premium per TB over bulk object storage).
 export const STORAGE_TIERS = [
   {
     id: "weka-nvme",
@@ -11,6 +16,7 @@ export const STORAGE_TIERS = [
     tier: "parallel-fs",
     capacityPerRuTb: 130,
     throughputPerRuGBs: 24,
+    estimatedUsdPerTbUsable: 400,
     latencyProfile: "Sub-millisecond, GPUDirect Storage capable",
     protocol: "NFS / POSIX / S3 / GPUDirect Storage",
     recommendedFor: "Frontier pretraining checkpoint/dataset I/O at 1,000+ GPU scale — highest throughput-per-RU of any tier here.",
@@ -23,6 +29,7 @@ export const STORAGE_TIERS = [
     tier: "parallel-fs",
     capacityPerRuTb: 350,
     throughputPerRuGBs: 14,
+    estimatedUsdPerTbUsable: 200,
     latencyProfile: "Low-millisecond, flash-native (DASE architecture)",
     protocol: "NFS / SMB / S3 / GPUDirect Storage",
     recommendedFor: "General-purpose AI factory storage — one namespace for datasets, checkpoints, and inference model repos.",
@@ -35,6 +42,7 @@ export const STORAGE_TIERS = [
     tier: "hybrid-flash",
     capacityPerRuTb: 250,
     throughputPerRuGBs: 9,
+    estimatedUsdPerTbUsable: 350,
     latencyProfile: "Low-millisecond, all-flash file + object",
     protocol: "NFS / SMB / S3",
     recommendedFor: "Enterprise deployments standardizing on an existing Pure estate — file and object from one platform.",
@@ -47,6 +55,7 @@ export const STORAGE_TIERS = [
     tier: "hybrid-flash",
     capacityPerRuTb: 200,
     throughputPerRuGBs: 6,
+    estimatedUsdPerTbUsable: 250,
     latencyProfile: "Low-millisecond, enterprise NAS",
     protocol: "NFS / SMB / iSCSI",
     recommendedFor: "Regulated-industry / air-gapped enterprise deployments needing mature snapshotting, replication, and compliance tooling.",
@@ -59,6 +68,7 @@ export const STORAGE_TIERS = [
     tier: "bulk-object",
     capacityPerRuTb: 600,
     throughputPerRuGBs: 3,
+    estimatedUsdPerTbUsable: 40,
     latencyProfile: "Tens of milliseconds, object semantics",
     protocol: "S3",
     recommendedFor: "Cold dataset archive, long-tail checkpoint retention, or minimum-footprint air-gapped deployments where cost-per-TB dominates.",

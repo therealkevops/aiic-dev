@@ -270,7 +270,7 @@ const PRESET_CONTENT = {
       protocol: '400G RoCEv2',
       storage: 'VAST Data Universal Storage',
       durability: 'Erasure Coded (8+3)',
-      hadr: 'Multi-AZ (Active-Active)',
+      hadr: 'Multi-AZ (High Availability)',
       ingress: 'Software LB (Envoy/NGINX)'
     },
     rationale: {
@@ -362,7 +362,7 @@ const PRESET_CONTENT = {
       protocol: '400G RoCEv2',
       storage: 'VAST Data Universal Storage',
       durability: 'Erasure Coded (8+3)',
-      hadr: 'Multi-AZ (Active-Active)',
+      hadr: 'Multi-AZ (High Availability)',
       ingress: 'Software LB (Envoy)'
     },
     rationale: {
@@ -534,7 +534,7 @@ const PRESET_CONTENT = {
       protocol: '400G RoCEv2',
       storage: 'NetApp AFF A-Series',
       durability: 'Replicated 3x (Compliance)',
-      hadr: 'Multi-AZ (Active-Active)',
+      hadr: 'Multi-AZ (High Availability)',
       ingress: 'Software LB'
     },
     rationale: {
@@ -887,7 +887,7 @@ const PRESET_CONTENT = {
       protocol: '400G RoCEv2',
       storage: 'VAST Data Universal Storage',
       durability: 'Erasure Coded (8+3)',
-      hadr: 'Multi-AZ (Active-Active)',
+      hadr: 'Multi-AZ (High Availability)',
       ingress: 'Hardware API Gateway (Kong/Apigee)'
     },
     rationale: {
@@ -981,7 +981,7 @@ const PRESET_CONTENT = {
       protocol: '400G RoCEv2',
       storage: 'VAST Data Universal Storage',
       durability: 'Erasure Coded (8+3)',
-      hadr: 'Multi-AZ (Active-Active)',
+      hadr: 'Multi-AZ (High Availability)',
       ingress: 'Software LB'
     },
     rationale: {
@@ -1067,7 +1067,7 @@ const PRESET_CONTENT = {
       protocol: '400G RoCEv2',
       storage: 'VAST Data Universal Storage',
       durability: 'Erasure Coded (8+3)',
-      hadr: 'Multi-AZ (Active-Active)',
+      hadr: 'Multi-AZ (High Availability)',
       ingress: 'API Gateway'
     },
     rationale: {
@@ -1239,8 +1239,8 @@ const PRESET_CONTENT = {
       protocol: '400G RoCEv2',
       storage: 'NetApp AFF A-Series',
       durability: 'Erasure Coded (8+3)',
-      hadr: 'Multi-AZ',
-      ingress: 'Software LB'
+      hadr: 'Disabled (Internal Tool)',
+      ingress: 'Disabled (Internal Tool)'
     },
     rationale: {
       silicon: 'Generating production SQL over 50-table schemas requires 70B-class reasoning to prevent hallucinated joins and syntax errors. Cisco C885A with 8x H200 provides the necessary TP=8 NVLink fabric to deliver snappy query synthesis for 48 concurrent business analysts.',
@@ -1509,8 +1509,8 @@ const PRESET_CONTENT = {
       protocol: 'Cisco Nexus 400G RoCEv2',
       storage: 'WekaFS NVMe All-Flash',
       durability: 'Erasure Coded (10+4)',
-      hadr: 'Multi-AZ',
-      ingress: 'Software LB'
+      hadr: 'Disabled (Architecture Showcase)',
+      ingress: 'Disabled (Architecture Showcase)'
     },
     rationale: {
       silicon: 'Colocated serving causes severe phase interference: a sudden 32k prompt floods the Tensor Cores, stalling active token generation for ongoing users. LLM-D completely physically decouples the cluster into two distinct hardware tiers: (1) Prefill Pool: 2x NVIDIA B200 nodes delivering extreme dense FP8 Tensor FLOPs to process prompts in milliseconds. (2) Decode Pool: 8x NVIDIA H200 nodes delivering massive aggregate HBM3e capacity (9,024GB) and bandwidth to host and generate tokens for 1,024 concurrent users without jitter.',
@@ -1953,7 +1953,7 @@ const CORE_CONTENT = {
         </p>
 
         <DecisionCallout title="The Public Cloud Break-Even Crossover">
-          Public cloud APIs for 70B+ models charge ~$2.50 to $10.00 per 1M tokens. For intermittent, unpredictable traffic (duty cycle &lt; 10%), public cloud APIs are financially superior because you pay zero idle amortized cost. However, once an enterprise reaches sustained utilization (&gt; 25% duty cycle or &ge; 16 continuous concurrent streams), an on-premise 8x H200 cluster slashes unit token costs to <strong>$0.25 to $0.65 per 1M tokens</strong>—yielding a 75% to 90% TCO reduction alongside guaranteed data privacy and zero egress charges.
+          Public cloud APIs for 70B+ models charge ~$2.50 to $10.00 per 1M tokens. For intermittent, unpredictable traffic (duty cycle &lt; 10%), public cloud APIs are financially superior because you pay zero idle amortized cost. However, once an enterprise reaches sustained utilization (&gt; 25% duty cycle or &ge; 16 continuous concurrent streams), an on-premise 8x H200 cluster slashes unit token costs to <strong>$0.25 to $0.65 per 1M tokens</strong>—yielding a 75% to 90% TCO reduction alongside guaranteed data privacy and no per-token API markup on egress (raw bandwidth costs still apply — see the Ingress &amp; Edge sizing tab).
         </DecisionCallout>
       </div>
     )

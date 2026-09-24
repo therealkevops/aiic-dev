@@ -45,7 +45,7 @@ describe('1. Pricing Reference Data', () => {
 
   it('every storage tier has a $/TB estimate', () => {
     for (const tier of STORAGE_TIERS) {
-      assert.ok(tier.estimatedUsdPerTbUsable > 0, `missing pricing for ${tier.id}`);
+      assert.ok(tier.estimatedUsdPerTbRaw > 0, `missing pricing for ${tier.id}`);
     }
   });
 });
@@ -75,7 +75,7 @@ describe('2. Capex & Opex Composition', () => {
     gpuUnitPriceUsd: gpuPricing.estimatedUnitPriceUsd,
     cloudRateUsdPerHr: gpuPricing.estimatedCloudRateUsdPerHr,
     networkHardwareAdderPct: 15,
-    storageUsdPerTbUsable: tier.estimatedUsdPerTbUsable,
+    storageUsdPerTbRaw: tier.estimatedUsdPerTbRaw,
     powerUsdPerKwh: 0.12,
     useColo: false,
     enableNvidiaAiEnterprise: true,
@@ -93,7 +93,7 @@ describe('2. Capex & Opex Composition', () => {
   });
 
   it('storage capex equals achieved (provisioned) capacity x $/TB', () => {
-    assert.equal(cost.storageCapexUsd, storageResults.achievedCapacityTb * tier.estimatedUsdPerTbUsable);
+    assert.equal(cost.storageCapexUsd, storageResults.achievedCapacityTb * tier.estimatedUsdPerTbRaw);
   });
 
   it('total capex is the sum of its three components', () => {
@@ -109,7 +109,7 @@ describe('2. Capex & Opex Composition', () => {
       infraResults, storageResults,
       gpuUnitPriceUsd: gpuPricing.estimatedUnitPriceUsd,
       cloudRateUsdPerHr: gpuPricing.estimatedCloudRateUsdPerHr,
-      storageUsdPerTbUsable: tier.estimatedUsdPerTbUsable,
+      storageUsdPerTbRaw: tier.estimatedUsdPerTbRaw,
       enableNvidiaAiEnterprise: false,
     });
     assert.equal(noLicense.annualLicensingCostUsd, 0);

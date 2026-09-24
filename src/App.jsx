@@ -101,6 +101,7 @@ export default function App() {
 
   // Network Protocol
   const [selectedProtocolId, setSelectedProtocolId] = useState('rocev2');
+  const [oversubscriptionRatio, setOversubscriptionRatio] = useState(1);
 
   // Filter available protocols by vendor (Cisco = RoCEv2 only, NVIDIA = RoCEv2 + InfiniBand)
   const availableProtocols = useMemo(() => {
@@ -113,7 +114,7 @@ export default function App() {
   const [copiedBOM, setCopiedBOM] = useState(false);
 
   // --- Input Navigation Tabs ---
-  const [activeInputTab, setActiveInputTab] = useState('workload'); // 'workload' | 'platform' | 'sharding' | 'fabric' | 'stack'
+  const [activeInputTab, setActiveInputTab] = useState('workload'); // 'workload' | 'platform' | 'sharding' | 'network' | 'facility' | 'stack'
 
   // --- Serving Stack & LLM-D State ---
   const [servingEngine, setServingEngine] = useState('vllm'); // 'vllm' | 'trt-llm' | 'tgi'
@@ -219,6 +220,7 @@ export default function App() {
     setManualDp(c.manualDp);
     setIsAutoDp(c.isAutoDp);
     setSelectedProtocolId(c.selectedProtocolId);
+    setOversubscriptionRatio(c.oversubscriptionRatio ?? 1);
     setServingEngine(c.servingEngine);
     setOrchestrator(c.orchestrator);
     setServingArchitecture(c.servingArchitecture);
@@ -391,6 +393,7 @@ export default function App() {
       trainingType,
       zeroStage,
       networkProtocol: selectedProtocolId,
+      oversubscriptionRatio,
       pue,
       servingConfig: {
         servingEngine,
@@ -424,6 +427,7 @@ export default function App() {
     trainingType,
     zeroStage,
     selectedProtocolId,
+    oversubscriptionRatio,
     pue,
     servingEngine,
     orchestrator,
@@ -686,7 +690,8 @@ ${bom.activeParamsNote ? `- MoE Active Params: ${bom.activeParamsNote}\n` : ''}-
 2. LOSSLESS COMPUTE FABRIC
 - Leaf Switches: ${bom.leafSwitchCount}x ${bom.leafSwitchModel}
 - Spine Switches: ${bom.spineSwitchCount}x ${bom.spineSwitchModel}
-- Bisection Bandwidth: ${network.totalClusterBisectionTbps.toFixed(1)} Tbps (${network.nicSpeedGbps}G × ${network.totalComputeNics} NICs, 1:1 non-blocking)
+- Topology: ${network.topology}
+- Effective Bisection Bandwidth: ${network.effectiveBisectionTbps.toFixed(1)} Tbps${network.effectiveOversubscriptionRatio > 1 ? ` (derated ${network.effectiveOversubscriptionRatio.toFixed(0)}:1 from ${network.totalClusterBisectionTbps.toFixed(1)} Tbps raw NIC-aggregate)` : ` (${network.nicSpeedGbps}G × ${network.totalComputeNics} NICs, 1:1 non-blocking)`}
 - NIC Speed: ${network.nicSpeedGbps}G per GPU (${network.nicSpeedGbps === 800 ? '800G ConnectX-8 Blackwell-class' : '400G ConnectX-7 Hopper-class'})
 - Lossless Protocol: ${network.protocol === 'rocev2' ? 'Lossless RoCEv2 (PFC 802.1Qbb + ECN)' : 'NVIDIA Quantum-2 Credit-Based Flow Control'}
 - Compute Cabling: ${bom.fabricCablesCount}x ${bom.fabricCablesType}
@@ -783,7 +788,8 @@ ${workloadType === 'inference' && throughput ? `
     { id: 'workload', label: 'Workload', icon: Activity, meta: model.name },
     { id: 'platform', label: 'Platform', icon: Building2, meta: platform.shortName },
     { id: 'sharding', label: 'Sharding', icon: Layers, meta: `TP=${tp} · PP=${pp} · DP=${dp}` },
-    { id: 'fabric', label: 'Fabric & PUE', icon: Network, meta: protocol.name },
+    { id: 'network', label: 'Network Fabric', icon: Network, meta: protocol.name },
+    { id: 'facility', label: 'Facility & Power', icon: Zap, meta: `${pue.toFixed(2)} PUE` },
     { id: 'storage', label: 'Storage', icon: HardDrive, meta: storageTier.vendor },
     { id: 'rag', label: 'RAG Pipeline', icon: Search, meta: rag.eligible ? `${rag.vectorDbNodesNeeded} DB nodes` : (enableRag ? 'N/A' : 'Off') },
     { id: 'stack', label: 'Serving Stack', icon: Workflow, meta: orchestrator.toUpperCase() },
@@ -1556,9 +1562,9 @@ ${workloadType === 'inference' && throughput ? `
             </Card>
           )}
 
-          {/* 4. Lossless Network & Facility Configuration */}
-          {activeInputTab === 'fabric' && (
-            <Card icon={Network} title="4. Lossless Scale-Out Fabric & Facility" className="space-y-4">
+          {/* 4. Network Fabric Configuration */}
+          {activeInputTab === 'network' && (
+            <Card icon={Network} title="4. Network Fabric" className="space-y-4">
               <Field label="Scale-Out Network Architecture" helper={
                 <>
                   {selectedVendor === 'cisco' && (
@@ -1584,33 +1590,119 @@ ${workloadType === 'inference' && throughput ? `
                 </select>
               </Field>
 
-              {/* PUE Slider */}
+              {/* Leaf-Spine Oversubscription Ratio */}
               <div className="pt-3 border-t border-zinc-800/70">
-                <SliderField
-                  label="Facility PUE (Power Usage Effectiveness):"
-                  valueLabel={pue.toFixed(2)}
-                  accent="amber"
-                  min="1.10" max="1.60" step="0.05"
-                  value={pue}
-                  onChange={(e) => setPue(Number(e.target.value))}
-                  marks={['1.10 (Liquid Cooling)', '1.35 (Air Cooled)', '1.60 (Legacy DC)']}
+                <ScaleField
+                  label="Leaf-Spine Oversubscription Ratio:"
+                  value={oversubscriptionRatio}
+                  onChange={setOversubscriptionRatio}
+                  presets={[1, 2, 3, 4]}
+                  min={1}
+                  max={8}
+                  suffix=":1"
                   helper={
                     <InfoHelper
-                      title="Power Usage Effectiveness (PUE)"
-                      text="The ratio of total datacenter facility power (cooling, lighting, UPS losses) to the IT equipment power. PUE = 1.0 is perfect efficiency — all power goes to compute."
-                      whyItMatters="A liquid-cooled modern facility at PUE 1.10 uses ~18% less total power than an air-cooled one at PUE 1.35 for the same workload. This directly affects your power bill and datacenter capacity."
+                      title="Leaf-Spine Oversubscription Ratio"
+                      text="The ratio of leaf switch downlink (GPU-facing) bandwidth to uplink (spine-facing) bandwidth. 1:1 is 'non-blocking' -- every leaf can talk to every other leaf at full downlink rate simultaneously. Higher ratios (2:1, 4:1) halve or quarter the spine switch count by accepting less cross-leaf bandwidth."
+                      whyItMatters="Only applies once a cluster spans more than one leaf switch (roughly 64+ GPUs on this fabric) -- below that, all GPUs sit behind a single non-blocking leaf and this setting has no effect. Above it, this is a real cost/bandwidth trade-off: an all-to-all-heavy workload (large TP/PP training) wants 1:1, while a mostly-independent-replica inference fleet can often tolerate 2:1 or higher."
                     />
                   }
                 />
               </div>
+
+              {/* Live fabric topology readout -- reacts to both the protocol and the oversubscription ratio above */}
+              <div className="pt-3 border-t border-zinc-800/70">
+                <SectionLabel>RESULTING FABRIC TOPOLOGY</SectionLabel>
+                <Rows>
+                  <Row k="Topology" v={network.topology} mono={false} />
+                  <Row k="Leaf / spine switches" v={`${network.leafSwitches} / ${network.spineSwitches}`} mono={false} />
+                  <Row k="Raw NIC-aggregate bandwidth" v={`${network.totalClusterBisectionTbps.toFixed(1)} Tbps`} mono={false} />
+                  <Row
+                    k="Effective bisection bandwidth"
+                    v={`${network.effectiveBisectionTbps.toFixed(1)} Tbps${network.effectiveOversubscriptionRatio > 1 ? ` (${network.effectiveOversubscriptionRatio.toFixed(0)}:1 derated)` : ''}`}
+                    tone={network.effectiveOversubscriptionRatio > 1 ? 'warn' : 'good'}
+                  />
+                </Rows>
+              </div>
             </Card>
           )}
 
-          {/* 5. Storage: checkpoint/dataset/model-repo capacity & throughput sizing */}
+          {/* 5. Facility & Power Configuration */}
+          {activeInputTab === 'facility' && (
+            <Card icon={Zap} title="5. Facility & Power" className="space-y-4">
+              <SliderField
+                label="Facility PUE (Power Usage Effectiveness):"
+                valueLabel={pue.toFixed(2)}
+                accent="amber"
+                min="1.10" max="1.60" step="0.05"
+                value={pue}
+                onChange={(e) => setPue(Number(e.target.value))}
+                marks={['1.10 (Liquid Cooling)', '1.35 (Air Cooled)', '1.60 (Legacy DC)']}
+                helper={
+                  <InfoHelper
+                    title="Power Usage Effectiveness (PUE)"
+                    text="The ratio of total datacenter facility power (cooling, lighting, UPS losses) to the IT equipment power. PUE = 1.0 is perfect efficiency — all power goes to compute."
+                    whyItMatters="A liquid-cooled modern facility at PUE 1.10 uses ~18% less total power than an air-cooled one at PUE 1.35 for the same workload. This directly affects your power bill and datacenter capacity -- but only under Owned Datacenter billing below. Colocation bills a flat $/kW rate on IT load with the provider's own PUE baked in, so this slider has no effect on cost in that mode."
+                  />
+                }
+              />
+
+              {/* Live facility power readout -- reacts to the PUE slider above */}
+              <div className="pt-3 border-t border-zinc-800/70">
+                <SectionLabel>RESULTING FACILITY POWER</SectionLabel>
+                <Rows>
+                  <Row k="IT power load (PUE-independent)" v={`${facility.totalItPowerKw.toFixed(1)} kW`} mono={false} />
+                  <Row k="Cooling + overhead" v={`${facility.coolingOverhead.toFixed(1)} kW`} tone="accent" />
+                  <Row k="Total facility power" v={`${facility.totalFacilityPowerKw.toFixed(1)} kW`} tone="good" />
+                </Rows>
+              </div>
+
+              <div className="pt-3 border-t border-zinc-800/70">
+                <Field
+                  label="Power Billing Model"
+                  helper={
+                    <div className="text-[10.5px] text-zinc-500 mt-1.5">
+                      {useColo ? 'Billed $/kW/month against IT load.' : 'Billed $/kWh against PUE-adjusted facility load.'}
+                    </div>
+                  }
+                >
+                  <SegmentedToggle
+                    options={[{ value: false, label: 'Owned Datacenter' }, { value: true, label: 'Colocation' }]}
+                    value={useColo}
+                    onChange={setUseColo}
+                  />
+                </Field>
+
+                {useColo ? (
+                  <Field label="Colocation Rate ($/kW/month)">
+                    <div className="relative">
+                      <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-zinc-500">$</span>
+                      <input type="number" min="0" step="5" value={coloUsdPerKwPerMonth}
+                        onChange={(e) => setColoUsdPerKwPerMonth(Math.max(0, Number(e.target.value) || 0))}
+                        className="w-full bg-zinc-950 border border-zinc-700 rounded-lg pl-5 pr-2 py-2 text-xs text-white focus:outline-none focus:border-sky-500 font-mono" />
+                    </div>
+                    <div className="text-[10.5px] text-zinc-500 mt-1">Billed against IT load — the colo provider's own cooling/facility overhead is baked into their rate.</div>
+                  </Field>
+                ) : (
+                  <SliderField
+                    label="Electricity Rate ($/kWh):"
+                    valueLabel={`$${powerUsdPerKwh.toFixed(2)}`}
+                    min="0.05" max="0.30" step="0.01"
+                    value={powerUsdPerKwh}
+                    onChange={(e) => setPowerUsdPerKwh(Number(e.target.value))}
+                    marks={['$0.05 (Low-Cost Region)', '$0.12 (US Average)', '$0.30 (High-Cost Region)']}
+                    helper={<div className="text-[10.5px] text-zinc-500 mt-1">Billed against PUE-adjusted facility load (IT load × PUE) — your own cooling overhead is on your meter.</div>}
+                  />
+                )}
+              </div>
+            </Card>
+          )}
+
+          {/* 6. Storage: checkpoint/dataset/model-repo capacity & throughput sizing */}
           {activeInputTab === 'storage' && (
             <Card
               icon={Database}
-              title="5. Storage Capacity & Throughput"
+              title="6. Storage Capacity & Throughput"
               right={<Tag tone={storage.fits ? 'good' : 'warn'}>{storage.fits ? 'Sized to fit' : 'Undersized'}</Tag>}
               className="space-y-4"
             >
@@ -1759,11 +1851,11 @@ ${workloadType === 'inference' && throughput ? `
             </Card>
           )}
 
-          {/* 6. RAG Pipeline: embedding-compute ingestion sizing + vector database serving */}
+          {/* 7. RAG Pipeline: embedding-compute ingestion sizing + vector database serving */}
           {activeInputTab === 'rag' && (
             <Card
               icon={Search}
-              title="6. RAG Pipeline"
+              title="7. RAG Pipeline"
               right={rag.eligible ? <Tag tone="good">{rag.bindingConstraint === 'capacity' ? 'Capacity-bound' : 'Throughput-bound'}</Tag> : <Tag>{enableRag ? 'N/A' : 'Off'}</Tag>}
               className="space-y-4"
             >
@@ -1943,11 +2035,11 @@ ${workloadType === 'inference' && throughput ? `
             </Card>
           )}
 
-          {/* 7. Serving Stack, Orchestration & LLM-D Disaggregation */}
+          {/* 8. Serving Stack, Orchestration & LLM-D Disaggregation */}
           {activeInputTab === 'stack' && (
             <Card
               icon={Workflow}
-              title="7. Serving Engine, Orchestration & LLM-D"
+              title="8. Serving Engine, Orchestration & LLM-D"
               right={<Tag tone={servingArchitecture === 'llmd' ? 'warn' : 'neutral'}>{servingArchitecture === 'llmd' ? 'LLM-D Disaggregated' : 'Colocated'}</Tag>}
               className="space-y-4"
             >
@@ -2197,11 +2289,11 @@ ${workloadType === 'inference' && throughput ? `
             </Card>
           )}
 
-          {/* 8. Guardrails: input/output safety-classifier pool */}
+          {/* 9. Guardrails: input/output safety-classifier pool */}
           {activeInputTab === 'guardrails' && (
             <Card
               icon={Shield}
-              title="8. Guardrails"
+              title="9. Guardrails"
               right={guardrails.enabled ? <Tag tone={guardrails.eligible ? 'good' : 'warn'}>{guardrails.eligible ? 'Eligible' : 'Not eligible'}</Tag> : <Tag>Off</Tag>}
               className="space-y-4"
             >
@@ -2312,11 +2404,11 @@ ${workloadType === 'inference' && throughput ? `
             </Card>
           )}
 
-          {/* 9. Ingress & Edge: load-balancing/TLS-termination/edge layer in front of the cluster */}
+          {/* 10. Ingress & Edge: load-balancing/TLS-termination/edge layer in front of the cluster */}
           {activeInputTab === 'ingress' && (
             <Card
               icon={Globe}
-              title="9. Ingress & Edge"
+              title="10. Ingress & Edge"
               right={ingress.enabled ? <Tag tone={ingress.eligible ? 'good' : 'warn'}>{ingress.eligible ? 'Eligible' : 'Not eligible'}</Tag> : <Tag>Off</Tag>}
               className="space-y-4"
             >
@@ -2401,11 +2493,11 @@ ${workloadType === 'inference' && throughput ? `
             </Card>
           )}
 
-          {/* 10. High Availability / Disaster Recovery: replica multipliers, RTO/RPO */}
+          {/* 11. High Availability / Disaster Recovery: replica multipliers, RTO/RPO */}
           {activeInputTab === 'hadr' && (
             <Card
               icon={LifeBuoy}
-              title="10. HA / DR"
+              title="11. HA / DR"
               right={haDr.enabled ? <Tag tone={haDr.eligible ? 'good' : 'warn'}>{haDr.eligible ? 'Eligible' : 'Not eligible'}</Tag> : <Tag>Off</Tag>}
               className="space-y-4"
             >
@@ -2472,11 +2564,11 @@ ${workloadType === 'inference' && throughput ? `
             </Card>
           )}
 
-          {/* 10b. MLOps Lifecycle: canary/shadow/blue-green model-rollout validation pool sizing */}
+          {/* 12. MLOps Lifecycle: canary/shadow/blue-green model-rollout validation pool sizing */}
           {activeInputTab === 'mlops' && (
             <Card
               icon={GitBranch}
-              title="MLOps Lifecycle"
+              title="12. MLOps Lifecycle"
               right={mlops.enabled ? <Tag tone={mlops.eligible ? 'good' : 'warn'}>{mlops.eligible ? 'Eligible' : 'Not eligible'}</Tag> : <Tag>Off</Tag>}
               className="space-y-4"
             >
@@ -2545,11 +2637,11 @@ ${workloadType === 'inference' && throughput ? `
             </Card>
           )}
 
-          {/* 11. MIG (Multi-Instance GPU) Partitioning */}
+          {/* 13. MIG (Multi-Instance GPU) Partitioning */}
           {activeInputTab === 'mig' && (
             <Card
               icon={Grid2x2}
-              title="11. MIG Partitioning"
+              title="13. MIG Partitioning"
               right={mig.enabled ? <Tag tone={mig.eligible ? 'good' : 'warn'}>{mig.eligible ? 'Eligible' : 'Not eligible'}</Tag> : <Tag>Off</Tag>}
               className="space-y-4"
             >
@@ -2608,11 +2700,11 @@ ${workloadType === 'inference' && throughput ? `
             </Card>
           )}
 
-          {/* 12. SLA / Tail-Latency Queueing */}
+          {/* 14. SLA / Tail-Latency Queueing */}
           {activeInputTab === 'sla' && (
             <Card
               icon={Timer}
-              title="12. SLA & Tail Latency"
+              title="14. SLA & Tail Latency"
               right={sla.eligible ? <Tag tone={sla.highUtilizationWarning ? 'warn' : 'good'}>{sla.highUtilizationWarning ? 'Near saturation' : 'Eligible'}</Tag> : <Tag>N/A</Tag>}
               className="space-y-4"
             >
@@ -2702,11 +2794,11 @@ ${workloadType === 'inference' && throughput ? `
             </Card>
           )}
 
-          {/* 13. Cost & TCO */}
+          {/* 15. Cost & TCO */}
           {activeInputTab === 'cost' && (
             <Card
               icon={DollarSign}
-              title="13. Cost & TCO"
+              title="15. Cost & TCO"
               right={<Tag tone={cost.buildVsBuySavingsUsd >= 0 ? 'good' : 'warn'}>{cost.buildVsBuySavingsUsd >= 0 ? 'Owning wins' : 'Cloud wins'}</Tag>}
               className="space-y-4"
             >
@@ -2755,42 +2847,9 @@ ${workloadType === 'inference' && throughput ? `
                 }
               />
 
-              <Field
-                label="Power Billing Model"
-                helper={
-                  <div className="text-[10.5px] text-zinc-500 mt-1.5">
-                    {useColo ? 'Billed $/kW/month against IT load.' : 'Billed $/kWh against PUE-adjusted facility load.'}
-                  </div>
-                }
-              >
-                <SegmentedToggle
-                  options={[{ value: false, label: 'Owned Datacenter' }, { value: true, label: 'Colocation' }]}
-                  value={useColo}
-                  onChange={setUseColo}
-                />
-              </Field>
-
-              {useColo ? (
-                <Field label="Colocation Rate ($/kW/month)">
-                  <div className="relative">
-                    <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-zinc-500">$</span>
-                    <input type="number" min="0" step="5" value={coloUsdPerKwPerMonth}
-                      onChange={(e) => setColoUsdPerKwPerMonth(Math.max(0, Number(e.target.value) || 0))}
-                      className="w-full bg-zinc-950 border border-zinc-700 rounded-lg pl-5 pr-2 py-2 text-xs text-white focus:outline-none focus:border-sky-500 font-mono" />
-                  </div>
-                  <div className="text-[10.5px] text-zinc-500 mt-1">Billed against IT load — the colo provider's own cooling/facility overhead is baked into their rate.</div>
-                </Field>
-              ) : (
-                <SliderField
-                  label="Electricity Rate ($/kWh):"
-                  valueLabel={`$${powerUsdPerKwh.toFixed(2)}`}
-                  min="0.05" max="0.30" step="0.01"
-                  value={powerUsdPerKwh}
-                  onChange={(e) => setPowerUsdPerKwh(Number(e.target.value))}
-                  marks={['$0.05 (Low-Cost Region)', '$0.12 (US Average)', '$0.30 (High-Cost Region)']}
-                  helper={<div className="text-[10.5px] text-zinc-500 mt-1">Billed against PUE-adjusted facility load (IT load × PUE) — your own cooling overhead is on your meter.</div>}
-                />
-              )}
+              <Banner tone="info" icon={Zap}>
+                Power billing model, electricity/colocation rate, and PUE now live on the <button type="button" onClick={() => setActiveInputTab('facility')} className="text-sky-400 underline cursor-pointer">Facility &amp; Power</button> tab — {useColo ? `currently Colocation at $${coloUsdPerKwPerMonth}/kW/month` : `currently Owned Datacenter at $${powerUsdPerKwh.toFixed(2)}/kWh`}, feeding directly into the annual power cost below.
+              </Banner>
 
               <ToggleRow
                 label="NVIDIA AI Enterprise Software Licensing"
@@ -3053,11 +3112,11 @@ ${workloadType === 'inference' && throughput ? `
                 )}
               </Disclosure>
 
-              <Disclosure icon={Network} title="Lossless scale-out fabric" right={`${network.totalClusterBisectionTbps.toFixed(1)} Tbps`}>
+              <Disclosure icon={Network} title="Lossless scale-out fabric" right={`${network.effectiveBisectionTbps.toFixed(1)} Tbps`}>
                 <Rows>
                   <Row k="Leaf switches" v={`${bom.leafSwitchCount}x ${bom.leafSwitchModel}`} mono={false} />
                   <Row k="Spine switches" v={bom.spineSwitchCount > 0 ? `${bom.spineSwitchCount}x ${bom.spineSwitchModel}` : 'None (single node)'} mono={false} />
-                  <Row k="Topology" v="1:1 non-blocking Clos" mono={false} />
+                  <Row k="Topology" v={network.topology} mono={false} />
                   <Row k="Lossless protocol" v={network.protocol === 'rocev2' ? 'RoCEv2 (PFC 802.1Qbb + ECN)' : 'Quantum-2 credit-based control'} tone="accent" mono={false} />
                   <Row k="Fabric cabling" v={`${bom.fabricCablesCount}x ${bom.fabricCablesType}`} mono={false} />
                 </Rows>

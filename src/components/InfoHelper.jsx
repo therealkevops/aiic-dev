@@ -31,17 +31,3 @@ export function InfoHelper({ title, text, whyItMatters }) {
     </div>
   );
 }
-
-export function GlossaryCard({ term, definition, impact }) {
-  return (
-    <div className="p-3 bg-zinc-900/90 border border-zinc-800 rounded-lg text-xs">
-      <div className="font-bold text-zinc-100 text-sm mb-1">{term}</div>
-      <p className="text-zinc-400 mb-1.5 leading-relaxed">{definition}</p>
-      {impact && (
-        <div className="text-zinc-400 text-[11px] pt-1 border-t border-zinc-800/80">
-          <strong className="text-sky-400 font-medium">Impact: </strong>{impact}
-        </div>
-      )}
-    </div>
-  );
-}

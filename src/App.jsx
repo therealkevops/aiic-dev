@@ -25,14 +25,18 @@ import { MODEL_PRESETS, PRECISION_OPTIONS } from './data/models';
 import { GPU_CATALOG, NETWORK_PROTOCOLS } from './data/hardware';
 import { PLATFORM_VENDORS, PLATFORM_SYSTEMS } from './data/platforms';
 import { calculateInfra, recommendSharding } from './utils/calculator';
-import { InfoHelper, GlossaryCard } from './components/InfoHelper';
+import { InfoHelper } from './components/InfoHelper';
 import { TopologyDiagram } from './components/TopologyDiagram';
+import { GlossaryPage } from './components/GlossaryPage';
 import {
   Card, Disclosure, SectionLabel, KpiRow, Kpi, Rows, Row, Banner, Meter,
   SegmentedToggle, Field, SliderField, ChoiceCard, Tag
 } from './components/ui';
 
 export default function App() {
+  // --- Top-level page (calculator vs. standalone glossary page) ---
+  const [page, setPage] = useState('calculator'); // 'calculator' | 'glossary'
+
   // --- Workload & Model State ---
   const [workloadType, setWorkloadType] = useState('inference'); // 'inference' | 'training'
   const [selectedModelId, setSelectedModelId] = useState('llama3-70b');
@@ -330,6 +334,10 @@ ${workloadType === 'inference' && throughput ? `
     { id: 'fabric', label: 'Fabric & PUE', icon: Network, meta: protocol.name },
     { id: 'stack', label: 'Serving Stack', icon: Workflow, meta: orchestrator.toUpperCase() },
   ];
+
+  if (page === 'glossary') {
+    return <GlossaryPage onBack={() => setPage('calculator')} />;
+  }
 
   return (
     <div className="h-screen w-screen flex flex-col bg-zinc-950 text-zinc-100 antialiased overflow-hidden select-none-text">
@@ -1514,45 +1522,21 @@ ${workloadType === 'inference' && throughput ? `
           {/* Visual Physical Topology Diagram Component */}
           <TopologyDiagram key={platform.id} results={results} gpu={gpu} platform={platform} protocol={protocol} />
 
-          {/* Architectural Decision Guide & Plain English Glossary */}
-          <div className="pt-2">
-            <SectionLabel>Architectural decision guide &amp; glossary</SectionLabel>
-            <div className="grid grid-cols-1 xl:grid-cols-2 gap-2.5">
-              <GlossaryCard
-                term="Cisco (UCS & Supermicro) vs. NVIDIA DGX"
-                definition="Cisco solutions offer compute flexibility: native Cisco UCS servers (AMD EPYC) and Supermicro HGX servers (Intel Xeon + up to 8TB RAM), both unified on Cisco Nexus deep-buffer RoCEv2 switches and Intersight. NVIDIA DGX provides turnkey SuperPOD reference clusters direct from NVIDIA."
-                impact="Cisco gives enterprise network control and multi-vendor compute choice; DGX is turnkey pure-play AI supercomputing."
-              />
-              <GlossaryCard
-                term="Tensor Parallelism (TP)"
-                definition="Divides each matrix math calculation across a group of GPUs simultaneously. Because GPUs must communicate after every token, it must remain on high-speed NVLink."
-                impact="Keep TP ≤ 8 (single node). Crossing standard network cables causes massive latency slowdowns."
-              />
-              <GlossaryCard
-                term="Pipeline Parallelism (PP)"
-                definition="Distributes consecutive layers of a giant model across separate server chassis (Node 1 does layers 1-40, Node 2 does 41-80)."
-                impact="Used when a model exceeds 1 node. TP is maxed out inside the node, and PP bridges the nodes."
-              />
-              <GlossaryCard
-                term="Lossless RoCEv2 (Nexus AI Fabric)"
-                definition="AI clusters synchronize at barrier steps. If a single network packet is dropped, all GPUs sit idle waiting for a retransmission."
-                impact="Cisco Nexus 9000 Cloud Scale ASICs provide deep packet buffers and smart ECN to eliminate packet drops without needing InfiniBand."
-              />
-              <GlossaryCard
-                term="KV Cache Memory"
-                definition="Remembers earlier words in a chat so the model doesn't recompute them. Scales directly with context window length and the number of active users."
-                impact="Long context (32k–128k) eats more memory than the model weights! Choose high-VRAM GPUs like H200."
-              />
-              <GlossaryCard
-                term="Rail-Optimized Leaf-Spine"
-                definition="Each GPU in a server is cabled to an independent leaf switch rail, preventing inter-GPU traffic jams."
-                impact="Delivers 1:1 non-blocking throughput across nodes without communication contention."
-              />
-            </div>
+          {/* Link out to the standalone architectural decision guide & glossary */}
+          <button
+            type="button"
+            onClick={() => setPage('glossary')}
+            className="w-full flex items-center justify-between gap-2 px-3.5 py-2.5 bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 rounded-xl text-left transition cursor-pointer"
+          >
+            <span className="flex items-center gap-2 text-[12.5px] text-zinc-300">
+              <BookOpen className="w-4 h-4 text-sky-400 shrink-0" />
+              Architectural decision guide &amp; glossary
+            </span>
+            <span className="text-sky-400 text-[12.5px] shrink-0">Open →</span>
+          </button>
 
-            <div className="text-center text-[10.5px] text-zinc-500 pt-4 pb-1">
-              Private AI Infrastructure Sizing Calculator · Cisco &amp; NVIDIA Datacenter Platforms
-            </div>
+          <div className="text-center text-[10.5px] text-zinc-500 pt-2 pb-1">
+            Private AI Infrastructure Sizing Calculator · Cisco &amp; NVIDIA Datacenter Platforms
           </div>
 
         </aside>

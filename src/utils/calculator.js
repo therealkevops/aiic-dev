@@ -1280,3 +1280,99 @@ export function calculateStorage(config) {
     breakdown,
   };
 }
+
+// ─── Cost & TCO (capex, opex, build-vs-buy cloud comparison) ──────────────────────────
+/**
+ * Composes capex + opex + a 3-year (configurable) TCO from calculateInfra()'s and
+ * calculateStorage()'s own outputs -- it doesn't re-derive any hardware sizing, only prices
+ * what's already been sized. Every dollar input is a caller-supplied, user-editable figure
+ * (see src/data/pricing.js for illustrative defaults); this function does no data-file lookups
+ * of its own so its test surface stays pure arithmetic over explicit inputs.
+ */
+export function calculateCost(config) {
+  const {
+    infraResults,                    // calculateInfra() output (required)
+    storageResults = null,           // calculateStorage() output (optional)
+    gpuUnitPriceUsd = 0,             // $/GPU capex, primary (or prefill, under LLM-D) pool
+    cloudRateUsdPerHr = 0,           // $/GPU-hr dedicated-cloud rental, primary (or prefill) pool
+    decodeGpuUnitPriceUsd = null,    // only used when infraResults is LLM-D heterogeneous
+    decodeCloudRateUsdPerHr = null,
+    networkHardwareAdderPct = 15,    // network + OOB hardware as % of compute capex
+    storageUsdPerTbUsable = 0,       // $/TB for the achieved (provisioned) storage capacity
+    powerUsdPerKwh = 0.12,
+    useColo = false,                 // colo bills $/kW/month on IT load; owned DC bills $/kWh on facility (PUE-adjusted) load
+    coloUsdPerKwPerMonth = 150,
+    enableNvidiaAiEnterprise = false,
+    licensingUsdPerGpuPerYear = 4500,
+    supportPctPerYear = 15,          // hardware support/maintenance contract, % of total capex/year
+    tcoYears = 3,
+  } = config;
+
+  const isLlmd = !!infraResults.memory.llmd;
+  let computeCapexUsd;
+  let cloudEquivalentUsdPerHr;
+
+  if (isLlmd) {
+    const prefillGpus = infraResults.memory.llmd.prefill.gpus;
+    const decodeGpus = infraResults.memory.llmd.decode.gpus;
+    const decPrice = decodeGpuUnitPriceUsd != null ? decodeGpuUnitPriceUsd : gpuUnitPriceUsd;
+    const decCloud = decodeCloudRateUsdPerHr != null ? decodeCloudRateUsdPerHr : cloudRateUsdPerHr;
+    computeCapexUsd = (prefillGpus * gpuUnitPriceUsd) + (decodeGpus * decPrice);
+    cloudEquivalentUsdPerHr = (prefillGpus * cloudRateUsdPerHr) + (decodeGpus * decCloud);
+  } else {
+    const totalGpus = infraResults.totalGpus;
+    computeCapexUsd = totalGpus * gpuUnitPriceUsd;
+    cloudEquivalentUsdPerHr = totalGpus * cloudRateUsdPerHr;
+  }
+
+  const networkHardwareCapexUsd = computeCapexUsd * (networkHardwareAdderPct / 100);
+  const storageCapexUsd = storageResults ? (storageResults.achievedCapacityTb * storageUsdPerTbUsable) : 0;
+  const totalCapexUsd = computeCapexUsd + networkHardwareCapexUsd + storageCapexUsd;
+
+  const hoursPerYear = 24 * 365;
+  // Colo bills $/kW/month on IT load (the colo provider's own facility overhead/cooling is
+  // baked into their rate); an owned DC bills the utility $/kWh on the PUE-adjusted total load.
+  const annualPowerCostUsd = useColo
+    ? infraResults.facility.totalItPowerKw * coloUsdPerKwPerMonth * 12
+    : infraResults.facility.totalFacilityPowerKw * hoursPerYear * powerUsdPerKwh;
+
+  const annualLicensingCostUsd = enableNvidiaAiEnterprise
+    ? infraResults.totalGpus * licensingUsdPerGpuPerYear
+    : 0;
+  const annualSupportCostUsd = totalCapexUsd * (supportPctPerYear / 100);
+  const annualOpexUsd = annualPowerCostUsd + annualLicensingCostUsd + annualSupportCostUsd;
+
+  const tcoUsd = totalCapexUsd + (annualOpexUsd * tcoYears);
+  const totalGpuHours = infraResults.totalGpus * hoursPerYear * tcoYears;
+  const effectiveUsdPerGpuHour = totalGpuHours > 0 ? tcoUsd / totalGpuHours : 0;
+
+  const cloudEquivalentTcoUsd = cloudEquivalentUsdPerHr * hoursPerYear * tcoYears;
+  const buildVsBuySavingsUsd = cloudEquivalentTcoUsd - tcoUsd;
+
+  // Break-even: months until cumulative on-prem spend (capex + opex-to-date) is overtaken by
+  // cumulative cloud-rental spend. If on-prem's own recurring cost already exceeds cloud rental,
+  // there's no break-even -- cloud is cheaper from month 1 (null, not a misleading number).
+  const onPremMonthlyRecurringUsd = annualOpexUsd / 12;
+  const cloudMonthlyUsd = cloudEquivalentUsdPerHr * 24 * 30.44; // average days/month
+  const monthlySavingsUsd = cloudMonthlyUsd - onPremMonthlyRecurringUsd;
+  const breakEvenMonths = monthlySavingsUsd > 0 ? (totalCapexUsd / monthlySavingsUsd) : null;
+
+  return {
+    computeCapexUsd,
+    networkHardwareCapexUsd,
+    storageCapexUsd,
+    totalCapexUsd,
+    annualPowerCostUsd,
+    annualLicensingCostUsd,
+    annualSupportCostUsd,
+    annualOpexUsd,
+    tcoYears,
+    tcoUsd,
+    effectiveUsdPerGpuHour,
+    cloudEquivalentUsdPerHr,
+    cloudEquivalentTcoUsd,
+    buildVsBuySavingsUsd,
+    breakEvenMonths,
+    useColo,
+  };
+}

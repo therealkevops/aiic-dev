@@ -4,8 +4,32 @@
 
 @layer base {
   body {
-    @apply antialiased bg-zinc-950 text-zinc-100;
+    @apply antialiased bg-zinc-950 text-zinc-100 font-sans;
+    font-variant-numeric: tabular-nums;
   }
+  ::selection {
+    @apply bg-sky-500/30;
+  }
+}
+
+@layer utilities {
+  .tabular-nums {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+/* Native <details> disclosure chevron */
+details > summary {
+  list-style: none;
+}
+details > summary::-webkit-details-marker {
+  display: none;
+}
+details[open] > summary .chev {
+  transform: rotate(180deg);
+}
+.chev {
+  transition: transform 0.15s ease;
 }
 
 /* Modern sleek dark scrollbars for independently scrollable panes */

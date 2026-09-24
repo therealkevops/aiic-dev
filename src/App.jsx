@@ -18,12 +18,14 @@ import {
   Gauge,
   Boxes,
   Workflow,
-  Database
+  Database,
+  Wand2
 } from 'lucide-react';
 
 import { MODEL_PRESETS, PRECISION_OPTIONS } from './data/models';
 import { GPU_CATALOG, NETWORK_PROTOCOLS } from './data/hardware';
 import { PLATFORM_VENDORS, PLATFORM_SYSTEMS } from './data/platforms';
+import { USE_CASE_PRESETS } from './data/presets';
 import { calculateInfra, recommendSharding } from './utils/calculator';
 import { InfoHelper } from './components/InfoHelper';
 import { TopologyDiagram } from './components/TopologyDiagram';
@@ -108,6 +110,52 @@ export default function App() {
   const [secondaryPlatformId, setSecondaryPlatformId] = useState('cisco-c885a-h200');
   const [prefillNodes, setPrefillNodes] = useState(1);
   const [decodeNodes, setDecodeNodes] = useState(2);
+
+  // --- Use-case preset (header dropdown) ---
+  const [selectedPresetId, setSelectedPresetId] = useState('');
+
+  const applyPreset = (presetId) => {
+    setSelectedPresetId(presetId);
+    const preset = USE_CASE_PRESETS.find(p => p.id === presetId);
+    if (!preset) return; // "" / unknown = back to a blank custom configuration, nothing to apply
+    const c = preset.config;
+    setWorkloadType(c.workloadType);
+    setSelectedModelId(c.selectedModelId);
+    setSelectedPrecisionId(c.selectedPrecisionId);
+    setKvPrecision(c.kvPrecision);
+    setPrefixCacheRatio(c.prefixCacheRatio);
+    setPromptTokenRatio(c.promptTokenRatio);
+    setContextLength(c.contextLength);
+    setConcurrency(c.concurrency);
+    setMicroBatchSize(c.microBatchSize);
+    setPue(c.pue);
+    setTrainingType(c.trainingType);
+    setZeroStage(c.zeroStage);
+    setSelectedVendor(c.selectedVendor);
+    setSelectedPlatformId(c.selectedPlatformId);
+    setIsAutoSharding(c.isAutoSharding);
+    setManualTp(c.manualTp);
+    setManualPp(c.manualPp);
+    setManualDp(c.manualDp);
+    setIsAutoDp(c.isAutoDp);
+    setSelectedProtocolId(c.selectedProtocolId);
+    setServingEngine(c.servingEngine);
+    setOrchestrator(c.orchestrator);
+    setServingArchitecture(c.servingArchitecture);
+    setEnableChunkedPrefill(c.enableChunkedPrefill);
+    setEnablePrefixCaching(c.enablePrefixCaching);
+    setEnableSpeculativeDecoding(c.enableSpeculativeDecoding);
+    setLlmdDisaggregationMode(c.llmdDisaggregationMode);
+    setSecondaryPlatformId(c.secondaryPlatformId);
+    setPrefillNodes(c.prefillNodes);
+    setDecodeNodes(c.decodeNodes);
+    setActiveInputTab('workload');
+  };
+
+  const activePreset = useMemo(
+    () => USE_CASE_PRESETS.find(p => p.id === selectedPresetId) || null,
+    [selectedPresetId]
+  );
 
   // Secondary platform and GPU for LLM-D heterogeneous decode pool
   const secondaryPlatform = useMemo(() => {
@@ -360,9 +408,33 @@ ${workloadType === 'inference' && throughput ? `
               </span>
             </h1>
             <p className="text-[11px] text-zinc-400 hidden sm:block">
-              Compute, VRAM sharding, LLM-D disaggregation, and lossless RoCEv2/IB fabric sizing.
+              {activePreset
+                ? <><strong className="text-sky-400 font-medium">{activePreset.label}:</strong> {activePreset.description}</>
+                : 'Compute, VRAM sharding, LLM-D disaggregation, and lossless RoCEv2/IB fabric sizing.'}
             </p>
           </div>
+        </div>
+
+        {/* Use-Case Preset Dropdown */}
+        <div className="flex items-center gap-1.5 shrink-0">
+          <Wand2 className="w-3.5 h-3.5 text-sky-400 hidden sm:block" />
+          <select
+            value={selectedPresetId}
+            onChange={(e) => applyPreset(e.target.value)}
+            className="bg-zinc-950 border border-zinc-700 rounded-lg pl-2.5 pr-2 py-1.5 text-xs text-white focus:outline-none focus:border-sky-500 max-w-[220px]"
+          >
+            <option value="">Preset: Custom configuration</option>
+            <optgroup label="Enterprise">
+              {USE_CASE_PRESETS.filter(p => p.category === 'enterprise').map(p => (
+                <option key={p.id} value={p.id}>{p.label}</option>
+              ))}
+            </optgroup>
+            <optgroup label="Neo-Cloud">
+              {USE_CASE_PRESETS.filter(p => p.category === 'neocloud').map(p => (
+                <option key={p.id} value={p.id}>{p.label}</option>
+              ))}
+            </optgroup>
+          </select>
         </div>
 
         {/* Quick Status KPI Strip */}

@@ -37,7 +37,7 @@ import { TopologyDiagram } from './components/TopologyDiagram';
 import { GlossaryPage } from './components/GlossaryPage';
 import {
   Card, Disclosure, SectionLabel, KpiRow, Kpi, Rows, Row, Banner, Meter,
-  SegmentedToggle, Field, SliderField, ScaleField, ChoiceCard, Tag
+  SegmentedToggle, Switch, ToggleRow, Field, SliderField, ScaleField, ChoiceCard, Tag
 } from './components/ui';
 
 export default function App() {
@@ -1417,13 +1417,12 @@ ${workloadType === 'inference' && throughput ? `
                       />
                     }
                   />
-                  <Field label="KV Cache Disk / CXL Offload">
-                    <SegmentedToggle
-                      options={[{ value: false, label: 'Disabled (VRAM only)' }, { value: true, label: 'Enabled' }]}
-                      value={enableKvOffload}
-                      onChange={setEnableKvOffload}
-                    />
-                  </Field>
+                  <ToggleRow
+                    label="KV Cache Disk / CXL Offload"
+                    description={enableKvOffload ? 'Paging beyond VRAM to disk/CXL tiering.' : 'KV cache stays VRAM-only.'}
+                    checked={enableKvOffload}
+                    onChange={setEnableKvOffload}
+                  />
                 </>
               )}
 
@@ -1721,13 +1720,12 @@ ${workloadType === 'inference' && throughput ? `
                 MIG (Multi-Instance GPU) splits one physical GPU into up to 7 isolated instances. It's most valuable when a single replica needs far less than a whole GPU — small models, low concurrency, or many isolated tenants — and only applies to colocated inference where TP=1 and PP=1 (MIG instances have no NVLink between them, so a replica sharded across GPUs can't span them).
               </Banner>
 
-              <Field label="MIG Partitioning">
-                <SegmentedToggle
-                  options={[{ value: false, label: 'Disabled (Dedicated Whole GPUs)' }, { value: true, label: 'Enabled' }]}
-                  value={enableMig}
-                  onChange={setEnableMig}
-                />
-              </Field>
+              <ToggleRow
+                label="MIG Partitioning"
+                description={enableMig ? 'Packing replicas onto isolated MIG instances where eligible.' : 'Each replica gets a dedicated whole GPU.'}
+                checked={enableMig}
+                onChange={setEnableMig}
+              />
 
               {enableMig && !mig.eligible && (
                 <Banner tone="warn" icon={AlertTriangle}>
@@ -1826,9 +1824,16 @@ ${workloadType === 'inference' && throughput ? `
                 }
               />
 
-              <Field label="Power Billing Model">
+              <Field
+                label="Power Billing Model"
+                helper={
+                  <div className="text-[10.5px] text-zinc-500 mt-1.5">
+                    {useColo ? 'Billed $/kW/month against IT load.' : 'Billed $/kWh against PUE-adjusted facility load.'}
+                  </div>
+                }
+              >
                 <SegmentedToggle
-                  options={[{ value: false, label: 'Owned Datacenter ($/kWh)' }, { value: true, label: 'Colocation ($/kW/month)' }]}
+                  options={[{ value: false, label: 'Owned Datacenter' }, { value: true, label: 'Colocation' }]}
                   value={useColo}
                   onChange={setUseColo}
                 />
@@ -1856,13 +1861,12 @@ ${workloadType === 'inference' && throughput ? `
                 />
               )}
 
-              <Field label="NVIDIA AI Enterprise Software Licensing">
-                <SegmentedToggle
-                  options={[{ value: false, label: 'Open-Source Stack Only' }, { value: true, label: 'Include ($4,500/GPU/yr)' }]}
-                  value={enableNvidiaAiEnterprise}
-                  onChange={setEnableNvidiaAiEnterprise}
-                />
-              </Field>
+              <ToggleRow
+                label="NVIDIA AI Enterprise Software Licensing"
+                description={enableNvidiaAiEnterprise ? 'Included at $4,500/GPU/yr.' : 'Open-source stack only — no licensing cost.'}
+                checked={enableNvidiaAiEnterprise}
+                onChange={setEnableNvidiaAiEnterprise}
+              />
 
               <SliderField
                 label="Hardware Support & Maintenance:"

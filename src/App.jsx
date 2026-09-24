@@ -540,6 +540,8 @@ export default function App() {
   const haDrTier = HA_DR_TIERS.find(t => t.id === selectedHaDrTierId) || HA_DR_TIERS[0];
   const migComputeGpuCountOverride = (mig.eligible && mig.physicalGpusNeeded < mig.naiveGpuCount) ? mig.physicalGpusNeeded : null;
   const migItPowerKwOverride = (mig.eligible && mig.physicalGpusNeeded < mig.naiveGpuCount) ? mig.itPowerKw : null;
+  const decodeGpuId = memory.llmd?.decode?.gpu?.id;
+  const decodeGpuPricing = decodeGpuId ? GPU_PRICING[decodeGpuId] : null;
   const haDr = useMemo(() => {
     return calculateHaDr({
       enabled: enableHaDr,
@@ -547,15 +549,16 @@ export default function App() {
       storageResults: storage,
       haDrTier,
       gpuUnitPriceUsd,
+      // LLM-D heterogeneous deployments price prefill/decode pools separately -- mirror Cost's
+      // own split-pricing treatment so a DR replica's base capex matches the primary site's.
+      decodeGpuUnitPriceUsd: decodeGpuPricing?.estimatedUnitPriceUsd ?? null,
       storageUsdPerTbRaw: storageTier.estimatedUsdPerTbRaw,
       computeGpuCountOverride: migComputeGpuCountOverride,
       itPowerKwOverride: migItPowerKwOverride,
     });
-  }, [enableHaDr, results, storage, haDrTier, gpuUnitPriceUsd, storageTier, migComputeGpuCountOverride, migItPowerKwOverride]);
+  }, [enableHaDr, results, storage, haDrTier, gpuUnitPriceUsd, decodeGpuPricing, storageTier, migComputeGpuCountOverride, migItPowerKwOverride]);
 
   // 11. Cost & TCO -- consumes the already-computed infra + storage + MIG + RAG + guardrails + ingress + HA/DR results, prices nothing new
-  const decodeGpuId = memory.llmd?.decode?.gpu?.id;
-  const decodeGpuPricing = decodeGpuId ? GPU_PRICING[decodeGpuId] : null;
   const cost = useMemo(() => {
     return calculateCost({
       infraResults: results,

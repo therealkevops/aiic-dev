@@ -1921,6 +1921,7 @@ export function calculateHaDr(config) {
     storageResults = null,
     haDrTier,              // one of HA_DR_TIERS
     gpuUnitPriceUsd = 0,
+    decodeGpuUnitPriceUsd = null, // only used when infraResults is LLM-D heterogeneous, mirrors calculateCost()
     storageUsdPerTbRaw = 0,
     computeGpuCountOverride = null, // pass MIG's consolidated GPU count when eligible, for consistency with calculateCost()
     itPowerKwOverride = null,
@@ -1934,8 +1935,23 @@ export function calculateHaDr(config) {
     return { enabled: true, eligible: false, reason: "HA/DR replica sizing applies to inference workloads -- a training job's resilience is a checkpoint/resume concern (see Storage), not a live-replica one." };
   }
 
-  const baseGpuCount = computeGpuCountOverride != null ? computeGpuCountOverride : infraResults.totalGpus;
-  const baseComputeCapexUsd = baseGpuCount * gpuUnitPriceUsd;
+  // LLM-D heterogeneous deployments price prefill and decode GPUs separately (they're often
+  // different GPU classes) -- mirror calculateCost()'s own isLlmd branch so a DR replica's base
+  // compute capex matches the primary site's actual capex rather than a blended single-price
+  // estimate, which understates or overstates depending on which pool is pricier.
+  const isLlmd = !!infraResults.memory.llmd;
+  let baseGpuCount;
+  let baseComputeCapexUsd;
+  if (isLlmd) {
+    const prefillGpus = infraResults.memory.llmd.prefill.gpus;
+    const decodeGpus = infraResults.memory.llmd.decode.gpus;
+    const decPrice = decodeGpuUnitPriceUsd != null ? decodeGpuUnitPriceUsd : gpuUnitPriceUsd;
+    baseGpuCount = prefillGpus + decodeGpus;
+    baseComputeCapexUsd = (prefillGpus * gpuUnitPriceUsd) + (decodeGpus * decPrice);
+  } else {
+    baseGpuCount = computeGpuCountOverride != null ? computeGpuCountOverride : infraResults.totalGpus;
+    baseComputeCapexUsd = baseGpuCount * gpuUnitPriceUsd;
+  }
   const baseStorageCapexUsd = storageResults ? storageResults.achievedCapacityTb * storageUsdPerTbRaw : 0;
   const baseItPowerKw = itPowerKwOverride != null ? itPowerKwOverride : infraResults.facility.totalItPowerKw;
 

@@ -1143,3 +1143,113 @@ export function calculateInfra(config) {
     recommendations
   };
 }
+
+// ─── Storage Sizing (checkpoints, dataset streaming, model repository, KV offload) ────
+/**
+ * Sizes storage capacity and required sustained throughput for the current workload,
+ * and picks how many RU of the selected storage tier are needed to satisfy both.
+ * Deliberately independent of calculateInfra(): it consumes that function's memory/
+ * throughput outputs as inputs rather than re-deriving model math, so storage sizing
+ * can't drift out of sync with the compute sizing it's describing.
+ */
+export function calculateStorage(config) {
+  const {
+    workloadType,
+    infraResults,          // the object returned by calculateInfra()
+    storageTier,            // one entry from STORAGE_TIERS
+    checkpointRetentionCount = 3,
+    checkpointTargetWriteTimeSec = 60,
+    datasetSizeTb = 50,
+    modelRepoVersionCount = 2,
+    modelRepoTargetLoadTimeSec = 120,
+    corpusSizeGb = 0,
+    enableKvOffload = false,
+  } = config;
+
+  const { memory, totalGpus, throughput } = infraResults;
+  const breakdown = [];
+  let requiredCapacityTb = 0;
+  let requiredThroughputGBs = 0;
+
+  if (workloadType === 'training') {
+    // Checkpoint = master weights + optimizer states (Adam m/v + fp32 master copy).
+    // Gradients are transient and never checkpointed.
+    const checkpointSizeGb = (memory.weightTotalGb || 0) + (memory.optimizerTotalGb || 0);
+    const checkpointCapacityTb = (checkpointSizeGb * checkpointRetentionCount) / 1000;
+    const checkpointWriteThroughputGBs = checkpointTargetWriteTimeSec > 0
+      ? checkpointSizeGb / checkpointTargetWriteTimeSec
+      : 0;
+
+    // Sustained dataset streaming target: ~200 MB/s per accelerator is a commonly cited
+    // floor for keeping modern (H100-class+) training pipelines fed without I/O stalls.
+    const perGpuStreamingMBs = 200;
+    const datasetThroughputGBs = (totalGpus * perGpuStreamingMBs) / 1000;
+
+    requiredCapacityTb = checkpointCapacityTb + datasetSizeTb + (corpusSizeGb / 1000);
+    requiredThroughputGBs = Math.max(checkpointWriteThroughputGBs, datasetThroughputGBs);
+
+    breakdown.push(
+      { label: 'Checkpoint retention', capacityTb: checkpointCapacityTb, note: `${checkpointSizeGb.toFixed(1)} GB/checkpoint × ${checkpointRetentionCount} retained` },
+      { label: 'Training dataset', capacityTb: datasetSizeTb, note: `${datasetThroughputGBs.toFixed(2)} GB/s sustained read target` },
+    );
+    if (corpusSizeGb > 0) {
+      breakdown.push({ label: 'Auxiliary corpus / eval sets', capacityTb: corpusSizeGb / 1000, note: 'Capacity-only, not throughput-binding' });
+    }
+  } else {
+    // Inference: model repository (weights on disk, N cached versions) + optional
+    // KV-cache disk/CXL offload tier + optional document/vector corpus for RAG-shaped workloads.
+    const modelRepoCapacityTb = ((memory.weightTotalGb || 0) * modelRepoVersionCount) / 1000;
+    const modelRepoLoadThroughputGBs = modelRepoTargetLoadTimeSec > 0
+      ? (memory.weightTotalGb || 0) / modelRepoTargetLoadTimeSec
+      : 0;
+
+    let kvOffloadCapacityTb = 0;
+    let kvOffloadThroughputGBs = 0;
+    if (enableKvOffload) {
+      // Size the offload tier at 2x the modeled in-VRAM KV footprint to give room for
+      // paging beyond what fits on-GPU, and require enough throughput to page at the
+      // cluster's aggregate decode token rate.
+      kvOffloadCapacityTb = ((memory.kvCacheTotalGb || 0) * 2) / 1000;
+      const clusterGenTokPerSec = throughput?.batchThroughputTps || throughput?.tokensPerSecPerReplica || 0;
+      const bytesPerTokenApprox = memory.promptTokens > 0
+        ? ((memory.kvCacheTotalGb || 0) * 1e9) / Math.max(1, memory.promptTokens)
+        : 0;
+      kvOffloadThroughputGBs = (clusterGenTokPerSec * bytesPerTokenApprox) / 1e9;
+    }
+
+    requiredCapacityTb = modelRepoCapacityTb + kvOffloadCapacityTb + (corpusSizeGb / 1000);
+    requiredThroughputGBs = Math.max(modelRepoLoadThroughputGBs, kvOffloadThroughputGBs);
+
+    breakdown.push(
+      { label: 'Model repository', capacityTb: modelRepoCapacityTb, note: `${(memory.weightTotalGb || 0).toFixed(1)} GB/version × ${modelRepoVersionCount} cached versions` },
+    );
+    if (enableKvOffload) {
+      breakdown.push({ label: 'KV cache disk/CXL offload', capacityTb: kvOffloadCapacityTb, note: `${kvOffloadThroughputGBs.toFixed(2)} GB/s paging throughput target` });
+    }
+    if (corpusSizeGb > 0) {
+      breakdown.push({ label: 'Document / vector corpus', capacityTb: corpusSizeGb / 1000, note: 'Capacity-only, not throughput-binding' });
+    }
+  }
+
+  const ruForCapacity = Math.max(1, Math.ceil(requiredCapacityTb / storageTier.capacityPerRuTb));
+  const ruForThroughput = Math.max(1, Math.ceil(requiredThroughputGBs / storageTier.throughputPerRuGBs));
+  const provisionedRu = Math.max(ruForCapacity, ruForThroughput);
+  const bindingConstraint = ruForThroughput > ruForCapacity ? 'throughput' : 'capacity';
+
+  const achievedCapacityTb = provisionedRu * storageTier.capacityPerRuTb;
+  const achievedThroughputGBs = provisionedRu * storageTier.throughputPerRuGBs;
+  const fits = achievedCapacityTb >= requiredCapacityTb && achievedThroughputGBs >= requiredThroughputGBs;
+
+  return {
+    workloadType,
+    storageTier,
+    requiredCapacityTb,
+    requiredThroughputGBs,
+    provisionedRu,
+    achievedCapacityTb,
+    achievedThroughputGBs,
+    bindingConstraint,
+    fits,
+    breakdown,
+  };
+}

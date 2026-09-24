@@ -760,22 +760,14 @@ ${workloadType === 'inference' && throughput ? `
                     />
 
                     {/* Prompt vs Output Generation Ratio */}
-                    <div>
-                      <div className="flex justify-between items-baseline text-[11px] mb-1.5">
-                        <span className="font-medium text-zinc-300">Workload Profile (Prompt vs. Output Split):</span>
-                        <span className="font-semibold text-sky-400 font-mono">
-                          {(promptTokenRatio * 100).toFixed(0)}% / {((1 - promptTokenRatio) * 100).toFixed(0)}%
-                        </span>
-                      </div>
-                      <div className="grid grid-cols-3 gap-1.5">
-                        <ChoiceCard selected={promptTokenRatio === 0.8} onClick={() => setPromptTokenRatio(0.8)}
-                          title={<span className="block text-center w-full text-[10.5px]">80 / 20 (RAG &amp; Docs)</span>} />
-                        <ChoiceCard selected={promptTokenRatio === 0.5} onClick={() => setPromptTokenRatio(0.5)}
-                          title={<span className="block text-center w-full text-[10.5px]">50 / 50 (Chat)</span>} />
-                        <ChoiceCard selected={promptTokenRatio === 0.2} onClick={() => setPromptTokenRatio(0.2)}
-                          title={<span className="block text-center w-full text-[10.5px]">20 / 80 (Code &amp; Reasoning)</span>} />
-                      </div>
-                    </div>
+                    <SliderField
+                      label="Workload Profile (Prompt vs. Output Split):"
+                      valueLabel={`${(promptTokenRatio * 100).toFixed(0)}% / ${((1 - promptTokenRatio) * 100).toFixed(0)}%`}
+                      min="0.1" max="0.9" step="0.05"
+                      value={promptTokenRatio}
+                      onChange={(e) => setPromptTokenRatio(Number(e.target.value))}
+                      marks={['10% (Agentic / Code & Reasoning)', '50% (Chat)', '90% (RAG & Docs)']}
+                    />
                   </div>
                 </>
               ) : (

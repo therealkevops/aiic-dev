@@ -2,6 +2,7 @@
  * Core Sizing & Network Topology Calculator for Private AI Infrastructure
  */
 import { GPU_CATALOG } from '../data/hardware.js';
+import { MIG_PROFILES, maxInstancesPerGpu } from '../data/mig.js';
 
 // ─── Exported Configuration & Tunables ─────────────────────────────────────────
 export const CONFIG = {
@@ -1306,6 +1307,14 @@ export function calculateCost(config) {
     licensingUsdPerGpuPerYear = 4500,
     supportPctPerYear = 15,          // hardware support/maintenance contract, % of total capex/year
     tcoYears = 3,
+    // MIG consolidation overlay (see calculateMigConsolidation()): when provided, prices
+    // capex/power against the physical GPU/IT-power footprint MIG consolidation achieves
+    // instead of the naive one-GPU-per-replica count. The cloud-rental comparison deliberately
+    // keeps using infraResults.totalGpus (unchanged) -- the cloud side doesn't get the same
+    // consolidation benefit unless the provider itself offers fractional MIG billing, so this
+    // is the fairer, more conservative build-vs-buy comparison.
+    computeGpuCountOverride = null,
+    itPowerKwOverride = null,
   } = config;
 
   const isLlmd = !!infraResults.memory.llmd;
@@ -1321,7 +1330,8 @@ export function calculateCost(config) {
     cloudEquivalentUsdPerHr = (prefillGpus * cloudRateUsdPerHr) + (decodeGpus * decCloud);
   } else {
     const totalGpus = infraResults.totalGpus;
-    computeCapexUsd = totalGpus * gpuUnitPriceUsd;
+    const billedGpuCount = computeGpuCountOverride != null ? computeGpuCountOverride : totalGpus;
+    computeCapexUsd = billedGpuCount * gpuUnitPriceUsd;
     cloudEquivalentUsdPerHr = totalGpus * cloudRateUsdPerHr;
   }
 
@@ -1330,11 +1340,18 @@ export function calculateCost(config) {
   const totalCapexUsd = computeCapexUsd + networkHardwareCapexUsd + storageCapexUsd;
 
   const hoursPerYear = 24 * 365;
+  const billedItPowerKw = itPowerKwOverride != null ? itPowerKwOverride : infraResults.facility.totalItPowerKw;
   // Colo bills $/kW/month on IT load (the colo provider's own facility overhead/cooling is
   // baked into their rate); an owned DC bills the utility $/kWh on the PUE-adjusted total load.
+  // The MIG IT-power override has no PUE figure of its own, so the owned-DC branch applies the
+  // same PUE multiplier the rest of this deployment already uses.
+  const impliedPue = infraResults.facility.totalItPowerKw > 0
+    ? infraResults.facility.totalFacilityPowerKw / infraResults.facility.totalItPowerKw
+    : 1;
+  const billedFacilityPowerKw = itPowerKwOverride != null ? billedItPowerKw * impliedPue : infraResults.facility.totalFacilityPowerKw;
   const annualPowerCostUsd = useColo
-    ? infraResults.facility.totalItPowerKw * coloUsdPerKwPerMonth * 12
-    : infraResults.facility.totalFacilityPowerKw * hoursPerYear * powerUsdPerKwh;
+    ? billedItPowerKw * coloUsdPerKwPerMonth * 12
+    : billedFacilityPowerKw * hoursPerYear * powerUsdPerKwh;
 
   const annualLicensingCostUsd = enableNvidiaAiEnterprise
     ? infraResults.totalGpus * licensingUsdPerGpuPerYear
@@ -1374,5 +1391,96 @@ export function calculateCost(config) {
     buildVsBuySavingsUsd,
     breakEvenMonths,
     useColo,
+  };
+}
+
+// ─── MIG (Multi-Instance GPU) Consolidation ────────────────────────────────────────────
+/**
+ * Evaluates whether the current single-GPU-per-replica inference deployment (TP=1, PP=1 --
+ * MIG instances are isolated mini-GPUs with no NVLink between them, so a replica sharded
+ * across TP/PP can't span MIG instances) could be consolidated onto fewer physical GPUs by
+ * packing multiple replicas onto MIG partitions of one physical card, and if so, by how much.
+ * Purely a "what if" overlay: it does not mutate calculateInfra()'s own BOM/topology/power --
+ * those keep sizing for dedicated whole GPUs. Its physical GPU / IT power outputs are meant to
+ * be fed into calculateCost()'s override params when the caller wants MIG reflected in cost.
+ */
+export function calculateMigConsolidation(config) {
+  const {
+    infraResults,
+    gpu,
+    gpusPerChassis = 8,
+    chassisTdpKw = 0,
+    enabled = false,
+    migProfileId = null, // null = auto-select the smallest profile that fits
+  } = config;
+
+  if (!enabled) {
+    return { enabled: false, eligible: false, reason: "MIG partitioning is disabled." };
+  }
+
+  const availableProfiles = MIG_PROFILES[gpu.id];
+  if (!availableProfiles) {
+    return { enabled: true, eligible: false, reason: `${gpu.name} does not support MIG (Ampere/Hopper/Blackwell SXM/PCIe datacenter parts only).` };
+  }
+
+  if (infraResults.workloadType !== "inference") {
+    return { enabled: true, eligible: false, reason: "MIG consolidation applies to inference workloads (training saturates the full GPU by design)." };
+  }
+
+  if (infraResults.memory.llmd) {
+    return { enabled: true, eligible: false, reason: "MIG consolidation isn't modeled for LLM-D disaggregated serving -- combining both consolidation strategies is out of scope for this phase." };
+  }
+
+  // tp/pp aren't returned on infraResults directly (only their product, modelParallelSize),
+  // but that product equals 1 only when both tp===1 and pp===1 -- exactly the condition that
+  // makes MIG consolidation valid (a replica sharded across multiple GPUs can't span isolated
+  // MIG instances, which have no NVLink between them).
+  if (infraResults.modelParallelSize !== 1) {
+    return { enabled: true, eligible: false, reason: "MIG consolidation requires TP=1 and PP=1 -- a replica sharded across multiple GPUs can't span isolated MIG instances." };
+  }
+
+  const perReplicaUsedGb = infraResults.memory.perGpuTotalUsedGb;
+  const fittingProfiles = availableProfiles
+    .filter(p => (p.vramGb * VRAM_USABLE_FACTOR) >= perReplicaUsedGb)
+    .sort((a, b) => a.vramGb - b.vramGb);
+
+  if (fittingProfiles.length === 0) {
+    return {
+      enabled: true, eligible: false,
+      reason: `Replica footprint (${perReplicaUsedGb.toFixed(1)} GB) exceeds even the largest MIG profile's usable capacity on ${gpu.name} -- this workload needs the whole GPU.`,
+      availableProfiles: [],
+    };
+  }
+
+  const selectedProfile = migProfileId
+    ? fittingProfiles.find(p => p.id === migProfileId) || fittingProfiles[0]
+    : fittingProfiles[0];
+
+  const instancesPerPhysicalGpu = maxInstancesPerGpu(selectedProfile);
+  const naiveGpuCount = infraResults.totalGpus; // = dp when tp=pp=1
+  const physicalGpusNeeded = Math.max(1, Math.ceil(naiveGpuCount / instancesPerPhysicalGpu));
+  const physicalNodesNeeded = Math.max(1, Math.ceil(physicalGpusNeeded / gpusPerChassis));
+  const gpuCountSavings = naiveGpuCount - physicalGpusNeeded;
+  const savingsPct = naiveGpuCount > 0 ? (gpuCountSavings / naiveGpuCount) * 100 : 0;
+  const itPowerKw = physicalNodesNeeded * chassisTdpKw;
+  // First-order approximation: MIG allocates compute (SM) and memory-bandwidth slices
+  // proportionally to slice count out of 7 -- a real, if simplified, throughput cost of
+  // consolidation, not a free lunch.
+  const throughputScaleFactor = selectedProfile.slices / 7;
+
+  return {
+    enabled: true,
+    eligible: true,
+    reason: null,
+    selectedProfile,
+    availableProfiles: fittingProfiles,
+    instancesPerPhysicalGpu,
+    naiveGpuCount,
+    physicalGpusNeeded,
+    physicalNodesNeeded,
+    gpuCountSavings,
+    savingsPct,
+    itPowerKw,
+    throughputScaleFactor,
   };
 }

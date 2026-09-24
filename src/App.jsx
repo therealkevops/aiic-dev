@@ -30,7 +30,7 @@ import { TopologyDiagram } from './components/TopologyDiagram';
 import { GlossaryPage } from './components/GlossaryPage';
 import {
   Card, Disclosure, SectionLabel, KpiRow, Kpi, Rows, Row, Banner, Meter,
-  SegmentedToggle, Field, SliderField, ChoiceCard, Tag
+  SegmentedToggle, Field, SliderField, ScaleField, ChoiceCard, Tag
 } from './components/ui';
 
 export default function App() {
@@ -76,7 +76,10 @@ export default function App() {
   const [isAutoSharding, setIsAutoSharding] = useState(true);
   const [manualTp, setManualTp] = useState(8);
   const [manualPp, setManualPp] = useState(1);
-  const [dp, setDp] = useState(1);
+  const [manualDp, setManualDp] = useState(1);
+  // DP is only ever auto-derived for inference, and only while TP/PP are also auto-solved
+  // (the auto-DP formula is computed against the solver's own TP/PP, not a manual override).
+  const [isAutoDp, setIsAutoDp] = useState(true);
 
   // Network Protocol
   const [selectedProtocolId, setSelectedProtocolId] = useState('rocev2');
@@ -193,6 +196,8 @@ export default function App() {
 
   const tp = isAutoSharding ? autoRecommendation.tp : manualTp;
   const pp = isAutoSharding ? autoRecommendation.pp : manualPp;
+  const canAutoDp = workloadType === 'inference' && isAutoSharding;
+  const dp = (canAutoDp && isAutoDp) ? autoRecommendation.dp : manualDp;
 
   // 2. Full Infrastructure & Network Sizing Calculation
   const results = useMemo(() => {
@@ -598,17 +603,19 @@ ${workloadType === 'inference' && throughput ? `
               {/* Concurrency / Batch Size */}
               {workloadType === 'inference' ? (
                 <>
-                  <SliderField
-                    label="Concurrent User Requests (Batch Size):"
-                    valueLabel={`${concurrency} streams`}
-                    min="1" max="64" step="1"
+                  <ScaleField
+                    label="Concurrent User Requests (Total Cluster-Wide):"
                     value={concurrency}
-                    onChange={(e) => setConcurrency(Number(e.target.value))}
+                    onChange={setConcurrency}
+                    presets={[1, 8, 32, 128, 512, 2048, 8192]}
+                    min={1}
+                    max={16384}
+                    suffix=" streams"
                     helper={
                       <InfoHelper
                         title="Concurrency & KV Cache Multiplying"
-                        text="How many separate users or agent tasks are generating answers at the exact same millisecond. Each concurrent stream maintains its own independent KV Cache in GPU memory."
-                        whyItMatters="If 16 users are querying a 32k context simultaneously, your GPU cluster must store 16 distinct KV caches in VRAM at the same time."
+                        text="How many separate users or agent tasks are generating answers at the exact same millisecond, across the whole deployment (not per replica). Each concurrent stream maintains its own independent KV Cache in GPU memory."
+                        whyItMatters="At large scale, this is what Data Parallelism (DP) auto-scales against on the Sharding tab: more replicas means each one only has to hold KV cache for its own share of these streams."
                       />
                     }
                   />
@@ -854,7 +861,7 @@ ${workloadType === 'inference' && throughput ? `
                   value={isAutoSharding ? 'auto' : 'manual'}
                   onChange={(v) => {
                     if (v === 'auto') { setIsAutoSharding(true); }
-                    else { setIsAutoSharding(false); setManualTp(tp); setManualPp(pp); }
+                    else { setIsAutoSharding(false); setManualTp(tp); setManualPp(pp); setManualDp(dp); }
                   }}
                   options={[{ value: 'auto', label: 'Auto-Solver' }, { value: 'manual', label: 'Manual Override' }]}
                 />
@@ -889,7 +896,7 @@ ${workloadType === 'inference' && throughput ? `
                     )}
                     <button
                       type="button"
-                      onClick={() => { setIsAutoSharding(false); setManualTp(tp); setManualPp(pp); }}
+                      onClick={() => { setIsAutoSharding(false); setManualTp(tp); setManualPp(pp); setManualDp(dp); }}
                       className="text-sky-400 hover:text-sky-300 underline font-medium shrink-0"
                     >
                       Override
@@ -971,21 +978,42 @@ ${workloadType === 'inference' && throughput ? `
                 </div>
               )}
 
-              {/* DP Replicas (Applies to both modes) */}
-              <div className="pt-3 border-t border-zinc-800/70">
-                <SliderField
-                  label="Data Parallelism / Replicas (DP):"
-                  valueLabel={`DP = ${dp}`}
-                  min="1" max="8" step="1"
-                  value={dp}
-                  onChange={(e) => setDp(Number(e.target.value))}
-                  helper={
-                    <InfoHelper
-                      title="Data Parallelism (Horizontal Scaling)"
-                      text="Creates complete independent copies of your model instance. Each replica serves a distinct batch of users in parallel, or handles a slice of training batches."
-                      whyItMatters="Increase DP to scale throughput and serve 100s of concurrent users with zero latency degradation."
+              {/* DP Replicas (Applies to both modes; scales the cluster to 100s-1000s of GPUs) */}
+              <div className="pt-3 border-t border-zinc-800/70 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-medium text-zinc-300">Data Parallelism / Replicas (DP):</span>
+                  {canAutoDp && (
+                    <SegmentedToggle
+                      value={isAutoDp ? 'auto' : 'manual'}
+                      onChange={(v) => { setIsAutoDp(v === 'auto'); if (v === 'manual') setManualDp(dp); }}
+                      options={[{ value: 'auto', label: 'Auto-scale' }, { value: 'manual', label: 'Manual' }]}
                     />
-                  }
+                  )}
+                </div>
+
+                {canAutoDp && isAutoDp ? (
+                  <div className="p-3 bg-zinc-950/60 border border-zinc-800/70 rounded-lg space-y-1">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-zinc-300">Sized to serve <strong className="text-white">{concurrency.toLocaleString()}</strong> concurrent streams</span>
+                      <Tag tone="accent">DP = {dp.toLocaleString()}</Tag>
+                    </div>
+                    <div className="text-[11px] text-zinc-400">
+                      ~{Math.ceil(concurrency / dp).toLocaleString()} streams/replica · {(dp * tp * pp).toLocaleString()} GPUs across all replicas
+                    </div>
+                  </div>
+                ) : (
+                  <ScaleField
+                    value={dp}
+                    onChange={setManualDp}
+                    presets={[1, 8, 32, 128, 512, 2048]}
+                    min={1}
+                    max={4096}
+                  />
+                )}
+                <InfoHelper
+                  title="Data Parallelism (Horizontal Scaling)"
+                  text="Creates complete independent copies of your model instance. Each replica serves its own share of concurrent users (or training batches) in parallel — this is the dimension that scales a deployment from a handful of GPUs to a 1,000-4,000+ GPU supercluster."
+                  whyItMatters="For inference, Auto-scale derives DP directly from concurrency so every replica only has to hold KV cache for its own share of users. For training, pick DP to match your target cluster size — total GPUs = TP × PP × DP."
                 />
               </div>
             </Card>

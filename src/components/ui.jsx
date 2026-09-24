@@ -214,6 +214,46 @@ export function SliderField({ label, valueLabel, min, max, step, value, onChange
   );
 }
 
+// ---------- Scale field (wide-dynamic-range control: preset chips + exact numeric input) ----------
+// For quantities that span orders of magnitude (concurrency, DP replicas) where a linear
+// slider is either too coarse at the low end or unusable at the high end.
+export function ScaleField({ label, value, onChange, presets, min = 1, max = 100000, suffix = '', helper }) {
+  return (
+    <div>
+      <div className="flex justify-between items-baseline text-xs mb-1.5">
+        <span className="font-medium text-zinc-300">{label}</span>
+        <span className="font-semibold font-mono text-sky-400">{value.toLocaleString()}{suffix}</span>
+      </div>
+      <div className="grid gap-1.5" style={{ gridTemplateColumns: `repeat(${presets.length}, minmax(0, 1fr))` }}>
+        {presets.map((p) => (
+          <button
+            key={p}
+            type="button"
+            onClick={() => onChange(p)}
+            className={`py-1.5 rounded-lg text-[11px] font-semibold border transition cursor-pointer ${
+              value === p ? 'bg-sky-600 border-sky-400 text-white' : 'bg-zinc-950 border-zinc-800 text-zinc-400 hover:text-white'
+            }`}
+          >
+            {p.toLocaleString()}
+          </button>
+        ))}
+      </div>
+      <div className="flex items-center gap-2 mt-1.5">
+        <input
+          type="number"
+          min={min}
+          max={max}
+          value={value}
+          onChange={(e) => onChange(Math.max(min, Math.min(max, Number(e.target.value) || min)))}
+          className="w-24 bg-zinc-950 border border-zinc-700 rounded-lg px-2 py-1 text-xs text-white focus:outline-none focus:border-sky-500 font-mono"
+        />
+        <span className="text-[10.5px] text-zinc-500">exact value ({min.toLocaleString()}–{max.toLocaleString()})</span>
+      </div>
+      {helper}
+    </div>
+  );
+}
+
 // ---------- Choice grid (clickable option cards) ----------
 export function ChoiceCard({ selected, onClick, title, titleColor = 'text-white', desc, badge, columns = true }) {
   return (

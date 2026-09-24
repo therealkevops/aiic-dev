@@ -312,6 +312,22 @@ export function recommendSharding(params) {
     }
 
     recommendedDp = kvCapacityPerReplica > 0 ? Math.max(1, Math.ceil(requiredKvForC / kvCapacityPerReplica)) : 1;
+
+    // Integer correction: the estimate above divides total demand by capacity as if
+    // streams could split fractionally across replicas. In reality each replica serves a
+    // whole number of streams (ceil(concurrency / dp)), which is always >= the fractional
+    // average whenever concurrency doesn't divide evenly — so verify the resulting
+    // per-replica KV load actually fits and step DP up until it does. Bounded: this only
+    // ever adds a handful of replicas to correct a rounding remainder.
+    if (kvCapacityPerReplica > 0) {
+      for (let guard = 0; guard < 64; guard++) {
+        const streamsPerReplica = Math.ceil(concurrency / recommendedDp);
+        const perReplicaTokens = (privateTokensPerStream * streamsPerReplica) + effectiveGlobalPrefixTokens;
+        const perReplicaKvGb = (bytesPerTokenSeq * perReplicaTokens) / 1e9;
+        if (perReplicaKvGb <= kvCapacityPerReplica) break;
+        recommendedDp += 1;
+      }
+    }
   }
 
   return {
@@ -362,7 +378,6 @@ export function calculateInfra(config) {
   // For MoE: all expert weights must be loaded into VRAM for low-latency inference.
   // activeParams reflects compute throughput, not VRAM sizing.
   const activeParams = isMoe && model.activeParams ? model.activeParams : totalParams;
-  const maxNumSeqs   = concurrency;
 
   const gpusPerChassis = platform ? platform.gpusPerChassis : (gpu.gpusPerChassis || 8);
   const chassisTdpKw   = platform ? platform.chassisTdpKw   : gpu.chassisTdpKw;
@@ -412,6 +427,16 @@ export function calculateInfra(config) {
   const decodeTp  = isLlmd ? Math.min(8, decodeGpus) : tp;
   const decodePp  = isLlmd ? Math.max(1, Math.ceil(decodeGpus / 8)) : pp;
 
+  // S7 (scale): `concurrency` is the TOTAL concurrent streams the whole deployment must
+  // serve; Data Parallelism (`dp`, or the decode pool's implied replica count under LLM-D)
+  // splits that load across independent model replicas. Each replica only needs to hold
+  // KV cache / decode activations for its own share of the load, not the cluster total —
+  // otherwise adding replicas (the mechanism for scaling to hundreds of GPUs) would never
+  // relieve per-GPU memory pressure.
+  const replicaDp = isLlmd ? Math.max(1, Math.floor(decodeGpus / (decodeTp || 1))) : Math.max(1, dp || 1);
+  const concurrencyPerReplica = Math.max(1, Math.ceil(concurrency / replicaDp));
+  const maxNumSeqs = concurrencyPerReplica;
+
   const modelParallelSize = tp * pp;
   const totalGpus         = isLlmd ? (prefillGpus + decodeGpus) : (modelParallelSize * dp);
   const nodes             = isLlmd ? (prefillNodes + decodeNodes) : Math.max(1, Math.ceil(totalGpus / gpusPerChassis));
@@ -448,13 +473,15 @@ export function calculateInfra(config) {
     const baselineBytesPerTokenSeq = (model.id === "deepseek-r1-671b" || model.isMla)
       ? layers * (512 + 64) * 2.0
       : 2 * layers * kvHeads * headDim * 2.0;
-    baselineKvGb = (baselineBytesPerTokenSeq * contextLength * concurrency) / 1e9;
+    baselineKvGb = (baselineBytesPerTokenSeq * contextLength * concurrencyPerReplica) / 1e9;
 
     // Prefix Caching: Shared prompt tokens stored ONCE in VRAM across streams;
     // unique tokens stored per stream (session reuse tokens are stored per stream).
+    // Both counted per replica: prefix caching is a per-instance radix tree, not shared
+    // cluster-wide across independent DP replicas.
     const privateTokensPerStream = contextLength - effectiveGlobalPrefixTokens;
-    const effectiveTotalTokens = concurrency > 1
-      ? (privateTokensPerStream * concurrency) + (effectiveGlobalPrefixTokens * 1)
+    const effectiveTotalTokens = concurrencyPerReplica > 1
+      ? (privateTokensPerStream * concurrencyPerReplica) + (effectiveGlobalPrefixTokens * 1)
       : contextLength;
 
     kvCacheTotalGb = (bytesPerTokenSeq * effectiveTotalTokens) / 1e9;
@@ -543,7 +570,7 @@ export function calculateInfra(config) {
       const decodeTpEff = Math.min(decodeTp, kvHeads);
       decodeKvGb = kvCacheTotalGb / (decodeTpEff * decodePp);
     }
-    const decodeTokensPerStep = concurrency;
+    const decodeTokensPerStep = concurrencyPerReplica;
     const decodeActBytes = (decodeTokensPerStep * (hiddenDim + 2 * intermediate) * CONFIG.B_act * 1.2) + (maxNumSeqs * vocab * 4);
     const decodeActGb = (decodeActBytes / 1e9 / decodeTp) + (CONFIG.runtimeOverheadPerGpu / 1e9);
     const decodeTotalUsedGb = decodeWeightsGb + decodeKvGb + decodeActGb;
@@ -969,8 +996,8 @@ export function calculateInfra(config) {
     // ── Phase 2: Decode (Autoregressive Token Generation) (C2) ──────────────
     const targetDecodeGpu = isLlmd ? decodeGpu : gpu;
     const decodeTpCount = isLlmd ? decodeTp : tp;
-    const decodeDp = isLlmd ? Math.max(1, Math.floor(decodeGpus / decodeTpCount)) : dp;
-    const C_rep = Math.max(1, Math.ceil(concurrency / decodeDp));
+    const decodeDp = replicaDp;
+    const C_rep = concurrencyPerReplica;
     const S_avg = model.avgContextLength || contextLength;
 
     const BW_mem = (targetDecodeGpu.memBandwidthTbps || 4.8) * 1e12; // bytes/s

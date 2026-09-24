@@ -1051,3 +1051,171 @@ describe('7. Datacenter BOM, Facilities & Rail-Optimized Network', () => {
     assert.equal(res.facility.switchPowerKw, expectedSwitchKw);
   });
 });
+
+describe('8. Massive-Scale Data Parallel Replica Sizing (S7)', () => {
+  it('DP replicas split concurrency for per-GPU KV/activation sizing (regression: DP previously did not relieve memory pressure)', () => {
+    const llama70b = getModel('llama3-70b');
+    const h100 = getGpu('h100-sxm');
+    const platform = getPlatform('cisco-c885a-h100');
+
+    const base = {
+      workloadType: 'inference',
+      model: llama70b,
+      precision: getPrecision('fp8'),
+      kvPrecision: 'fp8',
+      contextLength: 8192,
+      gpu: h100,
+      platform,
+      tp: 2, pp: 1,
+      networkProtocol: 'rocev2'
+    };
+
+    // 40 replicas serving 2000 total concurrent streams == 50 streams/replica.
+    const resScaled = calculateInfra({ ...base, concurrency: 2000, dp: 40 });
+    // A single replica serving 50 concurrent streams directly.
+    const resSingle = calculateInfra({ ...base, concurrency: 50, dp: 1 });
+
+    assert.equal(resScaled.totalGpus, 80);
+    assert.equal(
+      Math.round(resScaled.memory.perGpuKvOrOptGb * 100) / 100,
+      Math.round(resSingle.memory.perGpuKvOrOptGb * 100) / 100,
+      `Expected per-GPU KV cache to match a single replica at the per-replica concurrency (50 streams): got ${resScaled.memory.perGpuKvOrOptGb} vs ${resSingle.memory.perGpuKvOrOptGb}`
+    );
+    assert.equal(resScaled.memory.isOOM, false, 'A properly-scaled DP fleet should not report OOM');
+  });
+
+  it('recommendSharding\'s auto-computed DP, fed back into calculateInfra, fits without OOM at high concurrency (~4000 streams)', () => {
+    const llama70b = getModel('llama3-70b');
+    const h100 = getGpu('h100-sxm');
+    const platform = getPlatform('cisco-c885a-h100');
+
+    const rec = recommendSharding({
+      workloadType: 'inference',
+      model: llama70b,
+      precision: getPrecision('fp8'),
+      kvPrecision: 'fp8',
+      prefixCacheRatio: 0,
+      promptTokenRatio: 0.8,
+      contextLength: 8192,
+      concurrency: 4000,
+      gpu: h100,
+      platform
+    });
+
+    assert.ok(rec.dp > 1, `Expected recommendSharding to scale DP above 1 for 4000 concurrent streams, got DP=${rec.dp}`);
+
+    const res = calculateInfra({
+      workloadType: 'inference',
+      model: llama70b,
+      precision: getPrecision('fp8'),
+      kvPrecision: 'fp8',
+      prefixCacheRatio: 0,
+      promptTokenRatio: 0.8,
+      contextLength: 8192,
+      concurrency: 4000,
+      gpu: h100,
+      platform,
+      tp: rec.tp, pp: rec.pp, dp: rec.dp,
+      networkProtocol: 'rocev2'
+    });
+
+    assert.equal(
+      res.memory.isOOM, false,
+      `Expected the auto-sharding solver's own DP recommendation to fit without OOM, but each GPU needs ${res.memory.perGpuTotalUsedGb.toFixed(1)} GB of ${res.memory.usableGpuCapacityGb.toFixed(1)} GB usable`
+    );
+  });
+
+  it('rounds DP up to cover a whole number of streams per replica (regression: fractional-average DP estimate under-provisioned by ~2.9 GB/GPU)', () => {
+    const llama70b = getModel('llama3-70b');
+    const h200 = getGpu('h200-sxm');
+    const platform = getPlatform('cisco-c885a-h200');
+
+    const rec = recommendSharding({
+      workloadType: 'inference',
+      model: llama70b,
+      precision: getPrecision('fp8'),
+      kvPrecision: 'fp16', // deliberately not fp8: this is what exposed the rounding gap
+      prefixCacheRatio: 0,
+      promptTokenRatio: 0.8,
+      contextLength: 16384,
+      concurrency: 4096,
+      gpu: h200,
+      platform
+    });
+
+    const res = calculateInfra({
+      workloadType: 'inference',
+      model: llama70b,
+      precision: getPrecision('fp8'),
+      kvPrecision: 'fp16',
+      prefixCacheRatio: 0,
+      promptTokenRatio: 0.8,
+      contextLength: 16384,
+      concurrency: 4096,
+      gpu: h200,
+      platform,
+      tp: rec.tp, pp: rec.pp, dp: rec.dp,
+      networkProtocol: 'rocev2'
+    });
+
+    assert.equal(
+      res.memory.isOOM, false,
+      `Expected recommendSharding's DP=${rec.dp} to fit each replica's whole-number stream share without OOM, but each GPU needs ${res.memory.perGpuTotalUsedGb.toFixed(1)} GB of ${res.memory.usableGpuCapacityGb.toFixed(1)} GB usable`
+    );
+  });
+
+  it('sizes a 2,048-GPU training run (TP=8, PP=4, DP=64) without breaking network/facility math', () => {
+    const llama70b = getModel('llama3-70b');
+    const h100 = getGpu('h100-sxm');
+    const platform = getPlatform('cisco-c885a-h100');
+
+    const res = calculateInfra({
+      workloadType: 'training',
+      trainingType: 'pretrain_sft',
+      model: llama70b,
+      precision: getPrecision('fp16'),
+      contextLength: 4096,
+      concurrency: 2,
+      gpu: h100,
+      platform,
+      tp: 8, pp: 4, dp: 64,
+      zeroStage: 3,
+      networkProtocol: 'rocev2',
+      pue: 1.35
+    });
+
+    assert.equal(res.totalGpus, 2048);
+    assert.equal(res.nodes, 256);
+    assert.ok(res.network.leafSwitches > 0);
+    assert.ok(res.facility.totalRacks > 0);
+    assert.ok(Number.isFinite(res.facility.totalItPowerKw) && res.facility.totalItPowerKw > 0);
+    assert.ok(Number.isFinite(res.memory.perGpuTotalUsedGb));
+  });
+
+  it('LLM-D decode pool KV cache scales down as more decode replicas are added', () => {
+    const llama70b = getModel('llama3-70b');
+    const h100 = getGpu('h100-sxm');
+    const platform = getPlatform('cisco-c885a-h100');
+
+    const servingConfigFor = (decodeNodes) => ({
+      servingEngine: 'vllm', orchestrator: 'kserve', servingArchitecture: 'llmd',
+      llmdDisaggregationMode: 'homogeneous', prefillNodes: 1, decodeNodes
+    });
+
+    const small = calculateInfra({
+      workloadType: 'inference', model: llama70b, precision: getPrecision('fp8'), kvPrecision: 'fp8',
+      contextLength: 8192, concurrency: 1600, gpu: h100, platform, tp: 8, pp: 1, dp: 1,
+      networkProtocol: 'rocev2', servingConfig: servingConfigFor(2)
+    });
+    const large = calculateInfra({
+      workloadType: 'inference', model: llama70b, precision: getPrecision('fp8'), kvPrecision: 'fp8',
+      contextLength: 8192, concurrency: 1600, gpu: h100, platform, tp: 8, pp: 1, dp: 1,
+      networkProtocol: 'rocev2', servingConfig: servingConfigFor(20)
+    });
+
+    assert.ok(
+      large.memory.llmd.decode.kvGb < small.memory.llmd.decode.kvGb,
+      `Expected per-GPU decode KV cache to shrink as decode replicas grow (2 nodes: ${small.memory.llmd.decode.kvGb.toFixed(2)} GB vs 20 nodes: ${large.memory.llmd.decode.kvGb.toFixed(2)} GB)`
+    );
+  });
+});

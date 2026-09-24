@@ -766,7 +766,12 @@ ${workloadType === 'inference' && throughput ? `
     setTimeout(() => setCopiedBOM(false), 2500);
   };
 
-  const navTabs = [
+  // Nav rail is split into two discrete groups: the technical architecture knobs (workload
+  // through MIG) that determine what gets built, and the economics/SLA tabs (SLA, Cost & TCO)
+  // that report on what those technical choices cost and how they perform -- consumed, not
+  // configured. Grouping declutters the now-12-tab technical list without losing the single-page
+  // live reactivity of toggling a knob and immediately seeing its cost/SLA impact.
+  const technicalNavTabs = [
     { id: 'workload', label: 'Workload', icon: Activity, meta: model.name },
     { id: 'platform', label: 'Platform', icon: Building2, meta: platform.shortName },
     { id: 'sharding', label: 'Sharding', icon: Layers, meta: `TP=${tp} · PP=${pp} · DP=${dp}` },
@@ -779,10 +784,11 @@ ${workloadType === 'inference' && throughput ? `
     { id: 'hadr', label: 'HA / DR', icon: LifeBuoy, meta: haDr.eligible ? haDrTier.name : (enableHaDr ? 'N/A' : 'Off') },
     { id: 'mlops', label: 'MLOps Lifecycle', icon: GitBranch, meta: mlops.eligible ? mlopsStrategy.name : (enableMlops ? 'N/A' : 'Off') },
     { id: 'mig', label: 'MIG Partitioning', icon: Grid2x2, meta: mig.eligible ? mig.selectedProfile.id : (enableMig ? 'N/A' : 'Off') },
+  ];
+  const economicsNavTabs = [
     { id: 'sla', label: 'SLA & Tail Latency', icon: Timer, meta: sla.eligible ? `P99 ${sla.ttftP99Sec < 1 ? `${(sla.ttftP99Sec * 1000).toFixed(0)}ms` : `${sla.ttftP99Sec.toFixed(1)}s`}` : 'N/A' },
     { id: 'cost', label: 'Cost & TCO', icon: DollarSign, meta: `$${cost.effectiveUsdPerGpuHour.toFixed(2)}/GPU-hr` },
   ];
-
   if (page === 'glossary') {
     return <GlossaryPage onBack={() => setPage('calculator')} />;
   }
@@ -878,10 +884,39 @@ ${workloadType === 'inference' && throughput ? `
         <nav className="w-60 shrink-0 bg-zinc-900/95 border-r border-zinc-800 flex flex-col justify-between overflow-y-auto">
           <div className="p-3 space-y-1.5">
             <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">
-              Configuration
+              Technical Configuration
             </div>
 
-            {navTabs.map((t, i) => {
+            {technicalNavTabs.map((t, i) => {
+              const Icon = t.icon;
+              const active = activeInputTab === t.id;
+              return (
+                <button
+                  key={t.id}
+                  type="button"
+                  onClick={() => setActiveInputTab(t.id)}
+                  className={`w-full text-left px-2.5 py-2.5 rounded-lg border transition cursor-pointer flex items-center gap-2.5 ${
+                    active
+                      ? 'bg-sky-500/10 border-sky-500/70 text-white'
+                      : 'bg-transparent hover:bg-zinc-800/60 border-transparent text-zinc-300 hover:text-white'
+                  }`}
+                >
+                  <div className={`p-1.5 rounded-md shrink-0 ${active ? 'bg-sky-500 text-white' : 'bg-zinc-800 text-zinc-400'}`}>
+                    <Icon className="w-4 h-4" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-xs font-semibold">{i + 1}. {t.label}</div>
+                    <div className="text-[11px] text-zinc-400 truncate mt-0.5">{t.meta}</div>
+                  </div>
+                </button>
+              );
+            })}
+
+            <div className="px-2 pt-3 pb-1 text-[10px] font-semibold uppercase tracking-wider text-zinc-500 border-t border-zinc-800/70 mt-2">
+              Economics &amp; SLA
+            </div>
+
+            {economicsNavTabs.map((t, i) => {
               const Icon = t.icon;
               const active = activeInputTab === t.id;
               return (

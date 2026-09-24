@@ -1350,6 +1350,10 @@ export function calculateCost(config) {
     // capex/power pattern as RAG/guardrails/ingress.
     haDrComputeCapexUsd = 0,
     haDrItPowerKw = 0,
+    // MLOps overlay (see calculateMlops()): the standing canary/shadow/blue-green validation
+    // pool's capex/power, same additive pattern as RAG/guardrails/ingress/HA-DR.
+    mlopsComputeCapexUsd = 0,
+    mlopsItPowerKw = 0,
   } = config;
 
   const isLlmd = !!infraResults.memory.llmd;
@@ -1372,22 +1376,22 @@ export function calculateCost(config) {
 
   const networkHardwareCapexUsd = computeCapexUsd * (networkHardwareAdderPct / 100);
   const storageCapexUsd = storageResults ? (storageResults.achievedCapacityTb * storageUsdPerTbRaw) : 0;
-  const totalCapexUsd = computeCapexUsd + networkHardwareCapexUsd + storageCapexUsd + ragComputeCapexUsd + guardrailsComputeCapexUsd + ingressComputeCapexUsd + haDrComputeCapexUsd;
+  const totalCapexUsd = computeCapexUsd + networkHardwareCapexUsd + storageCapexUsd + ragComputeCapexUsd + guardrailsComputeCapexUsd + ingressComputeCapexUsd + haDrComputeCapexUsd + mlopsComputeCapexUsd;
 
   const hoursPerYear = 24 * 365;
   const baseItPowerKw = itPowerKwOverride != null ? itPowerKwOverride : infraResults.facility.totalItPowerKw;
-  const billedItPowerKw = baseItPowerKw + ragItPowerKw + guardrailsItPowerKw + ingressItPowerKw + haDrItPowerKw;
+  const billedItPowerKw = baseItPowerKw + ragItPowerKw + guardrailsItPowerKw + ingressItPowerKw + haDrItPowerKw + mlopsItPowerKw;
   // Colo bills $/kW/month on IT load (the colo provider's own facility overhead/cooling is
   // baked into their rate); an owned DC bills the utility $/kWh on the PUE-adjusted total load.
   // The MIG IT-power override has no PUE figure of its own, so the owned-DC branch applies the
   // same PUE multiplier the rest of this deployment already uses. Add-on modules' (RAG,
-  // guardrails, ingress, HA/DR) own IT power gets the same PUE treatment -- they're colocated
-  // with the rest of the deployment, not a separate facility.
+  // guardrails, ingress, HA/DR, MLOps) own IT power gets the same PUE treatment -- they're
+  // colocated with the rest of the deployment, not a separate facility.
   const impliedPue = infraResults.facility.totalItPowerKw > 0
     ? infraResults.facility.totalFacilityPowerKw / infraResults.facility.totalItPowerKw
     : 1;
   const baseFacilityPowerKw = itPowerKwOverride != null ? baseItPowerKw * impliedPue : infraResults.facility.totalFacilityPowerKw;
-  const billedFacilityPowerKw = baseFacilityPowerKw + ((ragItPowerKw + guardrailsItPowerKw + ingressItPowerKw + haDrItPowerKw) * impliedPue);
+  const billedFacilityPowerKw = baseFacilityPowerKw + ((ragItPowerKw + guardrailsItPowerKw + ingressItPowerKw + haDrItPowerKw + mlopsItPowerKw) * impliedPue);
   const annualPowerCostUsd = useColo
     ? billedItPowerKw * coloUsdPerKwPerMonth * 12
     : billedFacilityPowerKw * hoursPerYear * powerUsdPerKwh;
@@ -1424,6 +1428,7 @@ export function calculateCost(config) {
     guardrailsCapexUsd: guardrailsComputeCapexUsd,
     ingressCapexUsd: ingressComputeCapexUsd,
     haDrCapexUsd: haDrComputeCapexUsd,
+    mlopsCapexUsd: mlopsComputeCapexUsd,
     ingressAnnualOpexUsd,
     totalCapexUsd,
     annualPowerCostUsd,
@@ -1529,6 +1534,57 @@ export function calculateMigConsolidation(config) {
     savingsPct,
     itPowerKw,
     throughputScaleFactor,
+  };
+}
+
+/**
+ * Applies MIG's throughputScaleFactor to calculateInfra()'s throughput block, so the TTFT/TPOT
+ * (and everything derived from them -- SLA queueing, Guardrails/Ingress request-rate sizing, the
+ * displayed Inference Performance panel) reflect what a replica confined to a MIG slice actually
+ * delivers, instead of calculateInfra()'s own whole-dedicated-GPU numbers. MIG eligibility
+ * guarantees TP=1, PP=1, and non-LLM-D, which collapses ttftSec to t_compute alone and t_step to
+ * max(t_mem, t_comp) alone (every other latency term -- all-reduce, pipeline bubble, KV transfer
+ * -- is architecturally zero in that regime), so every latency figure scales uniformly by
+ * 1/scale and every rate (tok/s) figure scales uniformly by scale. Returns infraResults unchanged
+ * (same reference) when MIG isn't active/eligible or the selected profile is the full 7-slice GPU
+ * (scale === 1, no penalty to apply).
+ */
+export function applyMigThroughputScaling(infraResults, migResults) {
+  const scale = migResults?.eligible ? migResults.throughputScaleFactor : 1;
+  if (!migResults?.eligible || scale >= 1 || !infraResults.throughput) {
+    return infraResults;
+  }
+
+  const t = infraResults.throughput;
+  const t_step = t.t_step / scale;
+  const t_compute = t.t_compute / scale;
+  const ttftSec = t_compute + t.t_allreduce + t.t_pipeline + t.t_kv_transfer;
+  const replicaThroughput = t.replicaThroughput * scale;
+  const clusterThroughput = t.clusterThroughput * scale;
+  const promptTokensPerSecPerReplica = Math.round(t.promptTokensPerSecPerReplica * scale);
+  const promptTokensPerSecPerGpu = Math.round(t.promptTokensPerSecPerGpu * scale);
+  const clusterBatchPromptTps = Math.round(t.clusterBatchPromptTps * scale);
+
+  return {
+    ...infraResults,
+    throughput: {
+      ...t,
+      t_mem: t.t_mem / scale,
+      t_comp: t.t_comp / scale,
+      t_step,
+      tpotMs: Number((t_step * 1000).toFixed(2)),
+      replicaThroughput: Math.round(replicaThroughput),
+      clusterThroughput: Math.round(clusterThroughput),
+      tokensPerSecPerReplica: Math.round(replicaThroughput),
+      tokensPerSecPerGpu: Math.round(replicaThroughput), // decodeTpCount is always 1 under MIG eligibility
+      batchThroughputTps: Math.round(clusterThroughput),
+      t_compute,
+      ttftSec,
+      ttftMs: Number((ttftSec * 1000).toFixed(2)),
+      promptTokensPerSecPerGpu,
+      promptTokensPerSecPerReplica,
+      clusterBatchPromptTps,
+    },
   };
 }
 
@@ -1921,6 +1977,7 @@ export function calculateHaDr(config) {
     storageResults = null,
     haDrTier,              // one of HA_DR_TIERS
     gpuUnitPriceUsd = 0,
+    decodeGpuUnitPriceUsd = null, // only used when infraResults is LLM-D heterogeneous, mirrors calculateCost()
     storageUsdPerTbRaw = 0,
     computeGpuCountOverride = null, // pass MIG's consolidated GPU count when eligible, for consistency with calculateCost()
     itPowerKwOverride = null,
@@ -1934,8 +1991,23 @@ export function calculateHaDr(config) {
     return { enabled: true, eligible: false, reason: "HA/DR replica sizing applies to inference workloads -- a training job's resilience is a checkpoint/resume concern (see Storage), not a live-replica one." };
   }
 
-  const baseGpuCount = computeGpuCountOverride != null ? computeGpuCountOverride : infraResults.totalGpus;
-  const baseComputeCapexUsd = baseGpuCount * gpuUnitPriceUsd;
+  // LLM-D heterogeneous deployments price prefill and decode GPUs separately (they're often
+  // different GPU classes) -- mirror calculateCost()'s own isLlmd branch so a DR replica's base
+  // compute capex matches the primary site's actual capex rather than a blended single-price
+  // estimate, which understates or overstates depending on which pool is pricier.
+  const isLlmd = !!infraResults.memory.llmd;
+  let baseGpuCount;
+  let baseComputeCapexUsd;
+  if (isLlmd) {
+    const prefillGpus = infraResults.memory.llmd.prefill.gpus;
+    const decodeGpus = infraResults.memory.llmd.decode.gpus;
+    const decPrice = decodeGpuUnitPriceUsd != null ? decodeGpuUnitPriceUsd : gpuUnitPriceUsd;
+    baseGpuCount = prefillGpus + decodeGpus;
+    baseComputeCapexUsd = (prefillGpus * gpuUnitPriceUsd) + (decodeGpus * decPrice);
+  } else {
+    baseGpuCount = computeGpuCountOverride != null ? computeGpuCountOverride : infraResults.totalGpus;
+    baseComputeCapexUsd = baseGpuCount * gpuUnitPriceUsd;
+  }
   const baseStorageCapexUsd = storageResults ? storageResults.achievedCapacityTb * storageUsdPerTbRaw : 0;
   const baseItPowerKw = itPowerKwOverride != null ? itPowerKwOverride : infraResults.facility.totalItPowerKw;
 
@@ -1958,5 +2030,73 @@ export function calculateHaDr(config) {
     incrementalStorageCapexUsd,
     haDrComputeCapexUsd,
     haDrItPowerKw,
+  };
+}
+
+// ─── MLOps Lifecycle: Canary / Shadow / Blue-Green Validation Pool ─────────────────────────────
+/**
+ * Sizes the standing compute pool a safe model-rollout strategy needs alongside the primary
+ * serving cluster: a canary pool sized to its own slice of live traffic, or a full-scale shadow/
+ * blue-green pool that mirrors or matches 100% of primary capacity during validation. Unlike
+ * HA/DR's tier multipliers (which describe TOTAL redundant capacity including the primary, hence
+ * `multiplier - 1` for the incremental spend), a validation pool is purely additive -- there's no
+ * "base 1x already counted" to subtract, so its capacityMultiplier is applied directly. Mirrors
+ * calculateHaDr()'s LLM-D split-pricing and MIG-override treatment for consistency, and is
+ * computed independently of calculateCost()'s own capex figures to avoid the same circular
+ * dependency HA/DR avoids (this overlay's output also feeds back into that same call).
+ */
+export function calculateMlops(config) {
+  const {
+    enabled = false,
+    infraResults,
+    mlopsStrategy,           // one of MLOPS_STRATEGIES
+    canaryTrafficPct = 10,   // only meaningful when mlopsStrategy.id === 'canary-release'
+    gpuUnitPriceUsd = 0,
+    decodeGpuUnitPriceUsd = null, // only used when infraResults is LLM-D heterogeneous
+    computeGpuCountOverride = null, // pass MIG's consolidated GPU count when eligible, for consistency with calculateCost()
+    itPowerKwOverride = null,
+  } = config;
+
+  if (!enabled) {
+    return { enabled: false, eligible: false, reason: "MLOps validation-pool sizing is disabled." };
+  }
+
+  if (infraResults.workloadType !== "inference") {
+    return { enabled: true, eligible: false, reason: "Canary/shadow/blue-green rollout sizing applies to inference workloads -- training has no live-traffic rollout concept." };
+  }
+
+  const isLlmd = !!infraResults.memory.llmd;
+  let baseGpuCount;
+  let baseComputeCapexUsd;
+  if (isLlmd) {
+    const prefillGpus = infraResults.memory.llmd.prefill.gpus;
+    const decodeGpus = infraResults.memory.llmd.decode.gpus;
+    const decPrice = decodeGpuUnitPriceUsd != null ? decodeGpuUnitPriceUsd : gpuUnitPriceUsd;
+    baseGpuCount = prefillGpus + decodeGpus;
+    baseComputeCapexUsd = (prefillGpus * gpuUnitPriceUsd) + (decodeGpus * decPrice);
+  } else {
+    baseGpuCount = computeGpuCountOverride != null ? computeGpuCountOverride : infraResults.totalGpus;
+    baseComputeCapexUsd = baseGpuCount * gpuUnitPriceUsd;
+  }
+  const baseItPowerKw = itPowerKwOverride != null ? itPowerKwOverride : infraResults.facility.totalItPowerKw;
+
+  const capacityMultiplier = mlopsStrategy.id === "canary-release"
+    ? Math.max(0, canaryTrafficPct) / 100
+    : mlopsStrategy.capacityMultiplier;
+
+  const validationGpuCount = Math.max(1, Math.ceil(baseGpuCount * capacityMultiplier));
+  const mlopsComputeCapexUsd = baseComputeCapexUsd * capacityMultiplier;
+  const mlopsItPowerKw = baseItPowerKw * capacityMultiplier;
+
+  return {
+    enabled: true,
+    eligible: true,
+    reason: null,
+    mlopsStrategy,
+    capacityMultiplier,
+    baseGpuCount,
+    validationGpuCount,
+    mlopsComputeCapexUsd,
+    mlopsItPowerKw,
   };
 }

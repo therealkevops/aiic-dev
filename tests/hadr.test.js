@@ -213,3 +213,69 @@ describe('5. Data Catalog Sanity', () => {
     }
   });
 });
+
+describe('6. LLM-D Heterogeneous Pricing (regression)', () => {
+  // Regression test for a bug found during the Phase 1-8 accuracy audit: calculateHaDr() was
+  // pricing ALL GPUs (prefill + decode) at a single blended gpuUnitPriceUsd, even when the
+  // deployment is LLM-D heterogeneous (different GPU classes/prices for prefill vs. decode).
+  // This understated or overstated the DR replica's base compute capex depending on which pool
+  // was pricier, and desynced it from calculateCost()'s own (correctly split-priced) figure.
+  function buildLlmdInfra() {
+    const model = getModel('llama3-8b');
+    const precision = getPrecision('fp8');
+    const prefillPlatform = getPlatform('cisco-c885a-b200'); // pricier prefill pool
+    const decodePlatform = getPlatform('cisco-c885a-h200');  // cheaper decode pool
+    const prefillGpu = getGpu(prefillPlatform.gpuId);
+    const decodeGpu = getGpu(decodePlatform.gpuId);
+    return calculateInfra({
+      workloadType: 'inference', model, precision, kvPrecision: 'fp8',
+      prefixCacheRatio: 0.2, promptTokenRatio: 0.5, contextLength: 8192,
+      concurrency: 64, gpu: prefillGpu, platform: prefillPlatform, tp: 1, pp: 1, dp: 1,
+      trainingType: 'pretrain_sft', zeroStage: 3, networkProtocol: 'rocev2', pue: 1.35,
+      servingConfig: {
+        servingEngine: 'vllm', orchestrator: 'kserve', servingArchitecture: 'llmd',
+        enableChunkedPrefill: true, enablePrefixCaching: true, enableSpeculativeDecoding: false,
+        llmdDisaggregationMode: 'heterogeneous', secondaryPlatform: decodePlatform, secondaryGpu: decodeGpu,
+        prefillNodes: 1, decodeNodes: 2,
+      },
+    });
+  }
+
+  it('baseComputeCapexUsd matches calculateCost()\'s split prefill/decode pricing, not a blended single price', () => {
+    const infra = buildLlmdInfra();
+    assert.ok(infra.memory.llmd, 'test setup should produce an LLM-D deployment');
+    const prefillPrice = 40000;
+    const decodePrice = 35000;
+
+    const cost = calculateCost({
+      infraResults: infra, gpuUnitPriceUsd: prefillPrice, cloudRateUsdPerHr: 5,
+      decodeGpuUnitPriceUsd: decodePrice, decodeCloudRateUsdPerHr: 3.75, storageUsdPerTbRaw: 0,
+    });
+    const h = calculateHaDr({
+      enabled: true, infraResults: infra, haDrTier: multiAz,
+      gpuUnitPriceUsd: prefillPrice, decodeGpuUnitPriceUsd: decodePrice, storageUsdPerTbRaw: 0,
+    });
+
+    assert.equal(h.baseComputeCapexUsd, cost.computeCapexUsd);
+  });
+
+  it('falls back to gpuUnitPriceUsd for the decode pool when decodeGpuUnitPriceUsd is not given', () => {
+    const infra = buildLlmdInfra();
+    const h = calculateHaDr({
+      enabled: true, infraResults: infra, haDrTier: multiAz,
+      gpuUnitPriceUsd: 40000, storageUsdPerTbRaw: 0,
+    });
+    const expected = infra.totalGpus * 40000;
+    assert.equal(h.baseComputeCapexUsd, expected);
+  });
+
+  it('baseGpuCount equals prefill + decode GPUs for an LLM-D deployment', () => {
+    const infra = buildLlmdInfra();
+    const h = calculateHaDr({
+      enabled: true, infraResults: infra, haDrTier: multiAz,
+      gpuUnitPriceUsd: 40000, decodeGpuUnitPriceUsd: 35000, storageUsdPerTbRaw: 0,
+    });
+    assert.equal(h.baseGpuCount, infra.memory.llmd.prefill.gpus + infra.memory.llmd.decode.gpus);
+    assert.equal(h.baseGpuCount, infra.totalGpus);
+  });
+});

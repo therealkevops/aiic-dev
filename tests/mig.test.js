@@ -7,7 +7,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { calculateInfra, calculateMigConsolidation, calculateCost } from '../src/utils/calculator.js';
+import { calculateInfra, calculateMigConsolidation, applyMigThroughputScaling, calculateCost } from '../src/utils/calculator.js';
 import { MODEL_PRESETS, PRECISION_OPTIONS } from '../src/data/models.js';
 import { GPU_CATALOG } from '../src/data/hardware.js';
 import { PLATFORM_SYSTEMS } from '../src/data/platforms.js';
@@ -242,5 +242,82 @@ describe('4. calculateCost() MIG Override Integration', () => {
       computeGpuCountOverride: mig.physicalGpusNeeded, itPowerKwOverride: mig.itPowerKw, useColo: false,
     });
     assert.ok(costWithMig.annualPowerCostUsd < costNoMig.annualPowerCostUsd);
+  });
+});
+
+describe('5. applyMigThroughputScaling() -- Throughput Penalty Propagation', () => {
+  // Regression coverage for an accuracy gap found during the Phase 1-8 audit: MIG's
+  // throughputScaleFactor was computed and displayed as an FYI, but never applied to the
+  // TTFT/TPOT/throughput figures calculateInfra() itself produces -- so every downstream
+  // consumer (the Inference Performance panel, SLA queueing, Guardrails/Ingress request-rate
+  // sizing) silently assumed a whole dedicated GPU even when MIG was active.
+  const infraResults = buildInfra({ platformId: 'cisco-c885a-h200', tp: 1, pp: 1, dp: 4, concurrency: 8 });
+  const gpu = getGpu('h200-sxm');
+  const platform = getPlatform('cisco-c885a-h200');
+
+  it('is a no-op (same reference) when MIG is disabled', () => {
+    const migOff = calculateMigConsolidation({ infraResults, gpu, gpusPerChassis: platform.gpusPerChassis, chassisTdpKw: platform.chassisTdpKw, enabled: false });
+    const result = applyMigThroughputScaling(infraResults, migOff);
+    assert.equal(result, infraResults);
+  });
+
+  it('is a no-op when MIG is enabled but ineligible', () => {
+    const migIneligible = calculateMigConsolidation({ infraResults: buildInfra({ platformId: 'cisco-c885a-h200', tp: 2, pp: 1, dp: 2, concurrency: 8 }), gpu, gpusPerChassis: platform.gpusPerChassis, chassisTdpKw: platform.chassisTdpKw, enabled: true });
+    assert.equal(migIneligible.eligible, false);
+    const result = applyMigThroughputScaling(infraResults, migIneligible);
+    assert.equal(result, infraResults);
+  });
+
+  it('scales every latency figure up by exactly 1/scale and every rate figure down by exactly scale', () => {
+    const mig = calculateMigConsolidation({ infraResults, gpu, gpusPerChassis: platform.gpusPerChassis, chassisTdpKw: platform.chassisTdpKw, enabled: true });
+    assert.equal(mig.eligible, true);
+    assert.ok(mig.throughputScaleFactor < 1, 'test setup should select a partial-slice profile');
+
+    const scaled = applyMigThroughputScaling(infraResults, mig);
+    const scale = mig.throughputScaleFactor;
+    const before = infraResults.throughput;
+    const after = scaled.throughput;
+
+    // Tolerance widened from float-exact to 1e-3: both sides round to 2 decimal places
+    // (toFixed(2)) before this ratio is taken, which is expected floating-point noise, not error.
+    assert.ok(Math.abs(after.ttftMs / before.ttftMs - 1 / scale) < 1e-3);
+    assert.ok(Math.abs(after.tpotMs / before.tpotMs - 1 / scale) < 1e-3);
+    assert.ok(Math.abs(after.batchThroughputTps / before.batchThroughputTps - scale) < 1e-3);
+    assert.ok(Math.abs(after.replicaThroughput / before.replicaThroughput - scale) < 1e-3);
+    assert.ok(Math.abs(after.promptTokensPerSecPerReplica / before.promptTokensPerSecPerReplica - scale) < 1e-3);
+  });
+
+  it('does not mutate the original infraResults object', () => {
+    const mig = calculateMigConsolidation({ infraResults, gpu, gpusPerChassis: platform.gpusPerChassis, chassisTdpKw: platform.chassisTdpKw, enabled: true });
+    const beforeTtftMs = infraResults.throughput.ttftMs;
+    applyMigThroughputScaling(infraResults, mig);
+    assert.equal(infraResults.throughput.ttftMs, beforeTtftMs);
+  });
+
+  it('leaves memory, facility, and bom untouched -- only throughput is replaced', () => {
+    const mig = calculateMigConsolidation({ infraResults, gpu, gpusPerChassis: platform.gpusPerChassis, chassisTdpKw: platform.chassisTdpKw, enabled: true });
+    const scaled = applyMigThroughputScaling(infraResults, mig);
+    assert.equal(scaled.memory, infraResults.memory);
+    assert.equal(scaled.facility, infraResults.facility);
+    assert.equal(scaled.bom, infraResults.bom);
+    assert.notEqual(scaled.throughput, infraResults.throughput);
+  });
+
+  it('a smaller (more sliced) MIG profile applies a larger throughput penalty than a bigger one', () => {
+    // Force a low-concurrency replica so a fitting profile exists, then compare against the
+    // same infra with the largest available profile explicitly selected.
+    const availableProfiles = calculateMigConsolidation({ infraResults, gpu, gpusPerChassis: platform.gpusPerChassis, chassisTdpKw: platform.chassisTdpKw, enabled: true }).availableProfiles;
+    assert.ok(availableProfiles.length >= 2, 'test setup should have at least 2 fitting profiles');
+    const smallest = availableProfiles[0];
+    const biggest = availableProfiles[availableProfiles.length - 1];
+
+    const migSmall = calculateMigConsolidation({ infraResults, gpu, gpusPerChassis: platform.gpusPerChassis, chassisTdpKw: platform.chassisTdpKw, enabled: true, migProfileId: smallest.id });
+    const migBig = calculateMigConsolidation({ infraResults, gpu, gpusPerChassis: platform.gpusPerChassis, chassisTdpKw: platform.chassisTdpKw, enabled: true, migProfileId: biggest.id });
+
+    const scaledSmall = applyMigThroughputScaling(infraResults, migSmall);
+    const scaledBig = applyMigThroughputScaling(infraResults, migBig);
+
+    assert.ok(scaledSmall.throughput.ttftMs >= scaledBig.throughput.ttftMs);
+    assert.ok(scaledSmall.throughput.batchThroughputTps <= scaledBig.throughput.batchThroughputTps);
   });
 });

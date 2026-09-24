@@ -3,8 +3,9 @@ import {
   ArrowLeft, BookOpen, Cpu, Network, Database, Server,
   Share2, Briefcase, Bot, CloudLightning, Timer,
   ChevronRight, ChevronLeft, ChevronDown, Search, Layers, Info,
-  HardDrive, Zap, DollarSign, AlertTriangle, Terminal
+  HardDrive, Zap, DollarSign, AlertTriangle, Terminal, ShieldCheck
 } from 'lucide-react';
+import { COMPLIANCE_FRAMEWORKS, CONTROL_DOMAINS, STATUS, evaluateControlDomains } from '../data/security';
 
 function Badge({ children, variant = 'sky' }) {
   const styles = {
@@ -113,6 +114,13 @@ const DOC_GROUPS = [
         title: 'TCO & Unit Economics Modeling',
         category: 'Core Foundations',
         icon: DollarSign,
+        type: 'core',
+      },
+      {
+        id: 'chap-10-security',
+        title: 'Security, Compliance & Attestation Controls',
+        category: 'Core Foundations',
+        icon: ShieldCheck,
         type: 'core',
       }
     ]
@@ -270,13 +278,25 @@ const PRESET_CONTENT = {
       protocol: '400G RoCEv2',
       storage: 'VAST Data Universal Storage',
       durability: 'Erasure Coded (8+3)',
-      hadr: 'Multi-AZ (Active-Active)',
-      ingress: 'Software LB (Envoy/NGINX)'
+      hadr: 'Multi-AZ (High Availability)',
+      ingress: 'Software LB (Envoy/NGINX)',
+      mlops: 'Canary Release (10% Traffic)'
+    },
+    complianceFacts: {
+      workloadType: 'inference',
+      haDrEnabled: true,
+      haDrTierId: 'multi-az',
+      ingressEnabled: true,
+      ingressTierId: 'software-lb',
+      guardrailsEnabled: true,
+      migEnabled: false,
+      mlopsEnabled: true,
+      mlopsStrategyId: 'canary-release',
     },
     rationale: {
       silicon: 'LLaMA 3.3 70B in FP8 precision consumes ~70GB of raw weight memory. Sized across 8x H200 SXM5 GPUs on a Cisco C885A server with NVLink, each GPU holds just 8.75GB of weights. This leaves over 118GB of usable HBM per GPU dedicated exclusively to KV cache and batch activations. Tensor Parallelism is kept at TP=8 to remain strictly inside the single chassis NVLink domain, avoiding catastrophic Ethernet All-Reduce latency.',
       memory: 'Enterprise RAG queries are prompt-heavy: typical queries bundle 4 to 8 retrieved document chunks (~6,000 tokens) with a short user question and a brief response (~500 tokens), resulting in an 80/20 prompt-to-generation ratio. Automatic Prefix Caching (APC) is configured at 40% because corporate knowledge bases frequently retrieve overlapping policy documents, system prompts, and common guidelines across different department users. Enabling FP8 KV cache halves per-token memory from 2 bytes to 1 byte, allowing 32 concurrent 8k sessions to fit on a single node without spilling into multi-node pipeline parallelism.',
-      ancillary: 'RAG embeddings are handled by BGE-Large-EN v1.5 on dedicated L40S PCIe GPUs, pairing with Milvus vector database sized for 8 QPS. Safety is enforced synchronously via Llama-Guard-3 8B. Storage utilizes VAST Universal Storage configured with 8+3 erasure coding, providing high NFS throughput for model loading while avoiding 3x replication capex. HA/DR uses Multi-AZ to guarantee continuous service across datacenter power failures.',
+      ancillary: 'RAG embeddings are handled by BGE-Large-EN v1.5 on dedicated L40S PCIe GPUs, pairing with Milvus vector database sized for 8 QPS. Safety is enforced synchronously via Llama-Guard-3 8B. Storage utilizes VAST Universal Storage configured with 8+3 erasure coding, providing high NFS throughput for model loading while avoiding 3x replication capex. HA/DR uses Multi-AZ to guarantee continuous service across datacenter power failures. New model versions roll out via a Canary Release validating against 10% of live traffic before full promotion.',
       tradeoff: 'The architecture deliberately accepts higher GPU VRAM headroom (H200 141GB vs H100 80GB) to guarantee that all 32 concurrent 8k streams fit on a single physical node (PP=1). Adding Pipeline Parallelism to split across two H100 nodes would introduce inter-node bubble latency and double the server footprint.',
       modelSelection: 'LLaMA 3.3 70B delivers an MMLU benchmark of 88.6% and state-of-the-art instruction following while retaining the identical 70.6B dense footprint of LLaMA 3.1. It is the gold standard for enterprise question-answering where factual hallucination must be minimized.',
       modelAlternatives: [
@@ -362,13 +382,25 @@ const PRESET_CONTENT = {
       protocol: '400G RoCEv2',
       storage: 'VAST Data Universal Storage',
       durability: 'Erasure Coded (8+3)',
-      hadr: 'Multi-AZ (Active-Active)',
-      ingress: 'Software LB (Envoy)'
+      hadr: 'Multi-AZ (High Availability)',
+      ingress: 'Software LB (Envoy)',
+      mlops: 'Canary Release (10% Traffic)'
+    },
+    complianceFacts: {
+      workloadType: 'inference',
+      haDrEnabled: true,
+      haDrTierId: 'multi-az',
+      ingressEnabled: true,
+      ingressTierId: 'software-lb',
+      guardrailsEnabled: false,
+      migEnabled: false,
+      mlopsEnabled: true,
+      mlopsStrategyId: 'canary-release',
     },
     rationale: {
       silicon: 'Developers cannot tolerate typing lag; target TTFT must remain under 400ms for inline completions. Qwen 2.5 72B is chosen for state-of-the-art coding and syntax comprehension. Sized across 8x H200 GPUs on high-bandwidth NVLink 4 (900 GB/s bidirectional), maximizing memory bandwidth to drive token generation speed.',
       memory: 'Coding copilots require massive context (64k tokens) to swallow open file buffers, imported header definitions, and language server protocol (LSP) symbol tables. At 64k tokens per stream, a single FP16 KV cache sequence consumes 16GB of VRAM! Enforcing FP8 KV cache drops this to 8GB per stream. Speculative decoding is explicitly enabled using a lightweight draft model (e.g. Qwen 2.5 1.5B), accelerating token generation velocity by 1.6x to 2.0x for repetitive code syntax.',
-      ancillary: 'Guardrail models are explicitly disabled in this preset. Running an 8B input/output safety guardrail on every autocomplete keystroke introduces an unacceptable 30-60ms latency penalty. RAG utilizes GTE-Large-EN v1.5 with 8,192 max tokens chunking (critical for preserving entire code functions intact) and Qdrant vector database (15 QPS).',
+      ancillary: 'Guardrail models are explicitly disabled in this preset. Running an 8B input/output safety guardrail on every autocomplete keystroke introduces an unacceptable 30-60ms latency penalty. RAG utilizes GTE-Large-EN v1.5 with 8,192 max tokens chunking (critical for preserving entire code functions intact) and Qdrant vector database (15 QPS). New model versions roll out via a Canary Release validating against 10% of live traffic before full promotion.',
       tradeoff: 'Sacrifices safety guardrail filtering and concurrency depth (capped at 16 streams) in order to support massive 64k context windows with speculative decoding speed.',
       modelSelection: 'Qwen 2.5 72B leads open-weights coding evaluations (HumanEval 86.6%, EvalPlus, LiveCodeBench), rivaling frontier proprietary models. It demonstrates exceptional long-context multi-file repository understanding and strict adherence to programming language syntax.',
       modelAlternatives: [
@@ -450,12 +482,24 @@ const PRESET_CONTENT = {
       storage: 'NetApp AFF A-Series',
       durability: 'Replicated 2x',
       hadr: 'Warm Standby',
-      ingress: 'Cloud-Managed LB (Auto-scaling)'
+      ingress: 'Cloud-Managed LB (Auto-scaling)',
+      mlops: 'Canary Release (10% Traffic)'
+    },
+    complianceFacts: {
+      workloadType: 'inference',
+      haDrEnabled: true,
+      haDrTierId: 'warm-standby',
+      ingressEnabled: true,
+      ingressTierId: 'cloud-managed-lb',
+      guardrailsEnabled: true,
+      migEnabled: false,
+      mlopsEnabled: true,
+      mlopsStrategyId: 'canary-release',
     },
     rationale: {
       silicon: 'Contact centers operate on strict cost-per-minute unit economics. High-end SXM HGX platforms ($35k/GPU) destroy business ROI for basic transactional dialog. The calculator selects commodity Cisco UCS C245 servers populated with 4x L40S PCIe GPUs ($8,500/GPU). L40S lacks NVLink, but with an 8B model at TP=4, PCIe Gen5 bus bandwidth (64 GB/s) is sufficient for small tensor matrices.',
       memory: 'Customer conversations are concise (4k context), with balanced 50/50 prompt/generation splits (caller question vs agent reply). The challenge is pure concurrency: 512 simultaneous active calls. 512 streams of 4k context would instantly overflow a single node. The calculator deploys Data Parallelism (DP), replicating the model across multiple nodes. Each replica handles an isolated fraction of active streams, dividing per-GPU KV cache pressure.',
-      ancillary: 'Safety is mandatory for public-facing dialog; ShieldGemma-2B is selected as an ultra-compact guardrail running on auxiliary L40S slices. Ingress uses a Cloud-Managed auto-scaling load balancer to absorb bursty call spikes. Storage uses NetApp AFF with 2x replication, prioritizing operational maturity over raw parallel-fs speeds. HA/DR utilizes Warm Standby in a secondary datacenter to minimize idle server costs.',
+      ancillary: 'Safety is mandatory for public-facing dialog; ShieldGemma-2B is selected as an ultra-compact guardrail running on auxiliary L40S slices. Ingress uses a Cloud-Managed auto-scaling load balancer to absorb bursty call spikes. Storage uses NetApp AFF with 2x replication, prioritizing operational maturity over raw parallel-fs speeds. HA/DR utilizes Warm Standby in a secondary datacenter to minimize idle server costs. New model versions roll out via a Canary Release validating against 10% of live traffic before full promotion.',
       tradeoff: 'Trades peak reasoning depth (8B vs 70B) and inter-GPU interconnect bandwidth (PCIe vs NVLink) to achieve unmatched density: 512 concurrent conversations at the lowest possible cost-per-stream.',
       modelSelection: 'LLaMA 3.1 8B provides the ideal balance of conversational fluency, intent extraction, and extreme execution speed. At 8B parameters, it achieves sub-100ms TTFT on PCIe hardware, critical for interactive phone/voice agents.',
       modelAlternatives: [
@@ -534,13 +578,25 @@ const PRESET_CONTENT = {
       protocol: '400G RoCEv2',
       storage: 'NetApp AFF A-Series',
       durability: 'Replicated 3x (Compliance)',
-      hadr: 'Multi-AZ (Active-Active)',
-      ingress: 'Software LB'
+      hadr: 'Multi-AZ (High Availability)',
+      ingress: 'Software LB',
+      mlops: 'Canary Release (10% Traffic)'
+    },
+    complianceFacts: {
+      workloadType: 'inference',
+      haDrEnabled: true,
+      haDrTierId: 'multi-az',
+      ingressEnabled: true,
+      ingressTierId: 'software-lb',
+      guardrailsEnabled: true,
+      migEnabled: false,
+      mlopsEnabled: true,
+      mlopsStrategyId: 'canary-release',
     },
     rationale: {
       silicon: '131k context prefill creates astronomical compute requirements ($O(S)$ matrix operations on 131,072 tokens). Cisco C885A with 8x H200 SXM5 delivers the dense FP8 Tensor Core throughput required to parse a 100k-token contract in under 3 seconds.',
       memory: 'KV cache at 131,072 tokens is punishing: even in FP8, a single sequence requires ~13.1GB of KV cache VRAM! 8 active concurrent streams consume over 104GB of VRAM solely for KV storage. KV Cache Offload to enterprise storage is enabled to allow inactive historical documents to page out of HBM. Automatic Prefix Caching is set to 0% because each corporate contract or loan dossier is completely unique, eliminating radix tree prefix reuse.',
-      ancillary: 'RAG embedding requires NV-Embed-v2, an open 7.8B model with native 32,768 token chunk support, avoiding loss of semantic context across complex 50-page legal clauses. Storage requires NetApp AFF with 3x replication to satisfy enterprise regulatory audit compliance and immutable snapshot mandates. Guardrails utilize Granite Guardian 3 8B.',
+      ancillary: 'RAG embedding requires NV-Embed-v2, an open 7.8B model with native 32,768 token chunk support, avoiding loss of semantic context across complex 50-page legal clauses. Storage requires NetApp AFF with 3x replication to satisfy enterprise regulatory audit compliance and immutable snapshot mandates. Guardrails utilize Granite Guardian 3 8B. New model versions roll out via a Canary Release validating against 10% of live traffic before full promotion.',
       tradeoff: 'Trades interactive concurrency (capped at 8 streams) and prefix cache optimization for maximum context length (131k tokens) and extreme prefill batching throughput.',
       modelSelection: 'LLaMA 3.3 70B possesses native 131k context support with verified Needle In A Haystack retrieval fidelity (>99%). Its deep parameter capacity is essential for interpreting nested cross-references, indemnity liabilities, and financial tables.',
       modelAlternatives: [
@@ -621,12 +677,24 @@ const PRESET_CONTENT = {
       storage: 'NetApp AFF A-Series',
       durability: 'Replicated 3x (Audited)',
       hadr: 'Disabled (Batch Job)',
-      ingress: 'Internal Subnet (No Ingress)'
+      ingress: 'Internal Subnet (No Ingress)',
+      mlops: 'Disabled (Batch Job)'
+    },
+    complianceFacts: {
+      workloadType: 'training',
+      haDrEnabled: false,
+      haDrTierId: 'multi-az',
+      ingressEnabled: false,
+      ingressTierId: 'software-lb',
+      guardrailsEnabled: false,
+      migEnabled: false,
+      mlopsEnabled: false,
+      mlopsStrategyId: 'canary-release',
     },
     rationale: {
       silicon: 'Full-parameter fine-tuning of a 70B model requires 1,120GB of memory (weights + gradients + 12-byte AdamW optimizer states), which cannot fit on a single server. LoRA (Low-Rank Adaptation with rank $r=16$) freezes the 70B base model (140GB at FP16) and only trains 0.207B adapter parameters. Sized across 8x H100 80GB SXM5 GPUs on a Cisco C885A, the frozen base model shards to 17.5GB per GPU. Adapter optimizer states and gradients take less than 3GB total. The entire training job runs inside one physical node!',
       memory: 'Training requires mixed precision (FP16 base weights, FP16 gradients, FP32 master weights for adapter layers). Recomputation is set to selective activation recomputation, keeping activation memory under 8GB per GPU at context length 4k and micro-batch size 2.',
-      ancillary: 'ZeRO-1 shards the small AdamW optimizer states across data-parallel ranks. Storage uses NetApp AFF with 3x replication for compliance, storing the 5TB training dataset and 3 checkpoint generations. Ingress, RAG, and HA/DR are disabled as this is an internal batch training cluster.',
+      ancillary: 'ZeRO-1 shards the small AdamW optimizer states across data-parallel ranks. Storage uses NetApp AFF with 3x replication for compliance, storing the 5TB training dataset and 3 checkpoint generations. Ingress, RAG, HA/DR, and MLOps validation pools are all disabled as this is an internal batch training cluster with no live-traffic rollout process.',
       tradeoff: 'Trades the ultimate domain plasticity of full-parameter training for the ability to train securely on a single 8-GPU chassis on-prem without crossing external networks.',
       modelSelection: 'LLaMA 3.3 70B is the gold-standard base foundation for enterprise NLP domain adaptation. Freezing base weights at FP16 preserves core reasoning while allowing lightweight low-rank adapters to learn domain taxonomies.',
       modelAlternatives: [
@@ -714,12 +782,24 @@ const PRESET_CONTENT = {
       storage: 'VAST Data Universal Storage',
       durability: 'Replicated 3x',
       hadr: 'Disabled (Batch Job)',
-      ingress: 'Internal Fabric Only'
+      ingress: 'Internal Fabric Only',
+      mlops: 'Disabled (Batch Job)'
+    },
+    complianceFacts: {
+      workloadType: 'training',
+      haDrEnabled: false,
+      haDrTierId: 'multi-az',
+      ingressEnabled: false,
+      ingressTierId: 'software-lb',
+      guardrailsEnabled: false,
+      migEnabled: false,
+      mlopsEnabled: false,
+      mlopsStrategyId: 'canary-release',
     },
     rationale: {
       silicon: 'Updating all 70B parameters requires storing: FP16 model weights (140GB) + FP16 gradients (140GB) + FP32 AdamW optimizer states ($12 \\text{ bytes/param} = 840\\text{GB}$) = 1,120GB total training state! The calculator configures a 4-node cluster (32x H100 80GB GPUs). ZeRO-3 parameter sharding partitions weights, gradients, and optimizer states across all 32 GPUs, reducing per-GPU memory to just 35GB ($1120 / 32$), fitting safely within the 80GB H100 envelope alongside backward activations.',
       memory: 'Because ZeRO-3 performs synchronous All-Gather collectives across the network before every layer forward/backward pass, inter-node networking bandwidth is the binding bottleneck. Pipeline Parallelism is explicitly locked to PP=1 because ZeRO-2 and ZeRO-3 are mathematically incompatible with pipeline stage bubbles.',
-      ancillary: 'Networking demands a 2-Tier Rail-Optimized leaf-spine Clos fabric over 400G Cisco Nexus 9000 switches to handle non-blocking All-Gather and Reduce-Scatter operations. Storage uses VAST Data Universal Storage to sustain 60-second checkpoint write bursts across a 20TB dataset.',
+      ancillary: 'Networking demands a 2-Tier Rail-Optimized leaf-spine Clos fabric over 400G Cisco Nexus 9000 switches to handle non-blocking All-Gather and Reduce-Scatter operations. Storage uses VAST Data Universal Storage to sustain 60-second checkpoint write bursts across a 20TB dataset. MLOps rollout validation does not apply to this offline full-parameter training run.',
       tradeoff: 'Demands a 4-node, 32-GPU high-speed RoCEv2 fabric investment to unlock full architectural adaptation across the entire 70B parameter matrix.',
       modelSelection: 'LLaMA 3.3 70B provides the highest open-weights baseline quality for creating a proprietary corporate foundation model, allowing fundamental representation updates across all transformer layers.',
       modelAlternatives: [
@@ -800,12 +880,24 @@ const PRESET_CONTENT = {
       storage: 'Ceph Bulk Object Storage',
       durability: 'Replicated 2x',
       hadr: 'Disabled (Air-gapped)',
-      ingress: 'Software Reverse Proxy'
+      ingress: 'Software Reverse Proxy',
+      mlops: 'Disabled (Air-gapped)'
+    },
+    complianceFacts: {
+      workloadType: 'inference',
+      haDrEnabled: false,
+      haDrTierId: 'multi-az',
+      ingressEnabled: true,
+      ingressTierId: 'software-lb',
+      guardrailsEnabled: true,
+      migEnabled: false,
+      mlopsEnabled: false,
+      mlopsStrategyId: 'canary-release',
     },
     rationale: {
       silicon: 'Designed for environments where power, rack units, and cooling are strictly constrained. Populated with a single NVIDIA L40S PCIe card (48GB GDDR6, 350W TDP) in a Cisco C245 2U rack server. No NVLink switches, leaf-spine fabric, or secondary nodes are permitted.',
       memory: 'Aggressive 4-bit AWQ weight quantization compresses LLaMA 3 8B to just ~4.5GB VRAM. 4-bit INT4 KV cache reduces per-token memory to 0.5 bytes. At 4 concurrent streams and 4k context, total memory consumption remains under 12GB, fitting effortlessly inside the 48GB GDDR6 memory pool with massive room for Linux OS and vector indices.',
-      ancillary: 'The orchestrator is plain Docker Engine to eliminate Kubernetes control-plane complexity in isolated environments. Vector database is pgvector running as an extension inside an existing local PostgreSQL container, introducing zero new operational surfaces. Guardrails use Llama-Guard-3 1B on CPU/GPU. Storage uses local Ceph/S3 object storage with 2x replication.',
+      ancillary: 'The orchestrator is plain Docker Engine to eliminate Kubernetes control-plane complexity in isolated environments. Vector database is pgvector running as an extension inside an existing local PostgreSQL container, introducing zero new operational surfaces. Guardrails use Llama-Guard-3 1B on CPU/GPU. Storage uses local Ceph/S3 object storage with 2x replication. MLOps validation pools are disabled in this air-gapped, single-node deployment.',
       tradeoff: 'Sacrifices high concurrency and bleeding-edge model intelligence for complete air-gapped sovereignty on a single standard enterprise server.',
       modelSelection: 'LLaMA 3.1 8B at INT4 AWQ quantizes down to ~4.5GB VRAM while retaining over 96% of its FP16 reasoning benchmarks, making it the most capable model that comfortably operates on constrained edge hardware.',
       modelAlternatives: [
@@ -887,13 +979,25 @@ const PRESET_CONTENT = {
       protocol: '400G RoCEv2',
       storage: 'VAST Data Universal Storage',
       durability: 'Erasure Coded (8+3)',
-      hadr: 'Multi-AZ (Active-Active)',
-      ingress: 'Hardware API Gateway (Kong/Apigee)'
+      hadr: 'Multi-AZ (High Availability)',
+      ingress: 'Hardware API Gateway (Kong/Apigee)',
+      mlops: 'Canary Release (10% Traffic)'
+    },
+    complianceFacts: {
+      workloadType: 'inference',
+      haDrEnabled: true,
+      haDrTierId: 'multi-az',
+      ingressEnabled: true,
+      ingressTierId: 'api-gateway',
+      guardrailsEnabled: true,
+      migEnabled: false,
+      mlopsEnabled: true,
+      mlopsStrategyId: 'canary-release',
     },
     rationale: {
       silicon: 'Multi-step agent loops emit extensive hidden reasoning tokens before executing tool calls. The prompt/generation split is inverted: 40% prompt, 60% generation. This heavy autoregressive decode phase is strictly memory-bandwidth bound. Cisco C885A with 8x H200 delivers 4.8 TB/s HBM3e bandwidth per GPU, keeping decode velocity above 45 tokens/second.',
       memory: 'Agent workflows maintain constant system instructions, API function descriptions, and JSON schemas across all turns. Automatic Prefix Caching (APC) is configured at 60%, yielding massive VRAM savings by caching the shared tool catalog in a radix tree. Speculative decoding is enabled to accelerate repetitive JSON and code bracket syntax generation by 1.8x.',
-      ancillary: 'Ingress employs an enterprise API Gateway (Kong/Apigee class) with rate-limiting, mTLS authentication, and token quota enforcement. RAG uses Qdrant (10 QPS) with BGE-Large embeddings. Guardrails enforce both input prompt sanitization and output tool-execution safety via Llama-Guard-3 8B.',
+      ancillary: 'Ingress employs an enterprise API Gateway (Kong/Apigee class) with rate-limiting, mTLS authentication, and token quota enforcement. RAG uses Qdrant (10 QPS) with BGE-Large embeddings. Guardrails enforce both input prompt sanitization and output tool-execution safety via Llama-Guard-3 8B. New model versions roll out via a Canary Release validating against 10% of live traffic before full promotion.',
       tradeoff: 'Prioritizes high prefix caching hit rates and memory bandwidth over raw batch throughput, optimizing for multi-turn agent response latency.',
       modelSelection: 'LLaMA 3.3 70B scores near the top of the Berkeley Function Calling Leaderboard (BFCL). It demonstrates rigid adherence to JSON output schemas, parameter types, and API calling syntax without dropping required fields.',
       modelAlternatives: [
@@ -981,13 +1085,25 @@ const PRESET_CONTENT = {
       protocol: '400G RoCEv2',
       storage: 'VAST Data Universal Storage',
       durability: 'Erasure Coded (8+3)',
-      hadr: 'Multi-AZ (Active-Active)',
-      ingress: 'Software LB'
+      hadr: 'Multi-AZ (High Availability)',
+      ingress: 'Software LB',
+      mlops: 'Canary Release (10% Traffic)'
+    },
+    complianceFacts: {
+      workloadType: 'inference',
+      haDrEnabled: true,
+      haDrTierId: 'multi-az',
+      ingressEnabled: true,
+      ingressTierId: 'software-lb',
+      guardrailsEnabled: true,
+      migEnabled: false,
+      mlopsEnabled: true,
+      mlopsStrategyId: 'canary-release',
     },
     rationale: {
       silicon: 'Autonomous coding agents maintain multi-hour stateful sessions while reading stack traces, running unit tests, and rewriting files. Context window expands continuously toward 131k tokens. Populated with 8x H200 SXM5 GPUs (1,128GB aggregate VRAM) on Cisco C885A to hold long-context KV states without constant CPU paging.',
       memory: 'At 131k context, KV cache footprint threatens cluster stability. The calculator enforces FP8 KV cache and enables KV Cache Offload to VAST NVMe storage, allowing dormant agent sessions to hibernate during external test suite execution. 50% APC ratio captures static codebase state across iterative compiler runs.',
-      ancillary: 'RAG uses GTE-Large-EN v1.5 with 256-token chunking and Qdrant (12 QPS) for fast semantic symbol retrieval. Ingress uses Envoy software load balancing. Guardrails are active for code security and secret leakage prevention.',
+      ancillary: 'RAG uses GTE-Large-EN v1.5 with 256-token chunking and Qdrant (12 QPS) for fast semantic symbol retrieval. Ingress uses Envoy software load balancing. Guardrails are active for code security and secret leakage prevention. New model versions roll out via a Canary Release validating against 10% of live traffic before full promotion.',
       tradeoff: 'Requires massive 141GB HBM3e GPUs and NVMe KV offload to tolerate multi-hour 131k context ballooning without dropping concurrent developer sessions.',
       modelSelection: 'Qwen 2.5 72B achieves top-tier results on SWE-bench Verified (surpassing 40% with modern agent harnesses). It handles long codebase contexts with high precision during multi-file editing and automated debugging.',
       modelAlternatives: [
@@ -1067,13 +1183,25 @@ const PRESET_CONTENT = {
       protocol: '400G RoCEv2',
       storage: 'VAST Data Universal Storage',
       durability: 'Erasure Coded (8+3)',
-      hadr: 'Multi-AZ (Active-Active)',
-      ingress: 'API Gateway'
+      hadr: 'Multi-AZ (High Availability)',
+      ingress: 'API Gateway',
+      mlops: 'Canary Release (10% Traffic)'
+    },
+    complianceFacts: {
+      workloadType: 'inference',
+      haDrEnabled: true,
+      haDrTierId: 'multi-az',
+      ingressEnabled: true,
+      ingressTierId: 'api-gateway',
+      guardrailsEnabled: true,
+      migEnabled: false,
+      mlopsEnabled: true,
+      mlopsStrategyId: 'canary-release',
     },
     rationale: {
       silicon: 'Deep research requires top-tier reasoning to synthesize conflicting source material. Mistral Large 2 (123B dense parameters) is chosen. At FP8, 123B weights require ~125GB VRAM. Distributed across 8x H200 GPUs (15.6GB/GPU weights), leaving over 110GB per GPU for the immense 131k prompt prefill activations.',
       memory: 'Web research is prefill-dominated (85% prompt, 15% synthesis). Because each search hop scrapes new, unpredictable web URLs, Automatic Prefix Caching drops to 15% (only the base system prompt is reused). Chunked prefill is mandatory to prevent massive 100k-token web dumps from stalling active decode streams.',
-      ancillary: 'RAG uses NV-Embed-v2 (Mistral-7B based) with 1,024-token chunking to maintain semantic coherence across long web articles, backed by Milvus. Storage uses VAST Universal with 8+3 erasure coding. Granite Guardian 3 8B enforces input/output hallucination and safety validation.',
+      ancillary: 'RAG uses NV-Embed-v2 (Mistral-7B based) with 1,024-token chunking to maintain semantic coherence across long web articles, backed by Milvus. Storage uses VAST Universal with 8+3 erasure coding. Granite Guardian 3 8B enforces input/output hallucination and safety validation. New model versions roll out via a Canary Release validating against 10% of live traffic before full promotion.',
       tradeoff: 'Employs a frontier 123B model with low cache hit rates, prioritizing multi-source synthesis quality over high stream concurrency.',
       modelSelection: 'Mistral Large 2 (123B) provides the high intellectual capacity needed to synthesize conflicting source material, resolve ambiguity, and write authoritative, publication-grade research reports.',
       modelAlternatives: [
@@ -1154,12 +1282,24 @@ const PRESET_CONTENT = {
       storage: 'VAST Data Universal Storage',
       durability: 'Replicated 2x',
       hadr: 'Warm Standby',
-      ingress: 'API Gateway (High-throughput)'
+      ingress: 'API Gateway (High-throughput)',
+      mlops: 'Canary Release (10% Traffic)'
+    },
+    complianceFacts: {
+      workloadType: 'inference',
+      haDrEnabled: true,
+      haDrTierId: 'warm-standby',
+      ingressEnabled: true,
+      ingressTierId: 'api-gateway',
+      guardrailsEnabled: true,
+      migEnabled: false,
+      mlopsEnabled: true,
+      mlopsStrategyId: 'canary-release',
     },
     rationale: {
       silicon: 'In planner-worker architectures, the worker swarm (not the planner) dictates 95% of datacenter infrastructure sizing. Sizing for 1,024 concurrent worker calls using $35k H100s would require millions in capex. The calculator provisions cost-effective Cisco C245 servers with L40S PCIe GPUs, running the workers at TP=1 and scaling horizontally via Ray Core and Data Parallelism (DP).',
       memory: 'Worker tasks are concise (8k context) with moderate 50% prefix caching (shared agent role instructions). Auto-DP scales the replica count to ensure that each worker GPU handles only 32 to 64 streams, preventing memory starvation.',
-      ancillary: 'Orchestration runs on Ray cluster management. Ingress requires an enterprise API Gateway to manage the sudden burst of 1,000+ internal micro-agent requests. Storage uses VAST with fast model load times (30 seconds) to facilitate dynamic worker autoscaling.',
+      ancillary: 'Orchestration runs on Ray cluster management. Ingress requires an enterprise API Gateway to manage the sudden burst of 1,000+ internal micro-agent requests. Storage uses VAST with fast model load times (30 seconds) to facilitate dynamic worker autoscaling. New model versions roll out via a Canary Release validating against 10% of live traffic before full promotion.',
       tradeoff: 'Decouples orchestration into a two-tier hardware strategy: cheap, dense L40S GPUs handle the 1,024-worker swarm, leaving complex planning to an isolated high-end instance.',
       modelSelection: 'LLaMA 3.1 8B provides sub-20ms per token decode speeds for high-volume, simple subtasks (summarize snippet, extract date, validate email), enabling massive swarm concurrency via Ray.',
       modelAlternatives: [
@@ -1239,13 +1379,25 @@ const PRESET_CONTENT = {
       protocol: '400G RoCEv2',
       storage: 'NetApp AFF A-Series',
       durability: 'Erasure Coded (8+3)',
-      hadr: 'Multi-AZ',
-      ingress: 'Software LB'
+      hadr: 'Disabled (Internal Tool)',
+      ingress: 'Disabled (Internal Tool)',
+      mlops: 'Disabled (Internal Tool)'
+    },
+    complianceFacts: {
+      workloadType: 'inference',
+      haDrEnabled: false,
+      haDrTierId: 'multi-az',
+      ingressEnabled: false,
+      ingressTierId: 'software-lb',
+      guardrailsEnabled: false,
+      migEnabled: false,
+      mlopsEnabled: false,
+      mlopsStrategyId: 'canary-release',
     },
     rationale: {
       silicon: 'Generating production SQL over 50-table schemas requires 70B-class reasoning to prevent hallucinated joins and syntax errors. Cisco C885A with 8x H200 provides the necessary TP=8 NVLink fabric to deliver snappy query synthesis for 48 concurrent business analysts.',
       memory: '16k context window comfortably holds DDL table schemas, column foreign-key relationships, and sample query rows. 30% APC ratio caches the enterprise data catalog schema across iterative user query refinements.',
-      ancillary: 'Storage uses NetApp AFF with 8+3 erasure coding. Guardrails are disabled because database access is governed strictly by relational database row-level security (RLS) and database permissions rather than LLM text filters.',
+      ancillary: 'Storage uses NetApp AFF with 8+3 erasure coding. Guardrails are disabled because database access is governed strictly by relational database row-level security (RLS) and database permissions rather than LLM text filters. MLOps validation pools are disabled as this internal tool has no live-traffic rollout process.',
       tradeoff: 'Balances schema context capacity (16k) and 48-stream concurrency against a single-node H200 footprint.',
       modelSelection: 'LLaMA 3.3 70B demonstrates deep semantic comprehension of SQL joins, subqueries, dialect specifics (PostgreSQL, Snowflake, BigQuery), and schema ambiguity, preventing costly Cartesian products.',
       modelAlternatives: [
@@ -1326,12 +1478,24 @@ const PRESET_CONTENT = {
       storage: 'WekaFS NVMe Parallel Filesystem',
       durability: 'Erasure Coded (10+4)',
       hadr: 'Disabled (Checkpoint Resume)',
-      ingress: 'Internal Compute Fabric'
+      ingress: 'Internal Compute Fabric',
+      mlops: 'Disabled (Checkpoint Resume)'
+    },
+    complianceFacts: {
+      workloadType: 'training',
+      haDrEnabled: false,
+      haDrTierId: 'multi-az',
+      ingressEnabled: false,
+      ingressTierId: 'software-lb',
+      guardrailsEnabled: false,
+      migEnabled: false,
+      mlopsEnabled: false,
+      mlopsStrategyId: 'canary-release',
     },
     rationale: {
       silicon: 'Pretraining a 405B frontier model from scratch requires $10^{25}$ FLOPs. Populated with 1,024 NVIDIA Blackwell B200 GPUs (180GB HBM3e, 8.0 TB/s bandwidth) across 128 HGX chassis. Intra-node TP is set to TP=8 across 1.8 TB/s NVLink 5. Inter-node scaling uses DP=128 with ZeRO-3 parameter sharding over 3.2 Tbps Quantum-2 InfiniBand fabrics.',
       memory: 'Full FP16 pretraining state for 405B requires ~6,480GB of memory (weights + gradients + optimizer states). Distributed across 1,024 GPUs, each GPU holds just 6.3GB of model state, leaving over 150GB of HBM3e for massive batch activation tensors and FlashAttention-3 buffers.',
-      ancillary: 'Storage demands WekaFS NVMe All-Flash parallel filesystem, delivering tens of terabytes/sec of aggregate write bandwidth to flush multi-terabyte checkpoints in under 180 seconds without stalling the training run. Erasure coding 10+4 provides maximum resilience across thousands of NVMe drives. Facility design assumes high-density liquid cooling with PUE of 1.15 and $150/kW colocation economics.',
+      ancillary: 'Storage demands WekaFS NVMe All-Flash parallel filesystem, delivering tens of terabytes/sec of aggregate write bandwidth to flush multi-terabyte checkpoints in under 180 seconds without stalling the training run. Erasure coding 10+4 provides maximum resilience across thousands of NVMe drives. Facility design assumes high-density liquid cooling with PUE of 1.15 and $150/kW colocation economics. MLOps rollout validation does not apply to pretraining.',
       tradeoff: 'Pure, uncompromised compute density and network bisection bandwidth. The entire architecture is optimized for sustained Model FLOPs Utilization (MFU > 45%) across 1,000+ GPUs.',
       modelSelection: 'LLaMA 3.1 405B is the premier open-weights dense flagship model in existence (405.0B parameters, 126 layers, 16,384 hidden dimension). Training at 1,024+ GPU scale requires massive InfiniBand bisection and WekaFS parallel storage.',
       modelAlternatives: [
@@ -1424,12 +1588,24 @@ const PRESET_CONTENT = {
       storage: 'WekaFS NVMe Parallel Filesystem',
       durability: 'Erasure Coded (10+4)',
       hadr: 'Multi-Site Active-Active',
-      ingress: 'Global CDN Edge Network'
+      ingress: 'Global CDN Edge Network',
+      mlops: 'Blue/Green Cutover (Full Duplicate Pool)'
+    },
+    complianceFacts: {
+      workloadType: 'inference',
+      haDrEnabled: true,
+      haDrTierId: 'multi-site-active-active',
+      ingressEnabled: true,
+      ingressTierId: 'cdn-edge',
+      guardrailsEnabled: true,
+      migEnabled: false,
+      mlopsEnabled: true,
+      mlopsStrategyId: 'blue-green-cutover',
     },
     rationale: {
       silicon: 'DeepSeek R1 MoE has 671B total parameters, but only 37B active parameters per token. At FP8, all 671GB of weights must remain resident in HBM. Deployed on NVIDIA HGX B200 nodes (180GB VRAM per GPU). Because TP=8 provides 1,440GB of VRAM per node, the entire 671B model fits comfortably on a single 8-GPU chassis, eliminating the need for high-latency Pipeline Parallelism (PP=1)!',
       memory: 'DeepSeek Multi-Head Latent Attention (MLA) is the secret weapon for 4,096 concurrency. By compressing KV representations into a 576-element latent space, MLA achieves a 4.66x memory reduction compared to standard GQA. 4,096 concurrent 32k streams can be served with a fraction of the Data Parallel replicas that a standard model would require.',
-      ancillary: 'Ingress uses a Global CDN Edge network to terminate TLS and TCP handshakes at edge PoPs close to users worldwide, slashing initial connection overhead. Storage uses WekaFS for rapid sub-60-second node recovery. HA/DR uses Multi-Site Active-Active to guarantee five-nines availability across geographic regions.',
+      ancillary: 'Ingress uses a Global CDN Edge network to terminate TLS and TCP handshakes at edge PoPs close to users worldwide, slashing initial connection overhead. Storage uses WekaFS for rapid sub-60-second node recovery. HA/DR uses Multi-Site Active-Active to guarantee five-nines availability across geographic regions. Model updates use a Blue/Green Cutover, validating a full-scale duplicate pool before an instant traffic flip -- the partial-rollout risk of a canary is unacceptable for a multi-tenant MaaS platform serving thousands of API consumers.',
       tradeoff: 'Accepts massive cluster VRAM commitment (holding 671B weights per replica) to unlock the revolutionary token economics and low per-token compute of DeepSeek MoE.',
       modelSelection: 'DeepSeek R1 / V3 revolutionizes public Model-as-a-Service economics. With 671B total weights and 37B active parameters, it provides frontier reasoning at 1/5th the compute cost of dense models.',
       modelAlternatives: [
@@ -1509,13 +1685,25 @@ const PRESET_CONTENT = {
       protocol: 'Cisco Nexus 400G RoCEv2',
       storage: 'WekaFS NVMe All-Flash',
       durability: 'Erasure Coded (10+4)',
-      hadr: 'Multi-AZ',
-      ingress: 'Software LB'
+      hadr: 'Disabled (Architecture Showcase)',
+      ingress: 'Disabled (Architecture Showcase)',
+      mlops: 'Disabled (Architecture Showcase)'
+    },
+    complianceFacts: {
+      workloadType: 'inference',
+      haDrEnabled: false,
+      haDrTierId: 'multi-az',
+      ingressEnabled: false,
+      ingressTierId: 'software-lb',
+      guardrailsEnabled: false,
+      migEnabled: false,
+      mlopsEnabled: false,
+      mlopsStrategyId: 'canary-release',
     },
     rationale: {
       silicon: 'Colocated serving causes severe phase interference: a sudden 32k prompt floods the Tensor Cores, stalling active token generation for ongoing users. LLM-D completely physically decouples the cluster into two distinct hardware tiers: (1) Prefill Pool: 2x NVIDIA B200 nodes delivering extreme dense FP8 Tensor FLOPs to process prompts in milliseconds. (2) Decode Pool: 8x NVIDIA H200 nodes delivering massive aggregate HBM3e capacity (9,024GB) and bandwidth to host and generate tokens for 1,024 concurrent users without jitter.',
       memory: 'Prefill nodes maintain zero persistent KV cache—they generate the attention vectors for the prompt and immediately stream the KV chunk across the network. Decode nodes hold the persistent KV cache across the full 32k context window.',
-      ancillary: 'Networking is the critical system bus: Cisco Nexus 9000 400G RoCEv2 fabric streams the KV cache directly between prefill and decode GPUs via RDMA. Overlapped KV transfer is enabled, transmitting layers 1 to L-1 concurrently with compute. FP8 KV cache cuts network transfer payload by 50%, reducing transfer latency to under 9ms.',
+      ancillary: 'Networking is the critical system bus: Cisco Nexus 9000 400G RoCEv2 fabric streams the KV cache directly between prefill and decode GPUs via RDMA. Overlapped KV transfer is enabled, transmitting layers 1 to L-1 concurrently with compute. FP8 KV cache cuts network transfer payload by 50%, reducing transfer latency to under 9ms. MLOps validation pools are disabled for this architecture showcase.',
       tradeoff: 'Introduces network-dependent KV streaming complexity in exchange for total isolation of compute and memory, delivering perfectly stable decode latency and near-zero jitter SLAs at massive scale.',
       modelSelection: 'LLaMA 3.1 405B demonstrates the peak utility of LLM-D. In colocated serving, a 405B dense prompt prefill consumes immense Tensor Core FLOPs, completely stalling decode streams. Decoupling into B200 prefill and H200 decode achieves total SLA stabilization.',
       modelAlternatives: [
@@ -1953,12 +2141,105 @@ const CORE_CONTENT = {
         </p>
 
         <DecisionCallout title="The Public Cloud Break-Even Crossover">
-          Public cloud APIs for 70B+ models charge ~$2.50 to $10.00 per 1M tokens. For intermittent, unpredictable traffic (duty cycle &lt; 10%), public cloud APIs are financially superior because you pay zero idle amortized cost. However, once an enterprise reaches sustained utilization (&gt; 25% duty cycle or &ge; 16 continuous concurrent streams), an on-premise 8x H200 cluster slashes unit token costs to <strong>$0.25 to $0.65 per 1M tokens</strong>—yielding a 75% to 90% TCO reduction alongside guaranteed data privacy and zero egress charges.
+          Public cloud APIs for 70B+ models charge ~$2.50 to $10.00 per 1M tokens. For intermittent, unpredictable traffic (duty cycle &lt; 10%), public cloud APIs are financially superior because you pay zero idle amortized cost. However, once an enterprise reaches sustained utilization (&gt; 25% duty cycle or &ge; 16 continuous concurrent streams), an on-premise 8x H200 cluster slashes unit token costs to <strong>$0.25 to $0.65 per 1M tokens</strong>—yielding a 75% to 90% TCO reduction alongside guaranteed data privacy and no per-token API markup on egress (raw bandwidth costs still apply — see the Ingress &amp; Edge sizing tab).
+        </DecisionCallout>
+      </div>
+    )
+  },
+  'chap-10-security': {
+    title: 'Security, Compliance & Attestation Controls',
+    subtitle: 'How the architectural choices this calculator already sizes map onto common compliance-framework control domains -- and where this tool stops.',
+    introduction: 'Every enterprise or regulated deployment eventually has to answer "does this architecture satisfy SOC 2 / HIPAA / PCI-DSS / FedRAMP / ISO 27001 / GDPR?" This calculator cannot answer that question directly -- certification requires audited policies, procedures, and evidence that no sizing tool can produce. What it can do is show, honestly, which control domains a given hardware/software configuration already addresses (because a tab in this calculator sizes it), which it only partially addresses, and which are explicit gaps or entirely out of scope. Treat this chapter as a starting checklist for a conversation with your compliance and security teams, not as a substitute for one.',
+    content: (
+      <div className="space-y-6 text-[15px] text-zinc-300 leading-relaxed">
+        <p>
+          Seven control domains recur across the frameworks most private-AI deployments care about. Each one is tied to a specific tab
+          in this calculator (or explicitly marked out of scope), so a preset's posture is <strong>derived</strong> from the same
+          configuration already sized elsewhere -- not a separate, hand-maintained claim that could drift out of sync.
+        </p>
+
+        <div className="overflow-x-auto rounded-lg border border-zinc-800">
+          <table className="w-full text-xs text-left border-collapse">
+            <thead className="bg-zinc-900 text-zinc-400 uppercase text-[11px] tracking-wide">
+              <tr>
+                <th className="p-3">Control Domain</th>
+                <th className="p-3">What It Evaluates</th>
+                <th className="p-3">Sized By</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-zinc-800/70">
+              {CONTROL_DOMAINS.map((d) => (
+                <tr key={d.id}>
+                  <td className="p-3 font-semibold text-zinc-200">{d.name}</td>
+                  <td className="p-3 text-zinc-400">{d.description}</td>
+                  <td className="p-3 text-sky-400">{d.calculatorTieIn}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        <h3 className="text-xl font-bold text-white mt-8 mb-3">1. Frameworks Referenced</h3>
+        <p>
+          This chapter's checklists reference six commonly-encountered frameworks by name so the mapping is concrete, not to claim
+          certification against any of them:
+        </p>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          {COMPLIANCE_FRAMEWORKS.map((f) => (
+            <div key={f.id} className="p-3 bg-zinc-900 border border-zinc-800 rounded-lg text-xs">
+              <span className="font-semibold text-zinc-200 block">{f.name}</span>
+              <span className="text-zinc-400">{f.focus}</span>
+            </div>
+          ))}
+        </div>
+
+        <h3 className="text-xl font-bold text-white mt-8 mb-3">2. Posture Levels</h3>
+        <ul className="list-disc pl-5 space-y-2 text-zinc-300 text-sm">
+          <li><strong className="text-emerald-400">Strong:</strong> the currently-selected configuration directly addresses this control domain.</li>
+          <li><strong className="text-amber-400">Partial:</strong> a component is sized, but it doesn't fully satisfy the control on its own (e.g. a load balancer terminates TLS but doesn't enforce API-level auth).</li>
+          <li><strong className="text-rose-400">Gap:</strong> nothing in the current configuration addresses this control domain -- it would need to be added, either by enabling an existing tab (MIG, Guardrails, Ingress, HA/DR, MLOps) or by a layer outside this calculator entirely.</li>
+          <li><strong className="text-zinc-400">Not applicable:</strong> the control domain doesn't apply to this workload shape (e.g. tenant isolation for a single offline training job).</li>
+          <li><strong className="text-zinc-500">Out of scope:</strong> this calculator does not size the control at all, regardless of configuration (encryption is the only domain in this category today).</li>
+        </ul>
+
+        <DecisionCallout title="A Sizing Tool Is Not an Auditor">
+          Every preset's compliance checklist in this guide is generated from the same enable/disable flags and tier selections already visible in the calculator's own tabs -- HA/DR tier, ingress tier, guardrails on/off, MIG on/off, MLOps strategy. It reflects architectural capability, not certified compliance: encryption, key management, IAM policy, audit-log retention, and dozens of other procedural controls that real certifications require are entirely outside what any hardware sizing calculator can verify.
         </DecisionCallout>
       </div>
     )
   }
 };
+
+const STATUS_STYLES = {
+  [STATUS.STRONG]: { label: 'Strong', className: 'bg-emerald-950/40 text-emerald-400 border-emerald-800/50' },
+  [STATUS.PARTIAL]: { label: 'Partial', className: 'bg-amber-950/40 text-amber-400 border-amber-800/50' },
+  [STATUS.GAP]: { label: 'Gap', className: 'bg-rose-950/40 text-rose-400 border-rose-800/50' },
+  [STATUS.NOT_APPLICABLE]: { label: 'N/A', className: 'bg-zinc-800/60 text-zinc-400 border-zinc-700/60' },
+  [STATUS.OUT_OF_SCOPE]: { label: 'Out of Scope', className: 'bg-zinc-800/40 text-zinc-500 border-zinc-700/50' },
+};
+
+function ComplianceChecklist({ facts }) {
+  const results = evaluateControlDomains(facts);
+  return (
+    <div className="grid grid-cols-1 gap-2.5">
+      {results.map((r) => {
+        const domain = CONTROL_DOMAINS.find(d => d.id === r.domainId);
+        const style = STATUS_STYLES[r.status] || STATUS_STYLES[STATUS.GAP];
+        return (
+          <div key={r.domainId} className="p-3.5 bg-zinc-900/90 border border-zinc-800 rounded-xl text-xs space-y-1.5">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="font-semibold text-zinc-200 text-sm">{domain?.name || r.domainId}</span>
+              <span className={`inline-flex items-center px-2 py-0.5 rounded text-[11px] font-mono border ${style.className}`}>
+                {style.label}
+              </span>
+            </div>
+            <p className="text-zinc-400 leading-relaxed">{r.note}</p>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 // ──────────────────────────────── MAIN COMPONENT ────────────────────────────────
 
@@ -2272,6 +2553,10 @@ export function GlossaryPage({ onBack }) {
                           <span className="font-semibold text-zinc-200">{preset.specs.hadr}</span>
                           <span className="text-zinc-400 block font-mono text-[11px]">{preset.specs.ingress}</span>
                         </div>
+                        <div>
+                          <span className="text-zinc-500 block text-[11px] uppercase font-mono">MLOps Rollout Strategy</span>
+                          <span className="font-semibold text-zinc-200">{preset.specs.mlops}</span>
+                        </div>
                       </div>
 
                       {/* Rationales */}
@@ -2335,12 +2620,27 @@ export function GlossaryPage({ onBack }) {
                           )}
                         </div>
 
+                        {/* Security & Compliance Posture */}
+                        {preset.complianceFacts && (
+                          <div>
+                            <h3 className="text-base font-bold text-white mb-3 flex items-center gap-2">
+                              <ShieldCheck className="w-4 h-4 text-sky-400" />
+                              5. Security &amp; Compliance Posture
+                            </h3>
+                            <p className="mb-4 text-zinc-400 text-sm">
+                              Derived from this preset's own HA/DR, Ingress, Guardrails, MIG, and MLOps configuration -- see{' '}
+                              <span className="text-sky-400">Security, Compliance &amp; Attestation Controls</span> for what each posture level means and where this calculator's coverage stops.
+                            </p>
+                            <ComplianceChecklist facts={preset.complianceFacts} />
+                          </div>
+                        )}
+
                         {/* Common Anti-Patterns & Failure Modes */}
                         {preset.antiPatterns && preset.antiPatterns.length > 0 && (
                           <div>
                             <h3 className="text-base font-bold text-white mb-3 flex items-center gap-2">
                               <AlertTriangle className="w-4 h-4 text-amber-400" />
-                              5. Common Anti-Patterns &amp; &quot;What Breaks First&quot;
+                              6. Common Anti-Patterns &amp; &quot;What Breaks First&quot;
                             </h3>
                             <div className="grid grid-cols-1 gap-3">
                               {preset.antiPatterns.map((item, idx) => (
@@ -2362,7 +2662,7 @@ export function GlossaryPage({ onBack }) {
                           <div>
                             <h3 className="text-base font-bold text-white mb-3 flex items-center gap-2">
                               <Terminal className="w-4 h-4 text-sky-400" />
-                              6. Production Engine Launch Recipe ({preset.engineRecipe.framework})
+                              7. Production Engine Launch Recipe ({preset.engineRecipe.framework})
                             </h3>
                             <div className="bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden text-xs">
                               <div className="bg-zinc-950 px-4 py-2 border-b border-zinc-800 flex items-center justify-between">

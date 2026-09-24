@@ -40,7 +40,9 @@ describe('1. Model Weight Memory Calculations', () => {
     // Across TP=8, per GPU weights = 141.2 / 8 = 17.65 GB
     assert.equal(Math.round(resFp16.memory.perGpuWeightsGb * 10) / 10, 17.7);
 
-    // FP8: 70.6B params * 1 byte + 4.20 GB unquantized BF16 heads = 74.8 GB // updated: S4
+    // FP8: the ~2.10B embedding+lm_head params are re-priced at BF16 (4.20 GB), and removed
+    // from the quantized bucket first so they aren't billed at both rates:
+    // (70.6B - 2.10B) * 1 byte + 2.10B * 2 bytes = 72.7 GB
     const resFp8 = calculateInfra({
       workloadType: 'inference',
       model: llama70b,
@@ -52,9 +54,9 @@ describe('1. Model Weight Memory Calculations', () => {
       tp: 8, pp: 1, dp: 1,
       networkProtocol: 'rocev2'
     });
-    assert.equal(Math.round(resFp8.memory.weightTotalGb * 10) / 10, 74.8); // updated: S4
+    assert.equal(Math.round(resFp8.memory.weightTotalGb * 10) / 10, 72.7);
 
-    // INT4 AWQ/GPTQ: 70.6B params * 0.53 bytes + 4.20 GB unquantized BF16 heads = 41.6 GB // updated: S4
+    // INT4 AWQ/GPTQ: (70.6B - 2.10B) * 0.53 bytes + 2.10B * 2 bytes = 40.5 GB
     const resInt4 = calculateInfra({
       workloadType: 'inference',
       model: llama70b,
@@ -66,9 +68,9 @@ describe('1. Model Weight Memory Calculations', () => {
       tp: 8, pp: 1, dp: 1,
       networkProtocol: 'rocev2'
     });
-    assert.equal(Math.round(resInt4.memory.weightTotalGb * 10) / 10, 41.6); // updated: S4
+    assert.equal(Math.round(resInt4.memory.weightTotalGb * 10) / 10, 40.5);
 
-    // NVFP4: 70.6B params * 0.5625 bytes + 4.20 GB unquantized BF16 heads = 43.9 GB // updated: S4
+    // NVFP4: (70.6B - 2.10B) * 0.5625 bytes + 2.10B * 2 bytes = 42.7 GB
     const resNvfp4 = calculateInfra({
       workloadType: 'inference',
       model: llama70b,
@@ -80,7 +82,7 @@ describe('1. Model Weight Memory Calculations', () => {
       tp: 8, pp: 1, dp: 1,
       networkProtocol: 'rocev2'
     });
-    assert.equal(Math.round(resNvfp4.memory.weightTotalGb * 10) / 10, 43.9); // updated: S4
+    assert.equal(Math.round(resNvfp4.memory.weightTotalGb * 10) / 10, 42.7);
   });
 
   it('correctly loads ALL expert weights for MoE models into VRAM (not just active params)', () => {
@@ -101,8 +103,8 @@ describe('1. Model Weight Memory Calculations', () => {
       networkProtocol: 'rocev2'
     });
 
-    // In FP8, 671B params + 3.71 GB unquantized BF16 heads = 674.7 GB in VRAM! // updated: S4
-    assert.equal(Math.round(res.memory.weightTotalGb * 10) / 10, 674.7); // updated: S4
+    // In FP8: (671B - 1.85B head params) * 1 byte + 1.85B * 2 bytes (BF16 heads) = 672.9 GB in VRAM!
+    assert.equal(Math.round(res.memory.weightTotalGb * 10) / 10, 672.9);
     assert.equal(res.isMoe, true);
     assert.equal(res.activeParams, 37.0);
   });
@@ -958,6 +960,35 @@ describe('7. Datacenter BOM, Facilities & Rail-Optimized Network', () => {
     assert.equal(res.network.uplinkCables, 0); // updated: C3
     assert.equal(res.network.downlinkCables, 32); // updated: C3
     assert.ok(res.facility.totalRacks >= 1);
+  });
+
+  it('bisection bandwidth equals N x per-NIC speed for a 1:1 non-blocking fabric (not 2x)', () => {
+    // True bisection bandwidth splits N nodes into two halves of N/2; only N/2 links cross
+    // the cut, each counted full-duplex (x2), giving (N/2) * speed * 2 = N * speed. It must
+    // NOT equal the cluster's total aggregate full-duplex NIC bandwidth (N * speed * 2),
+    // which is a different (larger) number entirely.
+    const llama70b = getModel('llama3-70b');
+    const h100 = getGpu('h100-sxm');
+    const platform = getPlatform('cisco-c885a-h100');
+
+    const res = calculateInfra({
+      workloadType: 'inference',
+      model: llama70b,
+      precision: getPrecision('fp8'),
+      contextLength: 4096,
+      concurrency: 4,
+      gpu: h100,
+      platform,
+      tp: 8, pp: 4, dp: 1, // 32 GPUs
+      networkProtocol: 'rocev2',
+      pue: 1.35
+    });
+
+    const expectedTbps = (res.network.totalComputeNics * res.network.nicSpeedGbps) / 1000;
+    assert.equal(res.network.totalClusterBisectionTbps, expectedTbps);
+    assert.equal(res.network.totalComputeNics, 32);
+    assert.equal(res.network.nicSpeedGbps, 400);
+    assert.equal(res.network.totalClusterBisectionTbps, 12.8); // 32 * 400 / 1000, NOT 25.6
   });
 
   it('C3: sizes 32 nodes (256 GPUs) to 8 leaves, 4 spines, 256 uplink cables', () => {

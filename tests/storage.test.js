@@ -174,6 +174,23 @@ describe('3. Inference Storage Sizing', () => {
     assert.ok(withCorpus.requiredCapacityTb > noCorpus.requiredCapacityTb);
     assert.equal(withCorpus.requiredThroughputGBs, noCorpus.requiredThroughputGBs);
   });
+
+  it('KV offload throughput equals cluster gen tok/s x real per-token KV bytes (dimensionally correct)', () => {
+    // Regression test: an earlier version reverse-derived "bytes per token" from
+    // kvCacheTotalGb (an aggregate, multi-stream total) divided by promptTokens (a single
+    // stream's prompt length) -- two numbers that don't share a denominator. It must use
+    // calculateInfra's own bytesPerTokenSeq (K+V bytes for one token) directly instead.
+    const tier = getTier('vast-universal');
+    const storage = calculateStorage({
+      workloadType: 'inference', infraResults, storageTier: tier,
+      modelRepoVersionCount: 2, modelRepoTargetLoadTimeSec: 120, enableKvOffload: true,
+    });
+    const clusterGenTokPerSec = infraResults.throughput.batchThroughputTps;
+    const expectedThroughputGBs = (clusterGenTokPerSec * infraResults.memory.bytesPerTokenSeq) / 1e9;
+    const kvEntry = storage.breakdown.find(b => b.label === 'KV cache disk/CXL offload');
+    assert.ok(kvEntry, 'KV offload breakdown entry must exist');
+    assert.ok(kvEntry.note.includes(expectedThroughputGBs.toFixed(2)));
+  });
 });
 
 describe('4. RU Provisioning & Fit Warnings', () => {

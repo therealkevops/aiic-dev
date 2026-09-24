@@ -140,8 +140,12 @@ export function recommendSharding(params) {
     // Model weights (at selected precision)
     // S4: When weights are quantised, add embedding and lm_head weights at BF16: 2 × vocab × hidden × 2 bytes
     const isQuantized = precision.isQuantized != null ? precision.isQuantized : (precision.bytesPerParam < 2.0);
-    const unquantizedHeadBytes = isQuantized ? (2 * vocab * hiddenDim * 2) : 0;
-    const weightGb = (totalParams * 1e9 * precision.bytesPerParam + unquantizedHeadBytes) / 1e9;
+    // S4 fix: the head params' bytes were being counted twice (once at the quantized
+    // rate via totalParams, again at BF16 via unquantizedHeadBytes) -- subtract them
+    // out of the quantized term before re-pricing them at BF16.
+    const headParamsCount = isQuantized ? (2 * vocab * hiddenDim) : 0;
+    const unquantizedHeadBytes = headParamsCount * 2;
+    const weightGb = ((totalParams * 1e9 - headParamsCount) * precision.bytesPerParam + unquantizedHeadBytes) / 1e9;
 
     // KV Cache with configurable precision (FP16: 2B, FP8: 1B, INT4: 0.5B)
     let kvBytesPerElement = 2.0;
@@ -180,8 +184,12 @@ export function recommendSharding(params) {
   } else {
     // Training mode
     const isQuantized = precision.isQuantized != null ? precision.isQuantized : (precision.bytesPerParam < 2.0);
-    const unquantizedHeadBytes = isQuantized ? (2 * vocab * hiddenDim * 2) : 0;
-    const weightGb = (totalParams * 1e9 * precision.bytesPerParam + unquantizedHeadBytes) / 1e9;
+    // S4 fix: the head params' bytes were being counted twice (once at the quantized
+    // rate via totalParams, again at BF16 via unquantizedHeadBytes) -- subtract them
+    // out of the quantized term before re-pricing them at BF16.
+    const headParamsCount = isQuantized ? (2 * vocab * hiddenDim) : 0;
+    const unquantizedHeadBytes = headParamsCount * 2;
+    const weightGb = ((totalParams * 1e9 - headParamsCount) * precision.bytesPerParam + unquantizedHeadBytes) / 1e9;
 
     // S6: FlashAttention activation memory per layer
     const s = contextLength;
@@ -295,8 +303,12 @@ export function recommendSharding(params) {
     const requiredKvForC = (bytesPerTokenSeq * effectiveTotalTokens) / 1e9;
 
     const isQuantized = precision.isQuantized != null ? precision.isQuantized : (precision.bytesPerParam < 2.0);
-    const unquantizedHeadBytes = isQuantized ? (2 * vocab * hiddenDim * 2) : 0;
-    const weightGb = (totalParams * 1e9 * precision.bytesPerParam + unquantizedHeadBytes) / 1e9;
+    // S4 fix: the head params' bytes were being counted twice (once at the quantized
+    // rate via totalParams, again at BF16 via unquantizedHeadBytes) -- subtract them
+    // out of the quantized term before re-pricing them at BF16.
+    const headParamsCount = isQuantized ? (2 * vocab * hiddenDim) : 0;
+    const unquantizedHeadBytes = headParamsCount * 2;
+    const weightGb = ((totalParams * 1e9 - headParamsCount) * precision.bytesPerParam + unquantizedHeadBytes) / 1e9;
 
     const ppImbalanceFactor = recommendedPp > 1 ? CONFIG.ppImbalance : 1.0;
     const perGpuWeightGb = (weightGb / (recommendedTp * recommendedPp)) * ppImbalanceFactor;
@@ -452,8 +464,12 @@ export function calculateInfra(config) {
   if (workloadType === "inference") {
     // S4: When weights are quantised, add embedding and lm_head weights at BF16: 2 × vocab × hidden × 2 bytes
     const isQuantized = precision.isQuantized != null ? precision.isQuantized : (precision.bytesPerParam < 2.0);
-    const unquantizedHeadBytes = isQuantized ? (2 * vocab * hiddenDim * 2) : 0;
-    weightMemoryTotalGb = (totalParams * 1e9 * precision.bytesPerParam + unquantizedHeadBytes) / 1e9;
+    // S4 fix: the head params' bytes were being counted twice (once at the quantized
+    // rate via totalParams, again at BF16 via unquantizedHeadBytes) -- subtract them
+    // out of the quantized term before re-pricing them at BF16.
+    const headParamsCount = isQuantized ? (2 * vocab * hiddenDim) : 0;
+    const unquantizedHeadBytes = headParamsCount * 2;
+    weightMemoryTotalGb = ((totalParams * 1e9 - headParamsCount) * precision.bytesPerParam + unquantizedHeadBytes) / 1e9;
 
     // KV Cache with configurable precision (FP16: 2B, FP8: 1B, INT4: 0.5B)
     let kvBytesPerElement = 2.0;
@@ -498,8 +514,12 @@ export function calculateInfra(config) {
   } else {
     // Training mode
     const isQuantized = precision.isQuantized != null ? precision.isQuantized : (precision.bytesPerParam < 2.0);
-    const unquantizedHeadBytes = isQuantized ? (2 * vocab * hiddenDim * 2) : 0;
-    weightMemoryTotalGb = (totalParams * 1e9 * precision.bytesPerParam + unquantizedHeadBytes) / 1e9;
+    // S4 fix: the head params' bytes were being counted twice (once at the quantized
+    // rate via totalParams, again at BF16 via unquantizedHeadBytes) -- subtract them
+    // out of the quantized term before re-pricing them at BF16.
+    const headParamsCount = isQuantized ? (2 * vocab * hiddenDim) : 0;
+    const unquantizedHeadBytes = headParamsCount * 2;
+    weightMemoryTotalGb = ((totalParams * 1e9 - headParamsCount) * precision.bytesPerParam + unquantizedHeadBytes) / 1e9;
 
     // S6: Activation memory for full SFT and LoRA, per layer (with FlashAttention)
     const s = contextLength;
@@ -761,7 +781,12 @@ export function calculateInfra(config) {
 
   // ── 4. Lossless Network Sizing (C3) ─────────────────────────────────────────
   const totalComputeNics          = totalGpus;
-  const totalClusterBisectionTbps = (totalComputeNics * nicSpeedGbps * 2) / 1000;
+  // True bisection bandwidth: splitting N nodes into two halves crosses N/2 links, each
+  // counted full-duplex (×2) -> (N/2) × speed × 2 = N × speed. The previous formula used
+  // N × speed × 2, which is the cluster's total aggregate full-duplex NIC bandwidth (a real
+  // number, just not what "bisection bandwidth" means) -- exactly 2x the correct value for
+  // this 1:1 non-blocking fabric.
+  const totalClusterBisectionTbps = (totalComputeNics * nicSpeedGbps) / 1000;
 
   const isPcieOrModular = (platform && platform.isModular) || gpu.interconnectType === "pcie" || platform?.interconnectType === "pcie";
 
@@ -1079,6 +1104,7 @@ export function calculateInfra(config) {
     memory: {
       weightTotalGb:      weightMemoryTotalGb,
       kvCacheTotalGb,
+      bytesPerTokenSeq,
       baselineKvGb,
       kvSavingsGb,
       kvPrecision,
@@ -1211,10 +1237,11 @@ export function calculateStorage(config) {
       // cluster's aggregate decode token rate.
       kvOffloadCapacityTb = ((memory.kvCacheTotalGb || 0) * 2) / 1000;
       const clusterGenTokPerSec = throughput?.batchThroughputTps || throughput?.tokensPerSecPerReplica || 0;
-      const bytesPerTokenApprox = memory.promptTokens > 0
-        ? ((memory.kvCacheTotalGb || 0) * 1e9) / Math.max(1, memory.promptTokens)
-        : 0;
-      kvOffloadThroughputGBs = (clusterGenTokPerSec * bytesPerTokenApprox) / 1e9;
+      // bytesPerTokenSeq (K+V bytes for one token, one full sequence's worth of layers/heads)
+      // is exported directly from calculateInfra -- use it as-is rather than reverse-deriving
+      // a "bytes per token" figure from kvCacheTotalGb (an aggregate, multi-stream total) and
+      // promptTokens (a single stream's prompt length), which don't share a denominator.
+      kvOffloadThroughputGBs = (clusterGenTokPerSec * (memory.bytesPerTokenSeq || 0)) / 1e9;
     }
 
     requiredCapacityTb = modelRepoCapacityTb + kvOffloadCapacityTb + (corpusSizeGb / 1000);

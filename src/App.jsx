@@ -396,18 +396,21 @@ ${workloadType === 'inference' && throughput ? `
     <div className="h-screen w-screen flex flex-col bg-zinc-950 text-zinc-100 antialiased overflow-hidden select-none-text">
       {/* Top Banner / Header (Compact, Fixed at top) */}
       <header className="px-4 py-2.5 bg-zinc-900/95 border-b border-zinc-800 shrink-0 z-10 flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <div className="p-1.5 bg-sky-500/10 border border-sky-500/30 rounded-lg text-sky-400">
+        <div className="flex items-center gap-3 min-w-0 flex-1">
+          <div className="p-1.5 bg-sky-500/10 border border-sky-500/30 rounded-lg text-sky-400 shrink-0">
             <Server className="w-5 h-5" />
           </div>
-          <div>
+          <div className="min-w-0">
             <h1 className="text-sm md:text-base font-semibold tracking-tight text-white flex items-center gap-2">
               <span>Private AI Infrastructure Sizing Calculator</span>
-              <span className="text-[10px] font-normal px-2 py-0.5 rounded-full bg-zinc-800 border border-zinc-700 text-zinc-300">
+              <span className="text-[10px] font-normal px-2 py-0.5 rounded-full bg-zinc-800 border border-zinc-700 text-zinc-300 shrink-0">
                 v2.0 · Cisco &amp; NVIDIA
               </span>
             </h1>
-            <p className="text-[11px] text-zinc-400 hidden sm:block">
+            <p
+              className="text-[11px] text-zinc-400 hidden sm:block truncate"
+              title={activePreset ? `${activePreset.label}: ${activePreset.description}` : undefined}
+            >
               {activePreset
                 ? <><strong className="text-sky-400 font-medium">{activePreset.label}:</strong> {activePreset.description}</>
                 : 'Compute, VRAM sharding, LLM-D disaggregation, and lossless RoCEv2/IB fabric sizing.'}

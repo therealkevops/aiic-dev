@@ -23,7 +23,8 @@ import {
   DollarSign,
   Grid2x2,
   Timer,
-  Search
+  Search,
+  Shield
 } from 'lucide-react';
 
 import { MODEL_PRESETS, PRECISION_OPTIONS } from './data/models';
@@ -34,7 +35,8 @@ import { GPU_PRICING, DEFAULT_GPU_PRICING, NVIDIA_AI_ENTERPRISE_USD_PER_GPU_PER_
 import { USE_CASE_PRESETS } from './data/presets';
 import { MIG_PROFILES } from './data/mig';
 import { EMBEDDING_MODELS, VECTOR_DB_PLATFORMS, DEFAULT_EMBEDDING_MODEL_ID, DEFAULT_VECTOR_DB_ID } from './data/rag';
-import { calculateInfra, calculateStorage, calculateCost, calculateMigConsolidation, calculateSla, calculateRag, recommendSharding } from './utils/calculator';
+import { GUARDRAIL_MODELS, DEFAULT_GUARDRAIL_MODEL_ID } from './data/guardrails';
+import { calculateInfra, calculateStorage, calculateCost, calculateMigConsolidation, calculateSla, calculateRag, calculateGuardrails, recommendSharding } from './utils/calculator';
 import { InfoHelper } from './components/InfoHelper';
 import { TopologyDiagram } from './components/TopologyDiagram';
 import { GlossaryPage } from './components/GlossaryPage';
@@ -161,6 +163,14 @@ export default function App() {
   const [ragQueryQps, setRagQueryQps] = useState(5);
   const [selectedVectorDbId, setSelectedVectorDbId] = useState(DEFAULT_VECTOR_DB_ID);
 
+  // --- Guardrails / Safety Classifier State ---
+  const [enableGuardrails, setEnableGuardrails] = useState(false);
+  const [selectedGuardModelId, setSelectedGuardModelId] = useState(DEFAULT_GUARDRAIL_MODEL_ID);
+  const [guardGpuId, setGuardGpuId] = useState('l40s-pcie');
+  const [guardGpuUnitPriceUsd, setGuardGpuUnitPriceUsd] = useState(GPU_PRICING['l40s-pcie'].estimatedUnitPriceUsd);
+  const [enableInputGuard, setEnableInputGuard] = useState(true);
+  const [enableOutputGuard, setEnableOutputGuard] = useState(true);
+
   // --- Use-case preset (header dropdown) ---
   const [selectedPresetId, setSelectedPresetId] = useState('');
 
@@ -229,6 +239,12 @@ export default function App() {
     setIngestionTargetHours(c.ingestionTargetHours);
     setRagQueryQps(c.ragQueryQps);
     setSelectedVectorDbId(c.selectedVectorDbId);
+    setEnableGuardrails(c.enableGuardrails);
+    setSelectedGuardModelId(c.selectedGuardModelId);
+    setGuardGpuId(c.guardGpuId);
+    setGuardGpuUnitPriceUsd(c.guardGpuUnitPriceUsd);
+    setEnableInputGuard(c.enableInputGuard);
+    setEnableOutputGuard(c.enableOutputGuard);
     setActiveInputTab('workload');
   };
 
@@ -472,7 +488,23 @@ export default function App() {
     });
   }, [enableRag, corpusSizeGb, textExtractionRatio, avgChunkTokens, embeddingModel, embeddingGpu, embeddingGpuUnitPriceUsd, ingestionTargetHours, ragQueryQps, vectorDbPlatform]);
 
-  // 7. Cost & TCO -- consumes the already-computed infra + storage + MIG + RAG results, prices nothing new
+  // 8. Guardrails -- input/output safety-classifier pool, the first Add-on Module alongside RAG.
+  // Same integration recipe as RAG: real standing infrastructure, feeds capex/power into Cost.
+  const guardModel = GUARDRAIL_MODELS.find(m => m.id === selectedGuardModelId) || GUARDRAIL_MODELS[0];
+  const guardGpu = GPU_CATALOG.find(g => g.id === guardGpuId) || GPU_CATALOG[0];
+  const guardrails = useMemo(() => {
+    return calculateGuardrails({
+      enabled: enableGuardrails,
+      infraResults: results,
+      guardModel,
+      guardGpu,
+      guardGpuUnitPriceUsd,
+      enableInputGuard,
+      enableOutputGuard,
+    });
+  }, [enableGuardrails, results, guardModel, guardGpu, guardGpuUnitPriceUsd, enableInputGuard, enableOutputGuard]);
+
+  // 9. Cost & TCO -- consumes the already-computed infra + storage + MIG + RAG + guardrails results, prices nothing new
   const decodeGpuId = memory.llmd?.decode?.gpu?.id;
   const decodeGpuPricing = decodeGpuId ? GPU_PRICING[decodeGpuId] : null;
   const cost = useMemo(() => {
@@ -500,6 +532,8 @@ export default function App() {
       itPowerKwOverride: (mig.eligible && mig.physicalGpusNeeded < mig.naiveGpuCount) ? mig.itPowerKw : null,
       ragComputeCapexUsd: rag.eligible ? rag.ragComputeCapexUsd : 0,
       ragItPowerKw: rag.eligible ? rag.ragItPowerKw : 0,
+      guardrailsComputeCapexUsd: guardrails.eligible ? guardrails.guardrailsComputeCapexUsd : 0,
+      guardrailsItPowerKw: guardrails.eligible ? guardrails.guardrailsItPowerKw : 0,
     });
   }, [
     results,
@@ -515,6 +549,7 @@ export default function App() {
     enableNvidiaAiEnterprise,
     supportPctPerYear,
     tcoYears,
+    guardrails,
     mig,
     rag,
   ]);
@@ -579,27 +614,33 @@ ${rag.eligible ? `
 - Serving Runtime: ${servingEngine.toUpperCase()} (${enableChunkedPrefill ? 'Chunked Prefill, ' : ''}${enablePrefixCaching ? 'Prefix Caching' : ''})
 - Cluster Orchestrator: ${orchestrator.toUpperCase()}
 - Serving Topology: ${servingArchitecture === 'llmd' ? `LLM-D Disaggregated Prefill & Decode (${bom.isHeterogeneous ? 'Heterogeneous Split' : 'Homogeneous Split'} over Lossless RoCEv2)` : 'Colocated (Unified P+D)'}
-
-7. FACILITY & POWER FOOTPRINT
+${guardrails.eligible ? `
+7. GUARDRAILS (INPUT/OUTPUT SAFETY CLASSIFIER)
+- Guard Model: ${guardrails.guardModel.name} (${guardrails.guardModel.paramsBillion}B params, ${guardrails.guardModel.vendor})
+- Guards Enabled: ${[guardrails.enableInputGuard ? 'Input' : null, guardrails.enableOutputGuard ? 'Output' : null].filter(Boolean).join(' + ')}
+- Guard GPUs Provisioned: ${guardrails.guardGpusNeeded}x ${guardGpu.name} (cluster request rate: ${guardrails.requestRatePerSec.toFixed(2)} req/s)
+- Added Latency (TTFT / Total Response): ${(guardrails.addedTtftSec * 1000).toFixed(1)} ms / ${(guardrails.addedTotalLatencySec * 1000).toFixed(1)} ms
+- Guardrails Capex / IT Power: $${Math.round(guardrails.guardrailsComputeCapexUsd).toLocaleString()} / ${guardrails.guardrailsItPowerKw.toFixed(2)} kW (included in Cost & TCO below)\n` : ''}
+8. FACILITY & POWER FOOTPRINT
 - Compute Power: ${facility.chassisPowerKw.toFixed(1)} kW
 - Network Power: ${facility.networkPowerKw.toFixed(1)} kW
 - Total IT Power: ${facility.totalItPowerKw.toFixed(1)} kW
 - Total Facility Power (${pue.toFixed(2)} PUE): ${facility.totalFacilityPowerKw.toFixed(1)} kW
 - Datacenter Racks: ~${facility.totalRacks} standard 42U Racks (${facility.totalRuNeeded} RU)
 
-8. COST & TCO (ILLUSTRATIVE ESTIMATE -- NOT A VENDOR QUOTE)
-- Total Capex: $${Math.round(cost.totalCapexUsd).toLocaleString()} (Compute $${Math.round(cost.computeCapexUsd).toLocaleString()} + Network/Storage $${Math.round(cost.networkHardwareCapexUsd + cost.storageCapexUsd).toLocaleString()}${rag.eligible ? ` + RAG $${Math.round(cost.ragCapexUsd).toLocaleString()}` : ''})
+9. COST & TCO (ILLUSTRATIVE ESTIMATE -- NOT A VENDOR QUOTE)
+- Total Capex: $${Math.round(cost.totalCapexUsd).toLocaleString()} (Compute $${Math.round(cost.computeCapexUsd).toLocaleString()} + Network/Storage $${Math.round(cost.networkHardwareCapexUsd + cost.storageCapexUsd).toLocaleString()}${rag.eligible ? ` + RAG $${Math.round(cost.ragCapexUsd).toLocaleString()}` : ''}${guardrails.eligible ? ` + Guardrails $${Math.round(cost.guardrailsCapexUsd).toLocaleString()}` : ''})
 - Annual Opex: $${Math.round(cost.annualOpexUsd).toLocaleString()}/yr (Power $${Math.round(cost.annualPowerCostUsd).toLocaleString()} + Licensing $${Math.round(cost.annualLicensingCostUsd).toLocaleString()} + Support $${Math.round(cost.annualSupportCostUsd).toLocaleString()})
 - ${cost.tcoYears}-Year TCO: $${Math.round(cost.tcoUsd).toLocaleString()} (~$${cost.effectiveUsdPerGpuHour.toFixed(2)}/GPU-hr effective)
 - vs. ${cost.tcoYears}-Yr Cloud Rental ($${cost.cloudEquivalentUsdPerHr.toFixed(2)}/hr cluster-wide): ${cost.buildVsBuySavingsUsd >= 0 ? `Owning saves $${Math.round(cost.buildVsBuySavingsUsd).toLocaleString()}` : `Cloud saves $${Math.round(-cost.buildVsBuySavingsUsd).toLocaleString()}`}
 - Capex Break-Even vs. Cloud: ${cost.breakEvenMonths != null ? `~${Math.round(cost.breakEvenMonths)} months` : 'Never — cloud is cheaper at these rates'}
 ${workloadType === 'inference' && throughput ? `
-9. ESTIMATED INFERENCE PERFORMANCE (PREFILL & DECODE)
+10. ESTIMATED INFERENCE PERFORMANCE (PREFILL & DECODE)
 - Prefill TTFT (Prompt Latency): ~${throughput.ttftMs < 1000 ? `${Number(throughput.ttftMs).toFixed(2)} ms` : `${Number(throughput.ttftSec).toFixed(2)} s`} (at ${contextLength.toLocaleString()} tokens)${isLlmd ? ` [includes ~${throughput.kvTransferLatencyMs}ms RoCEv2 handoff]` : ''}
 - Prompt Ingestion Speed: ~${throughput.promptTokensPerSecPerReplica?.toLocaleString()} prompt tok/s per replica
 - Generation Latency (TPOT): ~${throughput.tpotMs} ms/tok (~${throughput.tokensPerSecPerGpu} tok/s per stream)
 - Cluster Generation Throughput: ~${throughput.batchThroughputTps?.toLocaleString()} gen tok/s total (×${dp} DP × ${concurrency} streams)\n` : ''}${sla.eligible ? `
-10. SLA & TAIL LATENCY (M/M/c QUEUEING AT TARGET ρ=${(sla.targetUtilization * 100).toFixed(0)}%${sla.wasClamped ? ', clamped' : ''})
+11. SLA & TAIL LATENCY (M/M/c QUEUEING AT TARGET ρ=${(sla.targetUtilization * 100).toFixed(0)}%${sla.wasClamped ? ', clamped' : ''})
 - Concurrency per Replica (C): ${sla.concurrencyPerReplica}
 - P(Request Queues) — Erlang C: ${(sla.probabilityOfQueueing * 100).toFixed(1)}%
 - Mean Queueing Delay: ${(sla.meanWaitSec * 1000).toFixed(1)} ms
@@ -619,6 +660,7 @@ ${workloadType === 'inference' && throughput ? `
     { id: 'storage', label: 'Storage', icon: HardDrive, meta: storageTier.vendor },
     { id: 'rag', label: 'RAG Pipeline', icon: Search, meta: rag.eligible ? `${rag.vectorDbNodesNeeded} DB nodes` : (enableRag ? 'N/A' : 'Off') },
     { id: 'stack', label: 'Serving Stack', icon: Workflow, meta: orchestrator.toUpperCase() },
+    { id: 'guardrails', label: 'Guardrails', icon: Shield, meta: guardrails.eligible ? `${guardrails.guardGpusNeeded}x ${guardModel.name}` : (enableGuardrails ? 'N/A' : 'Off') },
     { id: 'mig', label: 'MIG Partitioning', icon: Grid2x2, meta: mig.eligible ? mig.selectedProfile.id : (enableMig ? 'N/A' : 'Off') },
     { id: 'sla', label: 'SLA & Tail Latency', icon: Timer, meta: sla.eligible ? `P99 ${sla.ttftP99Sec < 1 ? `${(sla.ttftP99Sec * 1000).toFixed(0)}ms` : `${sla.ttftP99Sec.toFixed(1)}s`}` : 'N/A' },
     { id: 'cost', label: 'Cost & TCO', icon: DollarSign, meta: `$${cost.effectiveUsdPerGpuHour.toFixed(2)}/GPU-hr` },
@@ -1995,11 +2037,126 @@ ${workloadType === 'inference' && throughput ? `
             </Card>
           )}
 
-          {/* 8. MIG (Multi-Instance GPU) Partitioning */}
+          {/* 8. Guardrails: input/output safety-classifier pool */}
+          {activeInputTab === 'guardrails' && (
+            <Card
+              icon={Shield}
+              title="8. Guardrails"
+              right={guardrails.enabled ? <Tag tone={guardrails.eligible ? 'good' : 'warn'}>{guardrails.eligible ? 'Eligible' : 'Not eligible'}</Tag> : <Tag>Off</Tag>}
+              className="space-y-4"
+            >
+              <Banner tone="info" icon={AlertTriangle}>
+                Guardrails run a small(er) safety-classifier model alongside the main LLM to screen requests: an input guard classifies the prompt before generation starts, and/or an output guard classifies the full response before it's returned. Like RAG, this is real standing infrastructure — its capex and power feed into Cost & TCO. Added latency is shown here for transparency but isn't wired into the SLA tab's queueing model, which stays scoped to the main LLM replica.
+              </Banner>
+
+              <ToggleRow
+                label="Guardrails Sizing"
+                description={enableGuardrails ? 'Sizing a safety-classifier pool against the cluster\'s request rate.' : 'No guardrail infrastructure sized.'}
+                checked={enableGuardrails}
+                onChange={setEnableGuardrails}
+              />
+
+              {enableGuardrails && !guardrails.eligible && (
+                <Banner tone="warn" icon={AlertTriangle}>
+                  {guardrails.reason}
+                </Banner>
+              )}
+
+              {enableGuardrails && guardrails.eligible && (
+                <>
+                  <Field label="Guard Model" helper={
+                    <InfoHelper
+                      title="Guard Model"
+                      text="A safety-classifier model fine-tuned to detect policy violations (violence, jailbreaks, PII, hate speech, etc.) in a prompt or response, rather than generate free-form text."
+                      whyItMatters="Larger guard models generally classify more accurately across more categories, but cost proportionally more compute and add more latency per request -- Llama Guard 3 8B needs roughly 8x the throughput-sizing compute of the 1B variant."
+                    />
+                  }>
+                    <div className="grid grid-cols-1 gap-1.5">
+                      {GUARDRAIL_MODELS.map((m) => (
+                        <ChoiceCard
+                          key={m.id}
+                          selected={selectedGuardModelId === m.id}
+                          onClick={() => setSelectedGuardModelId(m.id)}
+                          title={`${m.name} (${m.paramsBillion}B params)`}
+                          desc={`${m.vendor} · ${m.notes}`}
+                        />
+                      ))}
+                    </div>
+                  </Field>
+
+                  <ToggleRow
+                    label="Input Guard"
+                    description="Classifies the prompt before generation starts -- adds latency to TTFT."
+                    checked={enableInputGuard}
+                    onChange={setEnableInputGuard}
+                  />
+                  <ToggleRow
+                    label="Output Guard"
+                    description="Classifies the full response before it's returned -- adds latency to the end of the response."
+                    checked={enableOutputGuard}
+                    onChange={setEnableOutputGuard}
+                  />
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <Field label="Guard GPU">
+                      <select
+                        value={guardGpuId}
+                        onChange={(e) => {
+                          setGuardGpuId(e.target.value);
+                          setGuardGpuUnitPriceUsd(GPU_PRICING[e.target.value]?.estimatedUnitPriceUsd ?? 0);
+                        }}
+                        className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-sky-500"
+                      >
+                        {GPU_CATALOG.map((g) => (
+                          <option key={g.id} value={g.id}>{g.name}</option>
+                        ))}
+                      </select>
+                    </Field>
+                    <Field label="Guard GPU — Unit Price (Capex)">
+                      <div className="relative">
+                        <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-zinc-500">$</span>
+                        <input type="number" min="0" step="500" value={guardGpuUnitPriceUsd}
+                          onChange={(e) => setGuardGpuUnitPriceUsd(Math.max(0, Number(e.target.value) || 0))}
+                          className="w-full bg-zinc-950 border border-zinc-700 rounded-lg pl-5 pr-2 py-2 text-xs text-white focus:outline-none focus:border-sky-500 font-mono" />
+                      </div>
+                    </Field>
+                  </div>
+
+                  <div className="pt-3 border-t border-zinc-800/70">
+                    <SectionLabel>THROUGHPUT SIZING</SectionLabel>
+                    <Rows>
+                      <Row k="Cluster request rate" v={`${guardrails.requestRatePerSec.toFixed(2)} req/s`} mono={false} />
+                      <Row k="Guard GPUs needed" v={`${guardrails.guardGpusNeeded}x ${guardGpu.name}`} tone="good" />
+                    </Rows>
+                  </div>
+
+                  <div className="pt-3 border-t border-zinc-800/70">
+                    <SectionLabel>ADDED LATENCY (INFORMATIONAL — NOT IN SLA TAB)</SectionLabel>
+                    <Rows>
+                      <Row k="Input guard latency" v={enableInputGuard ? `${(guardrails.inputGuardLatencySec * 1000).toFixed(1)} ms` : 'Disabled'} mono={false} />
+                      <Row k="Output guard latency" v={enableOutputGuard ? `${(guardrails.outputGuardLatencySec * 1000).toFixed(1)} ms` : 'Disabled'} mono={false} />
+                      <Row k="Added to TTFT" v={`${(guardrails.addedTtftSec * 1000).toFixed(1)} ms`} tone="accent" />
+                      <Row k="Added to total response time" v={`${(guardrails.addedTotalLatencySec * 1000).toFixed(1)} ms`} tone="accent" />
+                    </Rows>
+                  </div>
+
+                  <div className="pt-3 border-t border-zinc-800/70">
+                    <SectionLabel>GUARDRAILS COST (FEEDS INTO COST & TCO)</SectionLabel>
+                    <Rows>
+                      <Row k="Guardrails compute capex" v={`$${Math.round(guardrails.guardrailsComputeCapexUsd).toLocaleString()}`} tone="good" />
+                      <Row k="Guardrails IT power draw" v={`${guardrails.guardrailsItPowerKw.toFixed(2)} kW`} mono={false} />
+                    </Rows>
+                  </div>
+                </>
+              )}
+            </Card>
+          )}
+
+          {/* 9. MIG (Multi-Instance GPU) Partitioning */}
           {activeInputTab === 'mig' && (
             <Card
               icon={Grid2x2}
-              title="8. MIG Partitioning"
+              title="9. MIG Partitioning"
               right={mig.enabled ? <Tag tone={mig.eligible ? 'good' : 'warn'}>{mig.eligible ? 'Eligible' : 'Not eligible'}</Tag> : <Tag>Off</Tag>}
               className="space-y-4"
             >
@@ -2058,11 +2215,11 @@ ${workloadType === 'inference' && throughput ? `
             </Card>
           )}
 
-          {/* 9. SLA / Tail-Latency Queueing */}
+          {/* 10. SLA / Tail-Latency Queueing */}
           {activeInputTab === 'sla' && (
             <Card
               icon={Timer}
-              title="9. SLA & Tail Latency"
+              title="10. SLA & Tail Latency"
               right={sla.eligible ? <Tag tone={sla.highUtilizationWarning ? 'warn' : 'good'}>{sla.highUtilizationWarning ? 'Near saturation' : 'Eligible'}</Tag> : <Tag>N/A</Tag>}
               className="space-y-4"
             >
@@ -2127,11 +2284,11 @@ ${workloadType === 'inference' && throughput ? `
             </Card>
           )}
 
-          {/* 10. Cost & TCO */}
+          {/* 11. Cost & TCO */}
           {activeInputTab === 'cost' && (
             <Card
               icon={DollarSign}
-              title="10. Cost & TCO"
+              title="11. Cost & TCO"
               right={<Tag tone={cost.buildVsBuySavingsUsd >= 0 ? 'good' : 'warn'}>{cost.buildVsBuySavingsUsd >= 0 ? 'Owning wins' : 'Cloud wins'}</Tag>}
               className="space-y-4"
             >
@@ -2248,6 +2405,9 @@ ${workloadType === 'inference' && throughput ? `
                   <Row k="Network + storage capex" v={`$${Math.round(cost.networkHardwareCapexUsd + cost.storageCapexUsd).toLocaleString()}`} mono={false} />
                   {rag.eligible && (
                     <Row k="RAG capex (embedding + vector DB)" v={`$${Math.round(cost.ragCapexUsd).toLocaleString()}`} mono={false} />
+                  )}
+                  {guardrails.eligible && (
+                    <Row k="Guardrails capex" v={`$${Math.round(cost.guardrailsCapexUsd).toLocaleString()}`} mono={false} />
                   )}
                   <Row k="Total capex" v={`$${Math.round(cost.totalCapexUsd).toLocaleString()}`} tone="accent" />
                   <Row k="Annual opex" v={`$${Math.round(cost.annualOpexUsd).toLocaleString()}/yr`} mono={false} />
@@ -2505,6 +2665,18 @@ ${workloadType === 'inference' && throughput ? `
                     <Row k="Embedding GPUs provisioned" v={`${rag.embeddingGpusNeeded}x ${embeddingGpu.name}`} tone="good" />
                     <Row k="Vector database" v={`${rag.vectorDbNodesNeeded}x ${rag.vectorDbPlatform.name} (${rag.bindingConstraint}-bound)`} tone="good" />
                     <Row k="RAG capex / IT power" v={`$${Math.round(rag.ragComputeCapexUsd).toLocaleString()} / ${rag.ragItPowerKw.toFixed(2)} kW`} mono={false} />
+                  </Rows>
+                </Disclosure>
+              )}
+
+              {guardrails.eligible && (
+                <Disclosure icon={Shield} title="Guardrails (input/output safety classifier)" right={`${guardrails.guardGpusNeeded}x ${guardModel.name}`}>
+                  <Rows>
+                    <Row k="Guard model" v={guardrails.guardModel.name} tone="accent" />
+                    <Row k="Guards enabled" v={[guardrails.enableInputGuard ? 'Input' : null, guardrails.enableOutputGuard ? 'Output' : null].filter(Boolean).join(' + ')} mono={false} />
+                    <Row k="Guard GPUs provisioned" v={`${guardrails.guardGpusNeeded}x ${guardGpu.name}`} tone="good" />
+                    <Row k="Added latency (TTFT / total)" v={`${(guardrails.addedTtftSec * 1000).toFixed(0)} ms / ${(guardrails.addedTotalLatencySec * 1000).toFixed(0)} ms`} mono={false} />
+                    <Row k="Guardrails capex / IT power" v={`$${Math.round(guardrails.guardrailsComputeCapexUsd).toLocaleString()} / ${guardrails.guardrailsItPowerKw.toFixed(2)} kW`} mono={false} />
                   </Rows>
                 </Disclosure>
               )}

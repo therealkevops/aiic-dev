@@ -22,7 +22,8 @@ import {
   Wand2,
   DollarSign,
   Grid2x2,
-  Timer
+  Timer,
+  Search
 } from 'lucide-react';
 
 import { MODEL_PRESETS, PRECISION_OPTIONS } from './data/models';
@@ -32,7 +33,8 @@ import { STORAGE_TIERS, DURABILITY_SCHEMES } from './data/storage';
 import { GPU_PRICING, DEFAULT_GPU_PRICING, NVIDIA_AI_ENTERPRISE_USD_PER_GPU_PER_YEAR, DEFAULT_NETWORK_HARDWARE_ADDER_PCT, DEFAULT_SUPPORT_PCT_PER_YEAR, DEFAULT_POWER_USD_PER_KWH, DEFAULT_COLO_USD_PER_KW_PER_MONTH, DEFAULT_TCO_YEARS } from './data/pricing';
 import { USE_CASE_PRESETS } from './data/presets';
 import { MIG_PROFILES } from './data/mig';
-import { calculateInfra, calculateStorage, calculateCost, calculateMigConsolidation, calculateSla, recommendSharding } from './utils/calculator';
+import { EMBEDDING_MODELS, VECTOR_DB_PLATFORMS, DEFAULT_EMBEDDING_MODEL_ID, DEFAULT_VECTOR_DB_ID } from './data/rag';
+import { calculateInfra, calculateStorage, calculateCost, calculateMigConsolidation, calculateSla, calculateRag, recommendSharding } from './utils/calculator';
 import { InfoHelper } from './components/InfoHelper';
 import { TopologyDiagram } from './components/TopologyDiagram';
 import { GlossaryPage } from './components/GlossaryPage';
@@ -148,6 +150,17 @@ export default function App() {
   // --- SLA / Tail-Latency Queueing State ---
   const [targetUtilization, setTargetUtilization] = useState(0.7); // rho: target replica utilization (0-1)
 
+  // --- RAG (Retrieval-Augmented Generation) Pipeline State ---
+  const [enableRag, setEnableRag] = useState(false);
+  const [textExtractionRatio, setTextExtractionRatio] = useState(0.2); // corpusSizeGb is raw doc storage; fraction that survives text extraction
+  const [avgChunkTokens, setAvgChunkTokens] = useState(512);
+  const [selectedEmbeddingModelId, setSelectedEmbeddingModelId] = useState(DEFAULT_EMBEDDING_MODEL_ID);
+  const [embeddingGpuId, setEmbeddingGpuId] = useState('l40s-pcie');
+  const [embeddingGpuUnitPriceUsd, setEmbeddingGpuUnitPriceUsd] = useState(GPU_PRICING['l40s-pcie'].estimatedUnitPriceUsd);
+  const [ingestionTargetHours, setIngestionTargetHours] = useState(24);
+  const [ragQueryQps, setRagQueryQps] = useState(5);
+  const [selectedVectorDbId, setSelectedVectorDbId] = useState(DEFAULT_VECTOR_DB_ID);
+
   // --- Use-case preset (header dropdown) ---
   const [selectedPresetId, setSelectedPresetId] = useState('');
 
@@ -207,6 +220,15 @@ export default function App() {
     setEnableMig(c.enableMig);
     setSelectedMigProfileId(c.selectedMigProfileId);
     setTargetUtilization(c.targetUtilization);
+    setEnableRag(c.enableRag);
+    setTextExtractionRatio(c.textExtractionRatio);
+    setAvgChunkTokens(c.avgChunkTokens);
+    setSelectedEmbeddingModelId(c.selectedEmbeddingModelId);
+    setEmbeddingGpuId(c.embeddingGpuId);
+    setEmbeddingGpuUnitPriceUsd(c.embeddingGpuUnitPriceUsd);
+    setIngestionTargetHours(c.ingestionTargetHours);
+    setRagQueryQps(c.ragQueryQps);
+    setSelectedVectorDbId(c.selectedVectorDbId);
     setActiveInputTab('workload');
   };
 
@@ -430,7 +452,27 @@ export default function App() {
     });
   }, [results, targetUtilization]);
 
-  // 6. Cost & TCO -- consumes the already-computed infra + storage + MIG results, prices nothing new
+  // 6. RAG Pipeline -- embedding-compute + vector-DB serving pool. Unlike MIG/SLA, this is real
+  // standing infrastructure (not a "what if" overlay), so its capex/power feed into Cost below.
+  const embeddingModel = EMBEDDING_MODELS.find(m => m.id === selectedEmbeddingModelId) || EMBEDDING_MODELS[0];
+  const embeddingGpu = GPU_CATALOG.find(g => g.id === embeddingGpuId) || GPU_CATALOG[0];
+  const vectorDbPlatform = VECTOR_DB_PLATFORMS.find(v => v.id === selectedVectorDbId) || VECTOR_DB_PLATFORMS[0];
+  const rag = useMemo(() => {
+    return calculateRag({
+      enabled: enableRag,
+      corpusSizeGb,
+      textExtractionRatio,
+      avgChunkTokens,
+      embeddingModel,
+      embeddingGpu,
+      embeddingGpuUnitPriceUsd,
+      ingestionTargetHours,
+      queryQps: ragQueryQps,
+      vectorDbPlatform,
+    });
+  }, [enableRag, corpusSizeGb, textExtractionRatio, avgChunkTokens, embeddingModel, embeddingGpu, embeddingGpuUnitPriceUsd, ingestionTargetHours, ragQueryQps, vectorDbPlatform]);
+
+  // 7. Cost & TCO -- consumes the already-computed infra + storage + MIG + RAG results, prices nothing new
   const decodeGpuId = memory.llmd?.decode?.gpu?.id;
   const decodeGpuPricing = decodeGpuId ? GPU_PRICING[decodeGpuId] : null;
   const cost = useMemo(() => {
@@ -456,6 +498,8 @@ export default function App() {
       // consolidation to justify it.
       computeGpuCountOverride: (mig.eligible && mig.physicalGpusNeeded < mig.naiveGpuCount) ? mig.physicalGpusNeeded : null,
       itPowerKwOverride: (mig.eligible && mig.physicalGpusNeeded < mig.naiveGpuCount) ? mig.itPowerKw : null,
+      ragComputeCapexUsd: rag.eligible ? rag.ragComputeCapexUsd : 0,
+      ragItPowerKw: rag.eligible ? rag.ragItPowerKw : 0,
     });
   }, [
     results,
@@ -472,6 +516,7 @@ export default function App() {
     supportPctPerYear,
     tcoYears,
     mig,
+    rag,
   ]);
 
   // Copy BOM to clipboard
@@ -522,33 +567,39 @@ ${bom.activeParamsNote ? `- MoE Active Params: ${bom.activeParamsNote}\n` : ''}-
 - Required Throughput: ${storage.requiredThroughputGBs.toFixed(2)} GB/s (binding: ${storage.bindingConstraint})
 - Achieved (Raw / Usable): ${storage.achievedCapacityTb.toFixed(0)} TB / ${storage.achievedUsableCapacityTb.toFixed(0)} TB, ${storage.achievedThroughputGBs.toFixed(1)} GB/s
 ${storage.breakdown.map(b => `  * ${b.label}: ${b.capacityTb.toFixed(2)} TB — ${b.note}`).join('\n')}
-
-5. MANAGEMENT, SERVING STACK & ORCHESTRATION
+${rag.eligible ? `
+5. RAG PIPELINE (EMBEDDING + VECTOR DATABASE)
+- Embedding Model: ${rag.embeddingModel.name} (${rag.embeddingModel.paramsMillion.toLocaleString()}M params, ${rag.embeddingModel.dims} dims)
+- Extractable Text / Vector Count: ${rag.extractableTextGb.toFixed(0)} GB / ${rag.numChunks.toLocaleString()} chunks
+- Embedding GPUs Provisioned: ${rag.embeddingGpusNeeded}x ${embeddingGpu.name} (ingestion: ${rag.actualIngestionTimeHours.toFixed(1)} hrs, live query: ${rag.queryEmbeddingGpusNeeded} GPUs)
+- Vector Database: ${rag.vectorDbNodesNeeded}x ${rag.vectorDbPlatform.name} (${rag.bindingConstraint}-bound, ${rag.vectorDbRamGb.toLocaleString()} GB RAM)
+- RAG Capex / IT Power: $${Math.round(rag.ragComputeCapexUsd).toLocaleString()} / ${rag.ragItPowerKw.toFixed(2)} kW (included in Cost & TCO below)\n` : ''}
+6. MANAGEMENT, SERVING STACK & ORCHESTRATION
 - Software Suite: ${platform.managementSuite}
 - Serving Runtime: ${servingEngine.toUpperCase()} (${enableChunkedPrefill ? 'Chunked Prefill, ' : ''}${enablePrefixCaching ? 'Prefix Caching' : ''})
 - Cluster Orchestrator: ${orchestrator.toUpperCase()}
 - Serving Topology: ${servingArchitecture === 'llmd' ? `LLM-D Disaggregated Prefill & Decode (${bom.isHeterogeneous ? 'Heterogeneous Split' : 'Homogeneous Split'} over Lossless RoCEv2)` : 'Colocated (Unified P+D)'}
 
-6. FACILITY & POWER FOOTPRINT
+7. FACILITY & POWER FOOTPRINT
 - Compute Power: ${facility.chassisPowerKw.toFixed(1)} kW
 - Network Power: ${facility.networkPowerKw.toFixed(1)} kW
 - Total IT Power: ${facility.totalItPowerKw.toFixed(1)} kW
 - Total Facility Power (${pue.toFixed(2)} PUE): ${facility.totalFacilityPowerKw.toFixed(1)} kW
 - Datacenter Racks: ~${facility.totalRacks} standard 42U Racks (${facility.totalRuNeeded} RU)
 
-7. COST & TCO (ILLUSTRATIVE ESTIMATE -- NOT A VENDOR QUOTE)
-- Total Capex: $${Math.round(cost.totalCapexUsd).toLocaleString()} (Compute $${Math.round(cost.computeCapexUsd).toLocaleString()} + Network/Storage $${Math.round(cost.networkHardwareCapexUsd + cost.storageCapexUsd).toLocaleString()})
+8. COST & TCO (ILLUSTRATIVE ESTIMATE -- NOT A VENDOR QUOTE)
+- Total Capex: $${Math.round(cost.totalCapexUsd).toLocaleString()} (Compute $${Math.round(cost.computeCapexUsd).toLocaleString()} + Network/Storage $${Math.round(cost.networkHardwareCapexUsd + cost.storageCapexUsd).toLocaleString()}${rag.eligible ? ` + RAG $${Math.round(cost.ragCapexUsd).toLocaleString()}` : ''})
 - Annual Opex: $${Math.round(cost.annualOpexUsd).toLocaleString()}/yr (Power $${Math.round(cost.annualPowerCostUsd).toLocaleString()} + Licensing $${Math.round(cost.annualLicensingCostUsd).toLocaleString()} + Support $${Math.round(cost.annualSupportCostUsd).toLocaleString()})
 - ${cost.tcoYears}-Year TCO: $${Math.round(cost.tcoUsd).toLocaleString()} (~$${cost.effectiveUsdPerGpuHour.toFixed(2)}/GPU-hr effective)
 - vs. ${cost.tcoYears}-Yr Cloud Rental ($${cost.cloudEquivalentUsdPerHr.toFixed(2)}/hr cluster-wide): ${cost.buildVsBuySavingsUsd >= 0 ? `Owning saves $${Math.round(cost.buildVsBuySavingsUsd).toLocaleString()}` : `Cloud saves $${Math.round(-cost.buildVsBuySavingsUsd).toLocaleString()}`}
 - Capex Break-Even vs. Cloud: ${cost.breakEvenMonths != null ? `~${Math.round(cost.breakEvenMonths)} months` : 'Never — cloud is cheaper at these rates'}
 ${workloadType === 'inference' && throughput ? `
-8. ESTIMATED INFERENCE PERFORMANCE (PREFILL & DECODE)
+9. ESTIMATED INFERENCE PERFORMANCE (PREFILL & DECODE)
 - Prefill TTFT (Prompt Latency): ~${throughput.ttftMs < 1000 ? `${Number(throughput.ttftMs).toFixed(2)} ms` : `${Number(throughput.ttftSec).toFixed(2)} s`} (at ${contextLength.toLocaleString()} tokens)${isLlmd ? ` [includes ~${throughput.kvTransferLatencyMs}ms RoCEv2 handoff]` : ''}
 - Prompt Ingestion Speed: ~${throughput.promptTokensPerSecPerReplica?.toLocaleString()} prompt tok/s per replica
 - Generation Latency (TPOT): ~${throughput.tpotMs} ms/tok (~${throughput.tokensPerSecPerGpu} tok/s per stream)
 - Cluster Generation Throughput: ~${throughput.batchThroughputTps?.toLocaleString()} gen tok/s total (×${dp} DP × ${concurrency} streams)\n` : ''}${sla.eligible ? `
-9. SLA & TAIL LATENCY (M/M/c QUEUEING AT TARGET ρ=${(sla.targetUtilization * 100).toFixed(0)}%${sla.wasClamped ? ', clamped' : ''})
+10. SLA & TAIL LATENCY (M/M/c QUEUEING AT TARGET ρ=${(sla.targetUtilization * 100).toFixed(0)}%${sla.wasClamped ? ', clamped' : ''})
 - Concurrency per Replica (C): ${sla.concurrencyPerReplica}
 - P(Request Queues) — Erlang C: ${(sla.probabilityOfQueueing * 100).toFixed(1)}%
 - Mean Queueing Delay: ${(sla.meanWaitSec * 1000).toFixed(1)} ms
@@ -566,6 +617,7 @@ ${workloadType === 'inference' && throughput ? `
     { id: 'sharding', label: 'Sharding', icon: Layers, meta: `TP=${tp} · PP=${pp} · DP=${dp}` },
     { id: 'fabric', label: 'Fabric & PUE', icon: Network, meta: protocol.name },
     { id: 'storage', label: 'Storage', icon: HardDrive, meta: storageTier.vendor },
+    { id: 'rag', label: 'RAG Pipeline', icon: Search, meta: rag.eligible ? `${rag.vectorDbNodesNeeded} DB nodes` : (enableRag ? 'N/A' : 'Off') },
     { id: 'stack', label: 'Serving Stack', icon: Workflow, meta: orchestrator.toUpperCase() },
     { id: 'mig', label: 'MIG Partitioning', icon: Grid2x2, meta: mig.eligible ? mig.selectedProfile.id : (enableMig ? 'N/A' : 'Off') },
     { id: 'sla', label: 'SLA & Tail Latency', icon: Timer, meta: sla.eligible ? `P99 ${sla.ttftP99Sec < 1 ? `${(sla.ttftP99Sec * 1000).toFixed(0)}ms` : `${sla.ttftP99Sec.toFixed(1)}s`}` : 'N/A' },
@@ -1505,11 +1557,195 @@ ${workloadType === 'inference' && throughput ? `
             </Card>
           )}
 
-          {/* 6. Serving Stack, Orchestration & LLM-D Disaggregation */}
+          {/* 6. RAG Pipeline: embedding-compute ingestion sizing + vector database serving */}
+          {activeInputTab === 'rag' && (
+            <Card
+              icon={Search}
+              title="6. RAG Pipeline"
+              right={rag.eligible ? <Tag tone="good">{rag.bindingConstraint === 'capacity' ? 'Capacity-bound' : 'Throughput-bound'}</Tag> : <Tag>{enableRag ? 'N/A' : 'Off'}</Tag>}
+              className="space-y-4"
+            >
+              <Banner tone="info" icon={AlertTriangle}>
+                RAG adds two real compute-contributing layers on top of LLM serving: an embedding pool that turns the document corpus (and each live query) into vectors, and a vector database serving pool that stores and searches them. Both are new standing infrastructure — their capex and power feed into Cost & TCO, unlike MIG/SLA which only reshape or annotate existing hardware.
+              </Banner>
+
+              <ToggleRow
+                label="RAG Pipeline Sizing"
+                description={enableRag ? 'Sizing embedding compute + vector database against the Document/Vector Corpus set on the Storage tab.' : 'No embedding or vector database infrastructure sized.'}
+                checked={enableRag}
+                onChange={setEnableRag}
+              />
+
+              {enableRag && !rag.eligible && (
+                <Banner tone="warn" icon={AlertTriangle}>
+                  {rag.reason}
+                </Banner>
+              )}
+
+              {enableRag && rag.eligible && (
+                <>
+                  <SliderField
+                    label="Text Extraction Ratio:"
+                    valueLabel={`${(textExtractionRatio * 100).toFixed(0)}%`}
+                    min="0.05" max="1.0" step="0.05"
+                    value={textExtractionRatio}
+                    onChange={(e) => setTextExtractionRatio(Number(e.target.value))}
+                    marks={['5% (Scanned PDFs / Images)', '20% (Mixed Office Docs)', '100% (Plain Text)']}
+                    helper={
+                      <InfoHelper
+                        title="Text Extraction Ratio"
+                        text="The Document/Vector Corpus size (set on the Storage tab) is raw document storage — PDFs, images, formatting, and embedded media all count toward it, but only extracted text gets embedded. This is the fraction of raw corpus bytes that survive text extraction into embeddable content."
+                        whyItMatters="A corpus dominated by scanned PDFs or image-heavy slide decks can have 5-10x less extractable text than its raw size suggests — using the raw size directly would drastically overestimate embedding compute and vector database sizing."
+                      />
+                    }
+                  />
+
+                  <SliderField
+                    label="Average Chunk Size:"
+                    valueLabel={`${avgChunkTokens} tokens`}
+                    min="128" max="2048" step="128"
+                    value={avgChunkTokens}
+                    onChange={(e) => setAvgChunkTokens(Number(e.target.value))}
+                    marks={['128 (Fine-Grained)', '512 (Typical)', '2048 (Coarse)']}
+                    helper={
+                      <InfoHelper
+                        title="Average Chunk Size"
+                        text="The token count each document is split into before embedding. Smaller chunks mean more precise retrieval but more chunks (more vectors, more embedding calls) for the same corpus."
+                        whyItMatters="Halving chunk size roughly doubles the vector count -- directly doubling vector database capacity needs and embedding ingestion time."
+                      />
+                    }
+                  />
+
+                  <Field label="Embedding Model" helper={
+                    <InfoHelper
+                      title="Embedding Model"
+                      text="The model that turns document chunks (and live queries) into vectors. Larger embedding models generally retrieve more accurately but cost proportionally more compute to run at corpus scale."
+                      whyItMatters="NV-Embed-v2 has ~23x the parameters of BGE-Large/E5-Large -- at the same corpus size and ingestion time target, it needs roughly 23x the embedding GPUs."
+                    />
+                  }>
+                    <div className="grid grid-cols-1 gap-1.5">
+                      {EMBEDDING_MODELS.map((m) => (
+                        <ChoiceCard
+                          key={m.id}
+                          selected={selectedEmbeddingModelId === m.id}
+                          onClick={() => setSelectedEmbeddingModelId(m.id)}
+                          title={`${m.name} (${m.paramsMillion.toLocaleString()}M params)`}
+                          desc={`${m.dims} dims · ${m.maxTokens.toLocaleString()} max tokens · ${m.vendor}`}
+                        />
+                      ))}
+                    </div>
+                  </Field>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <Field label="Embedding GPU">
+                      <select
+                        value={embeddingGpuId}
+                        onChange={(e) => {
+                          setEmbeddingGpuId(e.target.value);
+                          setEmbeddingGpuUnitPriceUsd(GPU_PRICING[e.target.value]?.estimatedUnitPriceUsd ?? 0);
+                        }}
+                        className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-sky-500"
+                      >
+                        {GPU_CATALOG.map((g) => (
+                          <option key={g.id} value={g.id}>{g.name}</option>
+                        ))}
+                      </select>
+                    </Field>
+                    <Field label="Embedding GPU — Unit Price (Capex)">
+                      <div className="relative">
+                        <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-zinc-500">$</span>
+                        <input type="number" min="0" step="500" value={embeddingGpuUnitPriceUsd}
+                          onChange={(e) => setEmbeddingGpuUnitPriceUsd(Math.max(0, Number(e.target.value) || 0))}
+                          className="w-full bg-zinc-950 border border-zinc-700 rounded-lg pl-5 pr-2 py-2 text-xs text-white focus:outline-none focus:border-sky-500 font-mono" />
+                      </div>
+                    </Field>
+                  </div>
+
+                  <SliderField
+                    label="Ingestion Time Target:"
+                    valueLabel={`${ingestionTargetHours} hr${ingestionTargetHours === 1 ? '' : 's'}`}
+                    min="1" max="72" step="1"
+                    value={ingestionTargetHours}
+                    onChange={(e) => setIngestionTargetHours(Number(e.target.value))}
+                    marks={['1hr (Fast Reindex)', '24hr (Overnight)', '72hr (Relaxed)']}
+                    helper={
+                      <InfoHelper
+                        title="Ingestion Time Target"
+                        text="The wall-clock budget to embed the entire extractable corpus (a full reindex). Sets required embedding throughput: throughput = total corpus embedding FLOPs ÷ this budget."
+                        whyItMatters="A tight reindex target directly drives up the embedding GPU count -- a large corpus with a 1-hour target can need far more GPUs than the same corpus with a 24-hour target."
+                      />
+                    }
+                  />
+
+                  <Field label="Retrieval Query Rate (QPS)">
+                    <input type="number" min="0.1" step="0.5" value={ragQueryQps}
+                      onChange={(e) => setRagQueryQps(Math.max(0.1, Number(e.target.value) || 0.1))}
+                      className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-sky-500 font-mono" />
+                    <div className="text-[10.5px] text-zinc-500 mt-1">Sustained vector-search queries/sec the pipeline must serve live -- drives both live query-embedding GPU load and vector database throughput sizing.</div>
+                  </Field>
+
+                  <Field label="Vector Database Platform" helper={
+                    <InfoHelper
+                      title="Vector Database Platform"
+                      text="Self-hosted vector search engines. Per-node RAM/QPS/capex figures are illustrative single-node defaults -- real throughput and capacity depend heavily on index type, quantization, and recall target, and can vary 10-20x across published benchmarks for the same engine."
+                      whyItMatters="Nodes are sized against whichever binds harder: enough RAM to hold the vector index (capacity), or enough query throughput to hit the target QPS (throughput)."
+                    />
+                  }>
+                    <div className="grid grid-cols-1 gap-1.5">
+                      {VECTOR_DB_PLATFORMS.map((v) => (
+                        <ChoiceCard
+                          key={v.id}
+                          selected={selectedVectorDbId === v.id}
+                          onClick={() => setSelectedVectorDbId(v.id)}
+                          title={`${v.vendor} — ${v.name}`}
+                          desc={`${v.ramGbPerNode} GB RAM/node · ~${v.estimatedQpsPerNode.toLocaleString()} QPS/node · ${v.notes}`}
+                        />
+                      ))}
+                    </div>
+                  </Field>
+
+                  <div className="pt-3 border-t border-zinc-800/70">
+                    <SectionLabel>CORPUS & EMBEDDING</SectionLabel>
+                    <Rows>
+                      <Row k="Extractable text" v={`${rag.extractableTextGb.toFixed(0)} GB`} mono={false} />
+                      <Row k="Vector count (chunks)" v={rag.numChunks.toLocaleString()} tone="accent" />
+                      <Row k="Ingestion GPUs needed" v={`${rag.ingestionGpusNeeded}x ${embeddingGpu.name}`} tone="accent" />
+                      <Row k="Actual ingestion time" v={`${rag.actualIngestionTimeHours.toFixed(1)} hrs`} mono={false} />
+                      <Row k="Live query-embedding GPUs" v={`${rag.queryEmbeddingGpusNeeded}`} mono={false} />
+                      <Row k="Total embedding GPUs provisioned" v={`${rag.embeddingGpusNeeded}`} tone="good" />
+                    </Rows>
+                  </div>
+
+                  <div className="pt-3 border-t border-zinc-800/70">
+                    <SectionLabel>VECTOR DATABASE</SectionLabel>
+                    <Rows>
+                      <Row k="Nodes for capacity" v={`${rag.nodesForCapacity}`} mono={false} />
+                      <Row k="Nodes for throughput" v={`${rag.nodesForThroughput}`} mono={false} />
+                      <Row k="Nodes provisioned" v={`${rag.vectorDbNodesNeeded}x ${vectorDbPlatform.name}`} tone="good" />
+                      <Row k="Binding constraint" v={rag.bindingConstraint === 'throughput' ? 'Throughput' : 'Capacity'} mono={false} />
+                      <Row k="Total vector DB RAM" v={`${rag.vectorDbRamGb.toLocaleString()} GB`} mono={false} />
+                    </Rows>
+                  </div>
+
+                  <div className="pt-3 border-t border-zinc-800/70">
+                    <SectionLabel>RAG INFRASTRUCTURE COST (FEEDS INTO COST & TCO)</SectionLabel>
+                    <Rows>
+                      <Row k="Embedding compute capex" v={`$${Math.round(rag.embeddingComputeCapexUsd).toLocaleString()}`} tone="accent" />
+                      <Row k="Vector database capex" v={`$${Math.round(rag.vectorDbCapexUsd).toLocaleString()}`} tone="accent" />
+                      <Row k="Total RAG capex" v={`$${Math.round(rag.ragComputeCapexUsd).toLocaleString()}`} tone="good" />
+                      <Row k="RAG IT power draw" v={`${rag.ragItPowerKw.toFixed(2)} kW`} mono={false} />
+                    </Rows>
+                  </div>
+                </>
+              )}
+            </Card>
+          )}
+
+          {/* 7. Serving Stack, Orchestration & LLM-D Disaggregation */}
           {activeInputTab === 'stack' && (
             <Card
               icon={Workflow}
-              title="6. Serving Engine, Orchestration & LLM-D"
+              title="7. Serving Engine, Orchestration & LLM-D"
               right={<Tag tone={servingArchitecture === 'llmd' ? 'warn' : 'neutral'}>{servingArchitecture === 'llmd' ? 'LLM-D Disaggregated' : 'Colocated'}</Tag>}
               className="space-y-4"
             >
@@ -1759,11 +1995,11 @@ ${workloadType === 'inference' && throughput ? `
             </Card>
           )}
 
-          {/* 7. MIG (Multi-Instance GPU) Partitioning */}
+          {/* 8. MIG (Multi-Instance GPU) Partitioning */}
           {activeInputTab === 'mig' && (
             <Card
               icon={Grid2x2}
-              title="7. MIG Partitioning"
+              title="8. MIG Partitioning"
               right={mig.enabled ? <Tag tone={mig.eligible ? 'good' : 'warn'}>{mig.eligible ? 'Eligible' : 'Not eligible'}</Tag> : <Tag>Off</Tag>}
               className="space-y-4"
             >
@@ -1822,11 +2058,11 @@ ${workloadType === 'inference' && throughput ? `
             </Card>
           )}
 
-          {/* 8. SLA / Tail-Latency Queueing */}
+          {/* 9. SLA / Tail-Latency Queueing */}
           {activeInputTab === 'sla' && (
             <Card
               icon={Timer}
-              title="8. SLA & Tail Latency"
+              title="9. SLA & Tail Latency"
               right={sla.eligible ? <Tag tone={sla.highUtilizationWarning ? 'warn' : 'good'}>{sla.highUtilizationWarning ? 'Near saturation' : 'Eligible'}</Tag> : <Tag>N/A</Tag>}
               className="space-y-4"
             >
@@ -1891,11 +2127,11 @@ ${workloadType === 'inference' && throughput ? `
             </Card>
           )}
 
-          {/* 9. Cost & TCO */}
+          {/* 10. Cost & TCO */}
           {activeInputTab === 'cost' && (
             <Card
               icon={DollarSign}
-              title="9. Cost & TCO"
+              title="10. Cost & TCO"
               right={<Tag tone={cost.buildVsBuySavingsUsd >= 0 ? 'good' : 'warn'}>{cost.buildVsBuySavingsUsd >= 0 ? 'Owning wins' : 'Cloud wins'}</Tag>}
               className="space-y-4"
             >
@@ -2010,6 +2246,9 @@ ${workloadType === 'inference' && throughput ? `
                 <Rows>
                   <Row k="Compute capex" v={`$${Math.round(cost.computeCapexUsd).toLocaleString()}`} tone="accent" />
                   <Row k="Network + storage capex" v={`$${Math.round(cost.networkHardwareCapexUsd + cost.storageCapexUsd).toLocaleString()}`} mono={false} />
+                  {rag.eligible && (
+                    <Row k="RAG capex (embedding + vector DB)" v={`$${Math.round(cost.ragCapexUsd).toLocaleString()}`} mono={false} />
+                  )}
                   <Row k="Total capex" v={`$${Math.round(cost.totalCapexUsd).toLocaleString()}`} tone="accent" />
                   <Row k="Annual opex" v={`$${Math.round(cost.annualOpexUsd).toLocaleString()}/yr`} mono={false} />
                   <Row k={`${cost.tcoYears}-year TCO`} v={`$${Math.round(cost.tcoUsd).toLocaleString()}`} tone="accent" />
@@ -2257,6 +2496,18 @@ ${workloadType === 'inference' && throughput ? `
                   ))}
                 </Rows>
               </Disclosure>
+
+              {rag.eligible && (
+                <Disclosure icon={Search} title="RAG pipeline (embedding + vector database)" right={`${rag.vectorDbNodesNeeded} DB nodes`}>
+                  <Rows>
+                    <Row k="Embedding model" v={rag.embeddingModel.name} tone="accent" />
+                    <Row k="Vector count (chunks)" v={rag.numChunks.toLocaleString()} mono={false} />
+                    <Row k="Embedding GPUs provisioned" v={`${rag.embeddingGpusNeeded}x ${embeddingGpu.name}`} tone="good" />
+                    <Row k="Vector database" v={`${rag.vectorDbNodesNeeded}x ${rag.vectorDbPlatform.name} (${rag.bindingConstraint}-bound)`} tone="good" />
+                    <Row k="RAG capex / IT power" v={`$${Math.round(rag.ragComputeCapexUsd).toLocaleString()} / ${rag.ragItPowerKw.toFixed(2)} kW`} mono={false} />
+                  </Rows>
+                </Disclosure>
+              )}
 
               <Disclosure icon={Zap} title="Power & facility footprint" right={`${facility.totalItPowerKw.toFixed(1)} kW IT`}>
                 <KpiRow>

@@ -1330,6 +1330,11 @@ export function calculateCost(config) {
     // is the fairer, more conservative build-vs-buy comparison.
     computeGpuCountOverride = null,
     itPowerKwOverride = null,
+    // RAG pipeline overlay (see calculateRag()): embedding-compute + vector-DB capex and the IT
+    // power they draw, folded into total capex/opex like storage -- unlike MIG/SLA, RAG adds
+    // real standing infrastructure rather than just reshaping existing hardware.
+    ragComputeCapexUsd = 0,
+    ragItPowerKw = 0,
   } = config;
 
   const isLlmd = !!infraResults.memory.llmd;
@@ -1352,18 +1357,21 @@ export function calculateCost(config) {
 
   const networkHardwareCapexUsd = computeCapexUsd * (networkHardwareAdderPct / 100);
   const storageCapexUsd = storageResults ? (storageResults.achievedCapacityTb * storageUsdPerTbRaw) : 0;
-  const totalCapexUsd = computeCapexUsd + networkHardwareCapexUsd + storageCapexUsd;
+  const totalCapexUsd = computeCapexUsd + networkHardwareCapexUsd + storageCapexUsd + ragComputeCapexUsd;
 
   const hoursPerYear = 24 * 365;
-  const billedItPowerKw = itPowerKwOverride != null ? itPowerKwOverride : infraResults.facility.totalItPowerKw;
+  const baseItPowerKw = itPowerKwOverride != null ? itPowerKwOverride : infraResults.facility.totalItPowerKw;
+  const billedItPowerKw = baseItPowerKw + ragItPowerKw;
   // Colo bills $/kW/month on IT load (the colo provider's own facility overhead/cooling is
   // baked into their rate); an owned DC bills the utility $/kWh on the PUE-adjusted total load.
   // The MIG IT-power override has no PUE figure of its own, so the owned-DC branch applies the
-  // same PUE multiplier the rest of this deployment already uses.
+  // same PUE multiplier the rest of this deployment already uses. RAG's own IT power gets the
+  // same PUE treatment -- it's colocated with the rest of the deployment, not a separate facility.
   const impliedPue = infraResults.facility.totalItPowerKw > 0
     ? infraResults.facility.totalFacilityPowerKw / infraResults.facility.totalItPowerKw
     : 1;
-  const billedFacilityPowerKw = itPowerKwOverride != null ? billedItPowerKw * impliedPue : infraResults.facility.totalFacilityPowerKw;
+  const baseFacilityPowerKw = itPowerKwOverride != null ? baseItPowerKw * impliedPue : infraResults.facility.totalFacilityPowerKw;
+  const billedFacilityPowerKw = baseFacilityPowerKw + (ragItPowerKw * impliedPue);
   const annualPowerCostUsd = useColo
     ? billedItPowerKw * coloUsdPerKwPerMonth * 12
     : billedFacilityPowerKw * hoursPerYear * powerUsdPerKwh;
@@ -1393,6 +1401,7 @@ export function calculateCost(config) {
     computeCapexUsd,
     networkHardwareCapexUsd,
     storageCapexUsd,
+    ragCapexUsd: ragComputeCapexUsd,
     totalCapexUsd,
     annualPowerCostUsd,
     annualLicensingCostUsd,
@@ -1594,5 +1603,112 @@ export function calculateSla(config) {
     ttftP99Sec: ttftSec + p99WaitSec,
     tpotSec, // unaffected by queueing, shown for reference
     highUtilizationWarning: rho > 0.85,
+  };
+}
+
+// ─── RAG (Retrieval-Augmented Generation) Pipeline Completeness ───────────────────────────────
+/**
+ * Sizes the two compute-contributing layers a RAG pipeline adds on top of the LLM serving
+ * cluster that calculateInfra() already sizes: (1) an embedding-inference pool that turns the
+ * document corpus (and each live query) into vectors, and (2) a vector database serving pool
+ * that stores those vectors and answers similarity queries. Unlike MIG/SLA, this is not a
+ * "what if" overlay on existing hardware -- it's genuinely new standing infrastructure, so its
+ * capex/power feed into calculateCost() via ragComputeCapexUsd/ragItPowerKw.
+ */
+export function calculateRag(config) {
+  const {
+    enabled = false,
+    corpusSizeGb = 0,
+    textExtractionRatio = 0.2, // corpusSizeGb is raw document storage (PDFs, images, formatting);
+                                // only this fraction survives text extraction into embeddable chunks
+    avgChunkTokens = 512,
+    embeddingModel,           // one of EMBEDDING_MODELS
+    embeddingGpu,             // one of GPU_CATALOG -- typically a small/cheap card, not the LLM's serving GPU
+    embeddingGpuUnitPriceUsd = 0,
+    ingestionTargetHours = 24,
+    queryQps = 1,
+    vectorDbPlatform,         // one of VECTOR_DB_PLATFORMS
+  } = config;
+
+  if (!enabled) {
+    return { enabled: false, eligible: false, reason: "RAG pipeline sizing is disabled." };
+  }
+
+  if (corpusSizeGb <= 0) {
+    return { enabled: true, eligible: false, reason: "Set a document corpus size greater than 0 GB to size the embedding and vector database pipeline." };
+  }
+
+  // ── Corpus chunking ──────────────────────────────────────────────────────────────────────
+  const CHARS_PER_TOKEN = 4; // rough English-text average
+  const extractableTextGb = corpusSizeGb * textExtractionRatio;
+  const numChunks = Math.ceil((extractableTextGb * 1e9) / (avgChunkTokens * CHARS_PER_TOKEN));
+
+  // ── Embedding compute: one-time (or periodic re-index) corpus ingestion ─────────────────────
+  // Single forward pass per chunk (no autoregressive decode/KV cache, unlike LLM serving).
+  const MFU_EMBEDDING = 0.4; // mid-tier MFU, consistent with calculateInfra()'s mfuPrefill band
+  const embeddingFlopsPerChunk = 2 * embeddingModel.paramsMillion * 1e6 * avgChunkTokens;
+  const totalIngestionFlops = embeddingFlopsPerChunk * numChunks;
+  const gpuEffFlops = (embeddingGpu.fp16Tflops || 366) * 1e12 * MFU_EMBEDDING;
+  const ingestionTimeSecSingleGpu = totalIngestionFlops / gpuEffFlops;
+  const ingestionTargetSec = ingestionTargetHours * 3600;
+  const ingestionGpusNeeded = Math.max(1, Math.ceil(ingestionTimeSecSingleGpu / ingestionTargetSec));
+  const actualIngestionTimeHours = (ingestionTimeSecSingleGpu / ingestionGpusNeeded) / 3600;
+
+  // ── Embedding compute: live query embedding (always-on serving load) ────────────────────────
+  const AVG_QUERY_TOKENS = 32; // a short retrieval query, much smaller than a document chunk
+  const queryEmbeddingFlopsPerSec = 2 * embeddingModel.paramsMillion * 1e6 * AVG_QUERY_TOKENS * queryQps;
+  const queryEmbeddingGpusNeeded = Math.max(1, Math.ceil(queryEmbeddingFlopsPerSec / gpuEffFlops));
+
+  // Provision for the larger of the two -- a serving-sized pool can usually absorb ingestion
+  // in the background, and an ingestion-sized pool always covers live query embedding too.
+  const embeddingGpusNeeded = Math.max(ingestionGpusNeeded, queryEmbeddingGpusNeeded);
+
+  // ── Vector database: capacity (RAM to hold the index) vs. throughput (QPS) ──────────────────
+  // fp32 vector storage plus ~15% HNSW graph overhead, consistent with published benchmarks
+  // (e.g. ~60-70GB observed for 10M x 1536-dim fp32 vectors, vs. ~61.4GB of raw vector data).
+  const HNSW_OVERHEAD_FACTOR = 1.15;
+  const USABLE_RAM_FRACTION = 0.85; // headroom for OS/query cache, consistent with storage sizing
+  const bytesPerVector = embeddingModel.dims * 4 * HNSW_OVERHEAD_FACTOR;
+  const vectorsPerNode = Math.floor((vectorDbPlatform.ramGbPerNode * 1e9 * USABLE_RAM_FRACTION) / bytesPerVector);
+  const nodesForCapacity = Math.max(1, Math.ceil(numChunks / vectorsPerNode));
+  const nodesForThroughput = Math.max(1, Math.ceil(queryQps / vectorDbPlatform.estimatedQpsPerNode));
+  const vectorDbNodesNeeded = Math.max(nodesForCapacity, nodesForThroughput);
+  const bindingConstraint = nodesForCapacity >= nodesForThroughput ? "capacity" : "throughput";
+  const vectorDbRamGb = vectorDbNodesNeeded * vectorDbPlatform.ramGbPerNode;
+
+  // ── Cost & power (illustrative, feeds into calculateCost()) ─────────────────────────────────
+  const embeddingComputeCapexUsd = embeddingGpusNeeded * embeddingGpuUnitPriceUsd;
+  const vectorDbCapexUsd = vectorDbNodesNeeded * vectorDbPlatform.estimatedUsdPerNodeCapex;
+  const ragComputeCapexUsd = embeddingComputeCapexUsd + vectorDbCapexUsd;
+
+  const embeddingGpuPowerKw = ((embeddingGpu.chassisTdpKw || 3.8) / (embeddingGpu.gpusPerChassis || 8)) * embeddingGpusNeeded;
+  const VECTOR_DB_NODE_POWER_KW = 0.6; // typical dual-socket CPU server, illustrative
+  const vectorDbPowerKw = vectorDbNodesNeeded * VECTOR_DB_NODE_POWER_KW;
+  const ragItPowerKw = embeddingGpuPowerKw + vectorDbPowerKw;
+
+  return {
+    enabled: true,
+    eligible: true,
+    reason: null,
+    extractableTextGb,
+    numChunks,
+    embeddingModel,
+    ingestionTimeSecSingleGpu,
+    ingestionGpusNeeded,
+    actualIngestionTimeHours,
+    queryEmbeddingGpusNeeded,
+    embeddingGpusNeeded,
+    embeddingComputeCapexUsd,
+    embeddingGpuPowerKw,
+    vectorDbPlatform,
+    nodesForCapacity,
+    nodesForThroughput,
+    vectorDbNodesNeeded,
+    bindingConstraint,
+    vectorDbRamGb,
+    vectorDbCapexUsd,
+    vectorDbPowerKw,
+    ragComputeCapexUsd,
+    ragItPowerKw,
   };
 }

@@ -1616,6 +1616,14 @@ export function calculateSla(config) {
   const {
     infraResults,
     targetUtilization = 0.7, // rho: user-set target replica utilization (0-1)
+    // Deterministic (non-queueing) latency Add-on Modules attach in front of or behind the LLM
+    // replica's own queueing model -- e.g. ingress TLS/routing and a guardrails input classifier
+    // both run before the request reaches the batch, and a guardrails output classifier runs
+    // after generation finishes, before the response is returned. These are fixed per-request
+    // overheads, not stochastic queueing delay, so they shift every percentile by the same
+    // constant rather than needing their own distribution.
+    extraPreQueueLatencySec = 0,
+    extraPostGenerationLatencySec = 0,
   } = config;
 
   if (infraResults.workloadType !== "inference") {
@@ -1659,6 +1667,19 @@ export function calculateSla(config) {
   const p95WaitSec = mmcWaitPercentile(c, a, mu, rho, C, 0.95);
   const p99WaitSec = mmcWaitPercentile(c, a, mu, rho, C, 0.99);
 
+  // Deterministic Add-on Module latency is a fixed per-request offset, not a stochastic queueing
+  // delay -- it shifts every percentile by the same constant rather than needing its own
+  // distribution. Pre-queue latency (ingress TLS/routing, a guardrails input classifier) delays
+  // when the request effectively reaches the replica's queue, ahead of the LLM's own TTFT+wait;
+  // post-generation latency (a guardrails output classifier) delays the response after decode
+  // finishes and is only meaningful for total response time, not TTFT.
+  const ttftBaselineSec = ttftSec + extraPreQueueLatencySec;
+  const ttftP50Sec = ttftBaselineSec + p50WaitSec;
+  const ttftP90Sec = ttftBaselineSec + p90WaitSec;
+  const ttftP95Sec = ttftBaselineSec + p95WaitSec;
+  const ttftP99Sec = ttftBaselineSec + p99WaitSec;
+  const decodeDurationSec = avgOutputTokens * tpotSec;
+
   return {
     eligible: true,
     reason: null,
@@ -1673,14 +1694,24 @@ export function calculateSla(config) {
     p90WaitSec,
     p95WaitSec,
     p99WaitSec,
+    extraPreQueueLatencySec,
+    extraPostGenerationLatencySec,
     // Queueing delay affects TTFT only -- once admitted to the running batch,
     // TPOT/decode is the existing steady-state point estimate, unaffected.
-    ttftBaselineSec: ttftSec,
-    ttftP50Sec: ttftSec + p50WaitSec,
-    ttftP90Sec: ttftSec + p90WaitSec,
-    ttftP95Sec: ttftSec + p95WaitSec,
-    ttftP99Sec: ttftSec + p99WaitSec,
+    ttftBaselineSec,
+    ttftP50Sec,
+    ttftP90Sec,
+    ttftP95Sec,
+    ttftP99Sec,
     tpotSec, // unaffected by queueing, shown for reference
+    // Total response time = TTFT (baseline + queueing) + decode duration + post-generation
+    // latency. Decode/post-generation legs are both deterministic given TTFT, so they add
+    // straight through to every percentile alongside it.
+    totalResponseBaselineSec: ttftBaselineSec + decodeDurationSec + extraPostGenerationLatencySec,
+    totalResponseP50Sec: ttftP50Sec + decodeDurationSec + extraPostGenerationLatencySec,
+    totalResponseP90Sec: ttftP90Sec + decodeDurationSec + extraPostGenerationLatencySec,
+    totalResponseP95Sec: ttftP95Sec + decodeDurationSec + extraPostGenerationLatencySec,
+    totalResponseP99Sec: ttftP99Sec + decodeDurationSec + extraPostGenerationLatencySec,
     highUtilizationWarning: rho > 0.85,
   };
 }
@@ -1799,9 +1830,11 @@ export function calculateRag(config) {
  * (classifies the full response before it's returned). Guard models are small(er) LLMs used in
  * a single-forward-pass classification role -- like calculateRag()'s embedding pool, this is
  * genuine new standing infrastructure (not a "what if" overlay), so its capex/power feed into
- * calculateCost() the same way RAG's do. The added per-request latency is surfaced for
- * transparency but is NOT wired into calculateSla()'s queueing model -- that stays scoped to the
- * main LLM replica's own concurrency, matching the scope boundary already established for RAG.
+ * calculateCost() the same way RAG's do. The added per-request latency (addedTtftSec /
+ * outputGuardLatencySec) is a fixed, deterministic offset -- calculateSla() folds it into the
+ * TTFT/total-response-time percentiles it reports as extraPreQueueLatencySec /
+ * extraPostGenerationLatencySec, since it doesn't itself queue on the LLM replica's own
+ * concurrency and so needs no distribution of its own.
  */
 export function calculateGuardrails(config) {
   const {

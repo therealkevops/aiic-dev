@@ -9,10 +9,12 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { calculateInfra, calculateSla } from '../src/utils/calculator.js';
+import { calculateInfra, calculateSla, calculateGuardrails, calculateIngress } from '../src/utils/calculator.js';
 import { MODEL_PRESETS, PRECISION_OPTIONS } from '../src/data/models.js';
 import { GPU_CATALOG } from '../src/data/hardware.js';
 import { PLATFORM_SYSTEMS } from '../src/data/platforms.js';
+import { GUARDRAIL_MODELS } from '../src/data/guardrails.js';
+import { INGRESS_TIERS } from '../src/data/ingress.js';
 
 const getModel = (id) => MODEL_PRESETS.find(m => m.id === id);
 const getPrecision = (id) => PRECISION_OPTIONS.find(p => p.id === id);
@@ -168,5 +170,127 @@ describe('5. TTFT vs TPOT Scope', () => {
     const sla = calculateSla({ infraResults, targetUtilization: 0.8 });
     assert.ok(Math.abs(sla.ttftP99Sec - (sla.ttftBaselineSec + sla.p99WaitSec)) < 1e-9);
     assert.ok(Math.abs(sla.ttftP50Sec - (sla.ttftBaselineSec + sla.p50WaitSec)) < 1e-9);
+  });
+});
+
+describe('6. Deterministic Add-on Module Latency (Ingress + Guardrails)', () => {
+  it('defaults to zero extra latency, matching pre-existing behavior exactly', () => {
+    const infraResults = buildInfra({});
+    const withDefaults = calculateSla({ infraResults, targetUtilization: 0.7 });
+    const explicitZero = calculateSla({ infraResults, targetUtilization: 0.7, extraPreQueueLatencySec: 0, extraPostGenerationLatencySec: 0 });
+    assert.equal(withDefaults.ttftBaselineSec, explicitZero.ttftBaselineSec);
+    assert.equal(withDefaults.ttftP99Sec, explicitZero.ttftP99Sec);
+  });
+
+  it('extraPreQueueLatencySec shifts every TTFT percentile by exactly that constant', () => {
+    const infraResults = buildInfra({});
+    const base = calculateSla({ infraResults, targetUtilization: 0.7 });
+    const withExtra = calculateSla({ infraResults, targetUtilization: 0.7, extraPreQueueLatencySec: 0.05 });
+    for (const key of ['ttftBaselineSec', 'ttftP50Sec', 'ttftP90Sec', 'ttftP95Sec', 'ttftP99Sec']) {
+      assert.ok(Math.abs((withExtra[key] - base[key]) - 0.05) < 1e-9, `${key} should shift by exactly 50ms`);
+    }
+  });
+
+  it('extraPreQueueLatencySec does NOT change the queueing wait itself (it is added after, not part of service time)', () => {
+    const infraResults = buildInfra({});
+    const base = calculateSla({ infraResults, targetUtilization: 0.7 });
+    const withExtra = calculateSla({ infraResults, targetUtilization: 0.7, extraPreQueueLatencySec: 0.05 });
+    assert.equal(withExtra.p99WaitSec, base.p99WaitSec);
+    assert.equal(withExtra.meanServiceTimeSec, base.meanServiceTimeSec);
+    assert.equal(withExtra.probabilityOfQueueing, base.probabilityOfQueueing);
+  });
+
+  it('extraPostGenerationLatencySec affects total response time but NOT any TTFT percentile', () => {
+    const infraResults = buildInfra({});
+    const base = calculateSla({ infraResults, targetUtilization: 0.7 });
+    const withExtra = calculateSla({ infraResults, targetUtilization: 0.7, extraPostGenerationLatencySec: 0.1 });
+    assert.equal(withExtra.ttftP99Sec, base.ttftP99Sec);
+    assert.equal(withExtra.ttftBaselineSec, base.ttftBaselineSec);
+    for (const key of ['totalResponseBaselineSec', 'totalResponseP50Sec', 'totalResponseP90Sec', 'totalResponseP95Sec', 'totalResponseP99Sec']) {
+      assert.ok(Math.abs((withExtra[key] - base[key]) - 0.1) < 1e-9, `${key} should shift by exactly 100ms`);
+    }
+  });
+
+  it('total response time equals TTFT at percentile plus decode duration plus post-generation latency', () => {
+    const infraResults = buildInfra({});
+    const sla = calculateSla({ infraResults, targetUtilization: 0.7, extraPreQueueLatencySec: 0.02, extraPostGenerationLatencySec: 0.03 });
+    const decodeDurationSec = sla.avgOutputTokens * sla.tpotSec;
+    for (const [ttftKey, totalKey] of [
+      ['ttftP50Sec', 'totalResponseP50Sec'],
+      ['ttftP90Sec', 'totalResponseP90Sec'],
+      ['ttftP95Sec', 'totalResponseP95Sec'],
+      ['ttftP99Sec', 'totalResponseP99Sec'],
+    ]) {
+      const expected = sla[ttftKey] + decodeDurationSec + 0.03;
+      assert.ok(Math.abs(sla[totalKey] - expected) < 1e-6, `${totalKey} should equal ${ttftKey} + decode + post-gen`);
+    }
+  });
+
+  it('both extras compound additively without interacting', () => {
+    const infraResults = buildInfra({});
+    const base = calculateSla({ infraResults, targetUtilization: 0.7 });
+    const both = calculateSla({ infraResults, targetUtilization: 0.7, extraPreQueueLatencySec: 0.05, extraPostGenerationLatencySec: 0.1 });
+    assert.ok(Math.abs((both.totalResponseP99Sec - base.totalResponseP99Sec) - 0.15) < 1e-9);
+  });
+});
+
+describe('7. End-to-End Wiring (Guardrails + Ingress -> SLA, matching App.jsx)', () => {
+  it('a guardrails-only configuration folds addedTtftSec/outputGuardLatencySec into SLA exactly', () => {
+    const infraResults = buildInfra({});
+    const guardModel = GUARDRAIL_MODELS.find(m => m.id === 'llama-guard-3-8b');
+    const guardGpu = getGpu('l40s-pcie');
+    const guardrails = calculateGuardrails({
+      enabled: true, infraResults, guardModel, guardGpu,
+      guardGpuUnitPriceUsd: 8500, enableInputGuard: true, enableOutputGuard: true,
+    });
+
+    const base = calculateSla({ infraResults, targetUtilization: 0.7 });
+    const withGuardrails = calculateSla({
+      infraResults, targetUtilization: 0.7,
+      extraPreQueueLatencySec: guardrails.addedTtftSec,
+      extraPostGenerationLatencySec: guardrails.outputGuardLatencySec,
+    });
+
+    assert.ok(Math.abs((withGuardrails.ttftBaselineSec - base.ttftBaselineSec) - guardrails.addedTtftSec) < 1e-9);
+    assert.ok(Math.abs((withGuardrails.totalResponseBaselineSec - base.totalResponseBaselineSec) - guardrails.addedTotalLatencySec) < 1e-9);
+  });
+
+  it('an ingress + guardrails configuration combines both into extraPreQueueLatencySec, matching App.jsx\'s formula', () => {
+    const infraResults = buildInfra({});
+    const guardModel = GUARDRAIL_MODELS.find(m => m.id === 'shieldgemma-9b');
+    const guardGpu = getGpu('l40s-pcie');
+    const guardrails = calculateGuardrails({
+      enabled: true, infraResults, guardModel, guardGpu,
+      guardGpuUnitPriceUsd: 8500, enableInputGuard: true, enableOutputGuard: true,
+    });
+    const ingressTier = INGRESS_TIERS.find(t => t.id === 'api-gateway');
+    const ingress = calculateIngress({ enabled: true, infraResults, ingressTier, egressUsdPerGb: 0.09 });
+
+    // Exactly App.jsx's own formula for the sla useMemo.
+    const extraPreQueueLatencySec = (ingress.eligible ? ingress.addedLatencyMs / 1000 : 0)
+      + (guardrails.eligible ? guardrails.addedTtftSec : 0);
+    const extraPostGenerationLatencySec = guardrails.eligible ? guardrails.outputGuardLatencySec : 0;
+
+    const base = calculateSla({ infraResults, targetUtilization: 0.7 });
+    const combined = calculateSla({ infraResults, targetUtilization: 0.7, extraPreQueueLatencySec, extraPostGenerationLatencySec });
+
+    const expectedShift = (ingress.addedLatencyMs / 1000) + guardrails.addedTtftSec;
+    assert.ok(Math.abs((combined.ttftP99Sec - base.ttftP99Sec) - expectedShift) < 1e-9);
+  });
+
+  it('disabling guardrails/ingress (extras default to 0) reproduces the pre-existing SLA output exactly', () => {
+    const infraResults = buildInfra({});
+    const guardrails = calculateGuardrails({ enabled: false });
+    const ingress = calculateIngress({ enabled: false });
+
+    const extraPreQueueLatencySec = (ingress.eligible ? ingress.addedLatencyMs / 1000 : 0)
+      + (guardrails.eligible ? guardrails.addedTtftSec : 0);
+    const extraPostGenerationLatencySec = guardrails.eligible ? guardrails.outputGuardLatencySec : 0;
+
+    const withDisabledAddons = calculateSla({ infraResults, targetUtilization: 0.7, extraPreQueueLatencySec, extraPostGenerationLatencySec });
+    const withNoAddonsAtAll = calculateSla({ infraResults, targetUtilization: 0.7 });
+
+    assert.equal(withDisabledAddons.ttftP99Sec, withNoAddonsAtAll.ttftP99Sec);
+    assert.equal(withDisabledAddons.totalResponseP99Sec, withNoAddonsAtAll.totalResponseP99Sec);
   });
 });

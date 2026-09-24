@@ -493,16 +493,6 @@ export default function App() {
   const effectiveResults = useMemo(() => applyMigThroughputScaling(results, mig), [results, mig]);
   const throughput = effectiveResults.throughput;
 
-  // 5. SLA / Tail-Latency Queueing -- an M/M/c (Erlang C) queueing overlay at the replica level.
-  // Purely informational: it estimates how queueing delay grows TTFT at a target utilization, but
-  // doesn't change GPU count or feed into Cost (unlike MIG/durability, it doesn't change capex).
-  const sla = useMemo(() => {
-    return calculateSla({
-      infraResults: effectiveResults,
-      targetUtilization,
-    });
-  }, [effectiveResults, targetUtilization]);
-
   // 6. RAG Pipeline -- embedding-compute + vector-DB serving pool. Unlike MIG/SLA, this is real
   // standing infrastructure (not a "what if" overlay), so its capex/power feed into Cost below.
   const embeddingModel = EMBEDDING_MODELS.find(m => m.id === selectedEmbeddingModelId) || EMBEDDING_MODELS[0];
@@ -551,6 +541,23 @@ export default function App() {
       egressUsdPerGb,
     });
   }, [enableIngress, effectiveResults, ingressTier, egressUsdPerGb]);
+
+  // 5. SLA / Tail-Latency Queueing -- an M/M/c (Erlang C) queueing overlay at the replica level.
+  // Informational: it estimates how queueing delay grows TTFT at a target utilization, but doesn't
+  // change GPU count or feed into Cost (unlike MIG/durability, it doesn't change capex). Ingress's
+  // TLS/routing overhead and a guardrails input classifier both run before the request reaches the
+  // replica's queue, and a guardrails output classifier runs after decode finishes -- all three are
+  // fixed per-request latency, not stochastic queueing delay, so they fold in as flat additions
+  // rather than needing their own distribution.
+  const sla = useMemo(() => {
+    return calculateSla({
+      infraResults: effectiveResults,
+      targetUtilization,
+      extraPreQueueLatencySec: (ingress.eligible ? ingress.addedLatencyMs / 1000 : 0)
+        + (guardrails.eligible ? guardrails.addedTtftSec : 0),
+      extraPostGenerationLatencySec: guardrails.eligible ? guardrails.outputGuardLatencySec : 0,
+    });
+  }, [effectiveResults, targetUtilization, ingress, guardrails]);
 
   // 10. HA/DR -- incremental compute+storage a multi-AZ or cross-region DR tier adds on top of
   // the primary site. Same MIG-consolidated GPU count used for Cost below, for consistency.
@@ -759,14 +766,20 @@ ${workloadType === 'inference' && throughput ? `
 - P(Request Queues) — Erlang C: ${(sla.probabilityOfQueueing * 100).toFixed(1)}%
 - Mean Queueing Delay: ${(sla.meanWaitSec * 1000).toFixed(1)} ms
 - TTFT — Baseline / P50 / P95 / P99: ${(sla.ttftBaselineSec * 1000).toFixed(1)} / ${(sla.ttftP50Sec * 1000).toFixed(1)} / ${(sla.ttftP95Sec * 1000).toFixed(1)} / ${sla.ttftP99Sec < 1 ? `${(sla.ttftP99Sec * 1000).toFixed(1)} ms` : `${sla.ttftP99Sec.toFixed(2)} s`}
-- TPOT (unaffected by queueing): ${(sla.tpotSec * 1000).toFixed(2)} ms/tok\n` : ''}=====================================================`;
+- TPOT (unaffected by queueing): ${(sla.tpotSec * 1000).toFixed(2)} ms/tok
+- Total Response Time — Baseline / P50 / P95 / P99: ${(sla.totalResponseBaselineSec * 1000).toFixed(1)} / ${(sla.totalResponseP50Sec * 1000).toFixed(1)} / ${(sla.totalResponseP95Sec * 1000).toFixed(1)} / ${sla.totalResponseP99Sec < 1 ? `${(sla.totalResponseP99Sec * 1000).toFixed(1)} ms` : `${sla.totalResponseP99Sec.toFixed(2)} s`} (includes Ingress/Guardrails fixed latency where enabled)\n` : ''}=====================================================`;
 
     navigator.clipboard.writeText(bomText);
     setCopiedBOM(true);
     setTimeout(() => setCopiedBOM(false), 2500);
   };
 
-  const navTabs = [
+  // Nav rail is split into two discrete groups: the technical architecture knobs (workload
+  // through MIG) that determine what gets built, and the economics/SLA tabs (SLA, Cost & TCO)
+  // that report on what those technical choices cost and how they perform -- consumed, not
+  // configured. Grouping declutters the now-12-tab technical list without losing the single-page
+  // live reactivity of toggling a knob and immediately seeing its cost/SLA impact.
+  const technicalNavTabs = [
     { id: 'workload', label: 'Workload', icon: Activity, meta: model.name },
     { id: 'platform', label: 'Platform', icon: Building2, meta: platform.shortName },
     { id: 'sharding', label: 'Sharding', icon: Layers, meta: `TP=${tp} · PP=${pp} · DP=${dp}` },
@@ -779,10 +792,11 @@ ${workloadType === 'inference' && throughput ? `
     { id: 'hadr', label: 'HA / DR', icon: LifeBuoy, meta: haDr.eligible ? haDrTier.name : (enableHaDr ? 'N/A' : 'Off') },
     { id: 'mlops', label: 'MLOps Lifecycle', icon: GitBranch, meta: mlops.eligible ? mlopsStrategy.name : (enableMlops ? 'N/A' : 'Off') },
     { id: 'mig', label: 'MIG Partitioning', icon: Grid2x2, meta: mig.eligible ? mig.selectedProfile.id : (enableMig ? 'N/A' : 'Off') },
+  ];
+  const economicsNavTabs = [
     { id: 'sla', label: 'SLA & Tail Latency', icon: Timer, meta: sla.eligible ? `P99 ${sla.ttftP99Sec < 1 ? `${(sla.ttftP99Sec * 1000).toFixed(0)}ms` : `${sla.ttftP99Sec.toFixed(1)}s`}` : 'N/A' },
     { id: 'cost', label: 'Cost & TCO', icon: DollarSign, meta: `$${cost.effectiveUsdPerGpuHour.toFixed(2)}/GPU-hr` },
   ];
-
   if (page === 'glossary') {
     return <GlossaryPage onBack={() => setPage('calculator')} />;
   }
@@ -878,10 +892,39 @@ ${workloadType === 'inference' && throughput ? `
         <nav className="w-60 shrink-0 bg-zinc-900/95 border-r border-zinc-800 flex flex-col justify-between overflow-y-auto">
           <div className="p-3 space-y-1.5">
             <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">
-              Configuration
+              Technical Configuration
             </div>
 
-            {navTabs.map((t, i) => {
+            {technicalNavTabs.map((t, i) => {
+              const Icon = t.icon;
+              const active = activeInputTab === t.id;
+              return (
+                <button
+                  key={t.id}
+                  type="button"
+                  onClick={() => setActiveInputTab(t.id)}
+                  className={`w-full text-left px-2.5 py-2.5 rounded-lg border transition cursor-pointer flex items-center gap-2.5 ${
+                    active
+                      ? 'bg-sky-500/10 border-sky-500/70 text-white'
+                      : 'bg-transparent hover:bg-zinc-800/60 border-transparent text-zinc-300 hover:text-white'
+                  }`}
+                >
+                  <div className={`p-1.5 rounded-md shrink-0 ${active ? 'bg-sky-500 text-white' : 'bg-zinc-800 text-zinc-400'}`}>
+                    <Icon className="w-4 h-4" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-xs font-semibold">{i + 1}. {t.label}</div>
+                    <div className="text-[11px] text-zinc-400 truncate mt-0.5">{t.meta}</div>
+                  </div>
+                </button>
+              );
+            })}
+
+            <div className="px-2 pt-3 pb-1 text-[10px] font-semibold uppercase tracking-wider text-zinc-500 border-t border-zinc-800/70 mt-2">
+              Economics &amp; SLA
+            </div>
+
+            {economicsNavTabs.map((t, i) => {
               const Icon = t.icon;
               const active = activeInputTab === t.id;
               return (
@@ -2163,7 +2206,7 @@ ${workloadType === 'inference' && throughput ? `
               className="space-y-4"
             >
               <Banner tone="info" icon={AlertTriangle}>
-                Guardrails run a small(er) safety-classifier model alongside the main LLM to screen requests: an input guard classifies the prompt before generation starts, and/or an output guard classifies the full response before it's returned. Like RAG, this is real standing infrastructure — its capex and power feed into Cost & TCO. Added latency is shown here for transparency but isn't wired into the SLA tab's queueing model, which stays scoped to the main LLM replica.
+                Guardrails run a small(er) safety-classifier model alongside the main LLM to screen requests: an input guard classifies the prompt before generation starts, and/or an output guard classifies the full response before it's returned. Like RAG, this is real standing infrastructure — its capex and power feed into Cost & TCO. Added latency is a fixed per-request delay (not queueing), so it's folded straight into every percentile on the SLA tab rather than modeled as its own distribution there.
               </Banner>
 
               <ToggleRow
@@ -2248,7 +2291,7 @@ ${workloadType === 'inference' && throughput ? `
                   </div>
 
                   <div className="pt-3 border-t border-zinc-800/70">
-                    <SectionLabel>ADDED LATENCY (INFORMATIONAL — NOT IN SLA TAB)</SectionLabel>
+                    <SectionLabel>ADDED LATENCY (FOLDED INTO SLA TAB'S PERCENTILES)</SectionLabel>
                     <Rows>
                       <Row k="Input guard latency" v={enableInputGuard ? `${(guardrails.inputGuardLatencySec * 1000).toFixed(1)} ms` : 'Disabled'} mono={false} />
                       <Row k="Output guard latency" v={enableOutputGuard ? `${(guardrails.outputGuardLatencySec * 1000).toFixed(1)} ms` : 'Disabled'} mono={false} />
@@ -2278,7 +2321,7 @@ ${workloadType === 'inference' && throughput ? `
               className="space-y-4"
             >
               <Banner tone="info" icon={AlertTriangle}>
-                The ingress/edge layer terminates TLS and load-balances every response leaving the cluster -- self-hosted appliances or software instances add real capex and power like RAG/guardrails; every tier (including fully-managed ones) adds a recurring annual bill for egress bandwidth, which can be a meaningful share of ongoing opex for high-throughput serving.
+                The ingress/edge layer terminates TLS and load-balances every response leaving the cluster -- self-hosted appliances or software instances add real capex and power like RAG/guardrails; every tier (including fully-managed ones) adds a recurring annual bill for egress bandwidth, which can be a meaningful share of ongoing opex for high-throughput serving. Its added latency is a fixed per-request delay, folded into every percentile on the SLA tab.
               </Banner>
 
               <ToggleRow
@@ -2574,7 +2617,7 @@ ${workloadType === 'inference' && throughput ? `
               className="space-y-4"
             >
               <Banner tone="info" icon={AlertTriangle}>
-                Point-estimate TTFT/TPOT above assume a request has a free batch slot the instant it arrives. In practice, a replica serves at most C concurrent requests (its continuous-batching concurrency) — anything beyond that queues for a slot. This uses an M/M/c (Erlang C) queueing model to estimate how much that queueing adds to TTFT at a target utilization. TPOT is unaffected: once a request is admitted to the running batch, decode proceeds at the same steady-state rate regardless of how busy the replica was before admission.
+                Point-estimate TTFT/TPOT above assume a request has a free batch slot the instant it arrives. In practice, a replica serves at most C concurrent requests (its continuous-batching concurrency) — anything beyond that queues for a slot. This uses an M/M/c (Erlang C) queueing model to estimate how much that queueing adds to TTFT at a target utilization. TPOT is unaffected: once a request is admitted to the running batch, decode proceeds at the same steady-state rate regardless of how busy the replica was before admission. When enabled, Ingress and Guardrails add fixed (non-queueing) latency ahead of and behind this queueing model — folded into every percentile below, not just shown on their own tabs.
               </Banner>
 
               {!sla.eligible && (
@@ -2618,6 +2661,20 @@ ${workloadType === 'inference' && throughput ? `
                     </Rows>
                   </div>
 
+                  {(sla.extraPreQueueLatencySec > 0 || sla.extraPostGenerationLatencySec > 0) && (
+                    <div className="pt-3 border-t border-zinc-800/70">
+                      <SectionLabel>ADD-ON MODULE LATENCY FOLDED IN (FIXED, NOT QUEUEING)</SectionLabel>
+                      <Rows>
+                        {sla.extraPreQueueLatencySec > 0 && (
+                          <Row k="Pre-queue (Ingress TLS/routing + Guardrails input guard)" v={`+${(sla.extraPreQueueLatencySec * 1000).toFixed(1)} ms`} tone="accent" />
+                        )}
+                        {sla.extraPostGenerationLatencySec > 0 && (
+                          <Row k="Post-generation (Guardrails output guard)" v={`+${(sla.extraPostGenerationLatencySec * 1000).toFixed(1)} ms`} tone="accent" />
+                        )}
+                      </Rows>
+                    </div>
+                  )}
+
                   <div className="pt-3 border-t border-zinc-800/70">
                     <SectionLabel>TTFT AT PERCENTILE (BASELINE + QUEUEING DELAY)</SectionLabel>
                     <Rows>
@@ -2627,6 +2684,17 @@ ${workloadType === 'inference' && throughput ? `
                       <Row k="P95 TTFT" v={`${(sla.ttftP95Sec * 1000).toFixed(1)} ms`} tone="accent" />
                       <Row k="P99 TTFT" v={`${sla.ttftP99Sec < 1 ? `${(sla.ttftP99Sec * 1000).toFixed(1)} ms` : `${sla.ttftP99Sec.toFixed(2)} s`}`} tone="warn" />
                       <Row k="TPOT (unaffected by queueing)" v={`${(sla.tpotSec * 1000).toFixed(2)} ms/tok`} mono={false} />
+                    </Rows>
+                  </div>
+
+                  <div className="pt-3 border-t border-zinc-800/70">
+                    <SectionLabel>TOTAL RESPONSE TIME AT PERCENTILE (TTFT + DECODE + POST-GEN)</SectionLabel>
+                    <Rows>
+                      <Row k="Baseline total response (no queueing)" v={`${(sla.totalResponseBaselineSec * 1000).toFixed(1)} ms`} mono={false} />
+                      <Row k="P50 total response" v={`${(sla.totalResponseP50Sec * 1000).toFixed(1)} ms`} mono={false} />
+                      <Row k="P90 total response" v={`${(sla.totalResponseP90Sec * 1000).toFixed(1)} ms`} mono={false} />
+                      <Row k="P95 total response" v={`${(sla.totalResponseP95Sec * 1000).toFixed(1)} ms`} tone="accent" />
+                      <Row k="P99 total response" v={`${sla.totalResponseP99Sec < 1 ? `${(sla.totalResponseP99Sec * 1000).toFixed(1)} ms` : `${sla.totalResponseP99Sec.toFixed(2)} s`}`} tone="warn" />
                     </Rows>
                   </div>
                 </>
@@ -3107,6 +3175,7 @@ ${workloadType === 'inference' && throughput ? `
                     <Row k="P(request queues)" v={`${(sla.probabilityOfQueueing * 100).toFixed(1)}%`} mono={false} />
                     <Row k="Mean queueing delay" v={`${(sla.meanWaitSec * 1000).toFixed(1)} ms`} mono={false} />
                     <Row k="TTFT P50 / P95 / P99" v={`${(sla.ttftP50Sec * 1000).toFixed(0)} / ${(sla.ttftP95Sec * 1000).toFixed(0)} / ${sla.ttftP99Sec < 1 ? `${(sla.ttftP99Sec * 1000).toFixed(0)}ms` : `${sla.ttftP99Sec.toFixed(2)}s`}`} tone={sla.highUtilizationWarning ? 'warn' : 'good'} />
+                    <Row k="Total response P50 / P95 / P99" v={`${(sla.totalResponseP50Sec * 1000).toFixed(0)} / ${(sla.totalResponseP95Sec * 1000).toFixed(0)} / ${sla.totalResponseP99Sec < 1 ? `${(sla.totalResponseP99Sec * 1000).toFixed(0)}ms` : `${sla.totalResponseP99Sec.toFixed(2)}s`}`} mono={false} />
                   </Rows>
                 </Disclosure>
               )}

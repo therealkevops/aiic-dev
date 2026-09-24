@@ -328,6 +328,16 @@ else:
 DP = ceil(requiredKvForC / kvCapacityPerReplica)
 ```
 
+#### S7: Per-Replica Concurrency at Scale
+
+`concurrency` is the **total** number of concurrent streams the whole deployment must serve, not the load on any one replica. Once $DP > 1$, each replica only has to hold KV cache and decode activations for its own share of that total:
+
+$$\text{concurrencyPerReplica} = \left\lceil \frac{\text{concurrency}}{DP} \right\rceil \quad (DP = \text{dp for colocated serving, or the decode pool's implied replica count} \lfloor decodeGpus / decodeTP \rfloor \text{ under LLM-D})$$
+
+`calculateInfra` uses `concurrencyPerReplica` — not the raw `concurrency` — everywhere concurrency drives **per-GPU memory sizing**: the KV cache effective-token count (§3.3), the baseline (unoptimized) KV comparison used for `kvSavingsGb`, and `maxNumSeqs` in the inference activation-memory formula (§4.1). Prefill/TTFT and per-request activation sizing are unaffected (a single request's cost doesn't change with fleet size), and decode throughput (§7.2) already divided by $DP$ before this fix.
+
+This is what makes Data Parallelism the correct lever for scaling a deployment to hundreds or thousands of GPUs: adding replicas lowers the KV cache each individual GPU must hold, exactly matching how `recommendSharding`'s own $DP$ formula (S5.5, above) assumes the load will be split. Without this, `calculateInfra` would size every replica for the full cluster-wide concurrency regardless of $DP$, making additional replicas relieve nothing and falsely reporting Out-of-Memory at any scale beyond a handful of GPUs.
+
 ### 6.3 Pipeline Bubble Idle Time Warning
 When $PP > 1$, micro-batches must prime and drain the pipeline. The fraction of idle time is:
 

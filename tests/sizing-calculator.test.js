@@ -1083,6 +1083,91 @@ describe('7. Datacenter BOM, Facilities & Rail-Optimized Network', () => {
   });
 });
 
+describe('7b. Leaf-Spine Oversubscription Ratio (Rail-Optimized Fabric)', () => {
+  const build256Gpus = (oversubscriptionRatio) => {
+    const llama70b = getModel('llama3-70b');
+    const h100 = getGpu('h100-sxm');
+    const platform = getPlatform('cisco-c885a-h100');
+    return calculateInfra({
+      workloadType: 'inference',
+      model: llama70b,
+      precision: getPrecision('fp8'),
+      contextLength: 4096,
+      concurrency: 8,
+      gpu: h100,
+      platform,
+      tp: 8, pp: 4, dp: 8, // 32 nodes, 256 GPUs -- same topology as the C3 test above
+      networkProtocol: 'rocev2',
+      pue: 1.35,
+      ...(oversubscriptionRatio !== undefined ? { oversubscriptionRatio } : {}),
+    });
+  };
+
+  it('defaults to 1:1 non-blocking when omitted, reproducing the pre-existing C3 result exactly', () => {
+    const withDefault = build256Gpus(undefined);
+    const explicitOne = build256Gpus(1);
+    assert.equal(withDefault.network.leafSwitches, explicitOne.network.leafSwitches);
+    assert.equal(withDefault.network.spineSwitches, explicitOne.network.spineSwitches);
+    assert.equal(withDefault.network.effectiveBisectionTbps, explicitOne.network.effectiveBisectionTbps);
+    assert.equal(withDefault.network.effectiveBisectionTbps, withDefault.network.totalClusterBisectionTbps);
+    assert.equal(withDefault.network.topology, '2-Tier Leaf-Spine Non-Blocking Clos (Rail-Optimized)');
+  });
+
+  it('2:1 oversubscription halves uplinks-per-leaf, roughly halving spine switch count', () => {
+    const nonBlocking = build256Gpus(1);
+    const oversubscribed = build256Gpus(2);
+    assert.equal(nonBlocking.network.spineSwitches, 4);
+    assert.ok(oversubscribed.network.spineSwitches < nonBlocking.network.spineSwitches);
+    assert.equal(oversubscribed.network.spineSwitches, 2);
+  });
+
+  it('effective bisection bandwidth is derated by exactly the oversubscription ratio', () => {
+    const nonBlocking = build256Gpus(1);
+    const oversubscribed2to1 = build256Gpus(2);
+    const oversubscribed4to1 = build256Gpus(4);
+    assert.equal(nonBlocking.network.totalClusterBisectionTbps, oversubscribed2to1.network.totalClusterBisectionTbps, 'raw NIC-aggregate bisection is topology-independent');
+    assert.ok(Math.abs(oversubscribed2to1.network.effectiveBisectionTbps - (nonBlocking.network.effectiveBisectionTbps / 2)) < 1e-9);
+    assert.ok(Math.abs(oversubscribed4to1.network.effectiveBisectionTbps - (nonBlocking.network.effectiveBisectionTbps / 4)) < 1e-9);
+  });
+
+  it('topology label reflects the oversubscription ratio', () => {
+    const oversubscribed = build256Gpus(2);
+    assert.match(oversubscribed.network.topology, /2:1 Oversubscribed/);
+  });
+
+  it('has no effect on a single-leaf cluster (no spine tier exists to oversubscribe)', () => {
+    const llama70b = getModel('llama3-70b');
+    const h100 = getGpu('h100-sxm');
+    const platform = getPlatform('cisco-c885a-h100');
+    const small = (oversubscriptionRatio) => calculateInfra({
+      workloadType: 'inference', model: llama70b, precision: getPrecision('fp8'),
+      contextLength: 4096, concurrency: 4, gpu: h100, platform,
+      tp: 8, pp: 1, dp: 1, networkProtocol: 'rocev2', pue: 1.35, oversubscriptionRatio,
+    });
+    const nonBlocking = small(1);
+    const oversubscribed = small(4);
+    assert.equal(nonBlocking.network.spineSwitches, 0);
+    assert.equal(oversubscribed.network.spineSwitches, 0);
+    assert.equal(oversubscribed.network.effectiveOversubscriptionRatio, 1);
+    assert.equal(oversubscribed.network.effectiveBisectionTbps, oversubscribed.network.totalClusterBisectionTbps);
+  });
+
+  it('has no effect on the PCIe/modular fabric branch (fixed uplink design regardless of setting)', () => {
+    const llama70b = getModel('llama3-70b');
+    const l40s = getGpu('l40s-pcie');
+    const build = (oversubscriptionRatio) => calculateInfra({
+      workloadType: 'inference', model: llama70b, precision: getPrecision('fp8'),
+      contextLength: 4096, concurrency: 4, gpu: l40s, platform: null,
+      tp: 1, pp: 1, dp: 16, networkProtocol: 'rocev2', pue: 1.35, oversubscriptionRatio,
+    });
+    const nonBlocking = build(1);
+    const oversubscribed = build(8);
+    assert.equal(nonBlocking.network.spineSwitches, oversubscribed.network.spineSwitches);
+    assert.equal(nonBlocking.network.leafSwitches, oversubscribed.network.leafSwitches);
+    assert.equal(nonBlocking.network.effectiveBisectionTbps, oversubscribed.network.effectiveBisectionTbps);
+  });
+});
+
 describe('8. Massive-Scale Data Parallel Replica Sizing (S7)', () => {
   it('DP replicas split concurrency for per-GPU KV/activation sizing (regression: DP previously did not relieve memory pressure)', () => {
     const llama70b = getModel('llama3-70b');

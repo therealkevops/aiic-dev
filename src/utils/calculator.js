@@ -376,6 +376,11 @@ export function calculateInfra(config) {
     trainingType,    // "pretrain_sft" | "lora"
     zeroStage,       // 0, 1, 2, 3
     networkProtocol, // "rocev2" | "infiniband"
+    oversubscriptionRatio = 1, // leaf-spine uplink oversubscription for the rail-optimized fabric
+                               // (1 = non-blocking, 2 = 2:1, etc.) -- halves spine switch count and
+                               // effective bisection bandwidth per step, trading cost for bandwidth.
+                               // Only affects the rail-optimized 2-tier Clos branch below; PCIe/modular
+                               // topologies use a fixed uplink design regardless of this setting.
     pue = 1.35,      // facility PUE factor (default 1.35)
     servingConfig = null, // { servingEngine, orchestrator, servingArchitecture, enableChunkedPrefill, enablePrefixCaching }
   } = config;
@@ -786,7 +791,8 @@ export function calculateInfra(config) {
   // counted full-duplex (×2) -> (N/2) × speed × 2 = N × speed. The previous formula used
   // N × speed × 2, which is the cluster's total aggregate full-duplex NIC bandwidth (a real
   // number, just not what "bisection bandwidth" means) -- exactly 2x the correct value for
-  // this 1:1 non-blocking fabric.
+  // this 1:1 non-blocking fabric. This is the fabric's ceiling; effectiveBisectionTbps below
+  // derates it for the rail-optimized branch's actual spine oversubscription ratio.
   const totalClusterBisectionTbps = (totalComputeNics * nicSpeedGbps) / 1000;
 
   const isPcieOrModular = (platform && platform.isModular) || gpu.interconnectType === "pcie" || platform?.interconnectType === "pcie";
@@ -797,6 +803,7 @@ export function calculateInfra(config) {
   let downlinkCables = totalGpus;
   let fabricCables   = 0;
   let transceivers   = 0;
+  let effectiveOversubscriptionRatio = 1; // 1 = non-blocking; >1 means cross-leaf traffic is derated
 
   if (isPcieOrModular) {
     if (nodes === 1) {
@@ -825,14 +832,19 @@ export function calculateInfra(config) {
       uplinkCables  = 0;
     } else {
       leafSwitches   = R * Math.ceil(N_chassis / D);
-      const uplinksPerLeaf = Math.ceil(D / CONFIG.oversubscription);
+      const uplinksPerLeaf = Math.ceil(D / oversubscriptionRatio);
       spineSwitches  = Math.ceil((leafSwitches * uplinksPerLeaf) / CONFIG.switchPorts);
       uplinkCables   = leafSwitches * uplinksPerLeaf;
+      // Oversubscription only bites once traffic actually crosses leaf switches -- a
+      // single-leaf cluster (branch above) has no spine tier to oversubscribe at all.
+      effectiveOversubscriptionRatio = oversubscriptionRatio;
     }
     downlinkCables = N_gpus;
     fabricCables   = downlinkCables + uplinkCables;
     transceivers   = 2 * (downlinkCables + uplinkCables);
   }
+
+  const effectiveBisectionTbps = totalClusterBisectionTbps / effectiveOversubscriptionRatio;
 
   // ── 5. Power, Racks, and Facility ──────────────────────────────────────────
   const isModular = platform && platform.isModular;
@@ -1139,13 +1151,20 @@ export function calculateInfra(config) {
       totalComputeNics,
       nicSpeedGbps,
       totalClusterBisectionTbps,
+      oversubscriptionRatio,
+      effectiveOversubscriptionRatio,
+      effectiveBisectionTbps,
       leafSwitches,
       spineSwitches,
       fabricCables,
       downlinkCables,
       uplinkCables,
       transceivers,
-      topology: spineSwitches === 0 ? "Single-Tier Fabric (Intra-Chassis / Single Leaf)" : "2-Tier Leaf-Spine Non-Blocking Clos (Rail-Optimized)"
+      topology: spineSwitches === 0
+        ? "Single-Tier Fabric (Intra-Chassis / Single Leaf)"
+        : effectiveOversubscriptionRatio > 1
+          ? `2-Tier Leaf-Spine ${effectiveOversubscriptionRatio.toFixed(0)}:1 Oversubscribed Clos (Rail-Optimized)`
+          : "2-Tier Leaf-Spine Non-Blocking Clos (Rail-Optimized)"
     },
     // Facility
     facility: {

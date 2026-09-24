@@ -1345,6 +1345,11 @@ export function calculateCost(config) {
     ingressComputeCapexUsd = 0,
     ingressItPowerKw = 0,
     ingressAnnualOpexUsd = 0,
+    // HA/DR overlay (see calculateHaDr()): the incremental capex/power a multi-AZ or
+    // cross-region DR tier adds on top of the primary site's compute+storage, same additive
+    // capex/power pattern as RAG/guardrails/ingress.
+    haDrComputeCapexUsd = 0,
+    haDrItPowerKw = 0,
   } = config;
 
   const isLlmd = !!infraResults.memory.llmd;
@@ -1367,22 +1372,22 @@ export function calculateCost(config) {
 
   const networkHardwareCapexUsd = computeCapexUsd * (networkHardwareAdderPct / 100);
   const storageCapexUsd = storageResults ? (storageResults.achievedCapacityTb * storageUsdPerTbRaw) : 0;
-  const totalCapexUsd = computeCapexUsd + networkHardwareCapexUsd + storageCapexUsd + ragComputeCapexUsd + guardrailsComputeCapexUsd + ingressComputeCapexUsd;
+  const totalCapexUsd = computeCapexUsd + networkHardwareCapexUsd + storageCapexUsd + ragComputeCapexUsd + guardrailsComputeCapexUsd + ingressComputeCapexUsd + haDrComputeCapexUsd;
 
   const hoursPerYear = 24 * 365;
   const baseItPowerKw = itPowerKwOverride != null ? itPowerKwOverride : infraResults.facility.totalItPowerKw;
-  const billedItPowerKw = baseItPowerKw + ragItPowerKw + guardrailsItPowerKw + ingressItPowerKw;
+  const billedItPowerKw = baseItPowerKw + ragItPowerKw + guardrailsItPowerKw + ingressItPowerKw + haDrItPowerKw;
   // Colo bills $/kW/month on IT load (the colo provider's own facility overhead/cooling is
   // baked into their rate); an owned DC bills the utility $/kWh on the PUE-adjusted total load.
   // The MIG IT-power override has no PUE figure of its own, so the owned-DC branch applies the
   // same PUE multiplier the rest of this deployment already uses. Add-on modules' (RAG,
-  // guardrails, ingress) own IT power gets the same PUE treatment -- they're colocated with the
-  // rest of the deployment, not a separate facility.
+  // guardrails, ingress, HA/DR) own IT power gets the same PUE treatment -- they're colocated
+  // with the rest of the deployment, not a separate facility.
   const impliedPue = infraResults.facility.totalItPowerKw > 0
     ? infraResults.facility.totalFacilityPowerKw / infraResults.facility.totalItPowerKw
     : 1;
   const baseFacilityPowerKw = itPowerKwOverride != null ? baseItPowerKw * impliedPue : infraResults.facility.totalFacilityPowerKw;
-  const billedFacilityPowerKw = baseFacilityPowerKw + ((ragItPowerKw + guardrailsItPowerKw + ingressItPowerKw) * impliedPue);
+  const billedFacilityPowerKw = baseFacilityPowerKw + ((ragItPowerKw + guardrailsItPowerKw + ingressItPowerKw + haDrItPowerKw) * impliedPue);
   const annualPowerCostUsd = useColo
     ? billedItPowerKw * coloUsdPerKwPerMonth * 12
     : billedFacilityPowerKw * hoursPerYear * powerUsdPerKwh;
@@ -1418,6 +1423,7 @@ export function calculateCost(config) {
     ragCapexUsd: ragComputeCapexUsd,
     guardrailsCapexUsd: guardrailsComputeCapexUsd,
     ingressCapexUsd: ingressComputeCapexUsd,
+    haDrCapexUsd: haDrComputeCapexUsd,
     ingressAnnualOpexUsd,
     totalCapexUsd,
     annualPowerCostUsd,
@@ -1895,5 +1901,62 @@ export function calculateIngress(config) {
     ingressAnnualOpexUsd,
     ingressItPowerKw,
     addedLatencyMs: ingressTier.latencyOverheadMs,
+  };
+}
+
+// ─── High Availability / Disaster Recovery ─────────────────────────────────────────────────────
+/**
+ * Sizes the incremental compute+storage a multi-AZ or cross-region DR tier adds on top of the
+ * primary site's already-sized deployment. Unlike RAG/guardrails/ingress (which add their own
+ * small dedicated hardware pools), HA/DR multiplies EXISTING compute and storage -- a standby or
+ * active-active copy uses identical GPU/storage hardware to the primary site, priced at the same
+ * per-unit rates. Computed independently of calculateCost()'s own capex figures (rather than
+ * consuming them) to avoid a circular dependency, since calculateCost() is also where this
+ * overlay's own output gets fed back in.
+ */
+export function calculateHaDr(config) {
+  const {
+    enabled = false,
+    infraResults,
+    storageResults = null,
+    haDrTier,              // one of HA_DR_TIERS
+    gpuUnitPriceUsd = 0,
+    storageUsdPerTbRaw = 0,
+    computeGpuCountOverride = null, // pass MIG's consolidated GPU count when eligible, for consistency with calculateCost()
+    itPowerKwOverride = null,
+  } = config;
+
+  if (!enabled) {
+    return { enabled: false, eligible: false, reason: "HA/DR sizing is disabled." };
+  }
+
+  if (infraResults.workloadType !== "inference") {
+    return { enabled: true, eligible: false, reason: "HA/DR replica sizing applies to inference workloads -- a training job's resilience is a checkpoint/resume concern (see Storage), not a live-replica one." };
+  }
+
+  const baseGpuCount = computeGpuCountOverride != null ? computeGpuCountOverride : infraResults.totalGpus;
+  const baseComputeCapexUsd = baseGpuCount * gpuUnitPriceUsd;
+  const baseStorageCapexUsd = storageResults ? storageResults.achievedCapacityTb * storageUsdPerTbRaw : 0;
+  const baseItPowerKw = itPowerKwOverride != null ? itPowerKwOverride : infraResults.facility.totalItPowerKw;
+
+  // Only the INCREMENTAL multiplier (tier - 1x) is new spend -- the base 1x is already priced as
+  // the primary site's own compute/storage capex elsewhere.
+  const incrementalComputeCapexUsd = baseComputeCapexUsd * (haDrTier.computeMultiplier - 1);
+  const incrementalStorageCapexUsd = baseStorageCapexUsd * (haDrTier.storageMultiplier - 1);
+  const haDrComputeCapexUsd = incrementalComputeCapexUsd + incrementalStorageCapexUsd;
+  const haDrItPowerKw = baseItPowerKw * (haDrTier.computeMultiplier - 1);
+
+  return {
+    enabled: true,
+    eligible: true,
+    reason: null,
+    haDrTier,
+    baseGpuCount,
+    baseComputeCapexUsd,
+    baseStorageCapexUsd,
+    incrementalComputeCapexUsd,
+    incrementalStorageCapexUsd,
+    haDrComputeCapexUsd,
+    haDrItPowerKw,
   };
 }

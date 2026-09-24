@@ -56,6 +56,7 @@ export const USE_CASE_PRESETS = [
       guardGpuId: 'l40s-pcie', guardGpuUnitPriceUsd: 8500,
       enableInputGuard: true, enableOutputGuard: true,
       enableIngress: true, selectedIngressTierId: 'software-lb', egressUsdPerGb: 0.09,
+      enableHaDr: true, selectedHaDrTierId: 'multi-az',
     },
   },
   {
@@ -109,6 +110,7 @@ export const USE_CASE_PRESETS = [
       guardGpuId: 'l40s-pcie', guardGpuUnitPriceUsd: 8500,
       enableInputGuard: true, enableOutputGuard: true,
       enableIngress: true, selectedIngressTierId: 'software-lb', egressUsdPerGb: 0.09,
+      enableHaDr: true, selectedHaDrTierId: 'multi-az',
     },
   },
   {
@@ -162,6 +164,7 @@ export const USE_CASE_PRESETS = [
       guardGpuId: 'l40s-pcie', guardGpuUnitPriceUsd: 8500,
       enableInputGuard: true, enableOutputGuard: true,
       enableIngress: true, selectedIngressTierId: 'cloud-managed-lb', egressUsdPerGb: 0.09,
+      enableHaDr: true, selectedHaDrTierId: 'warm-standby',
     },
   },
   {
@@ -215,6 +218,7 @@ export const USE_CASE_PRESETS = [
       guardGpuId: 'l40s-pcie', guardGpuUnitPriceUsd: 8500,
       enableInputGuard: true, enableOutputGuard: true,
       enableIngress: true, selectedIngressTierId: 'software-lb', egressUsdPerGb: 0.09,
+      enableHaDr: true, selectedHaDrTierId: 'multi-az',
     },
   },
   {
@@ -268,6 +272,7 @@ export const USE_CASE_PRESETS = [
       guardGpuId: 'l40s-pcie', guardGpuUnitPriceUsd: 8500,
       enableInputGuard: true, enableOutputGuard: true,
       enableIngress: false, selectedIngressTierId: 'software-lb', egressUsdPerGb: 0.09,
+      enableHaDr: false, selectedHaDrTierId: 'multi-az',
     },
   },
   {
@@ -321,6 +326,7 @@ export const USE_CASE_PRESETS = [
       guardGpuId: 'l40s-pcie', guardGpuUnitPriceUsd: 8500,
       enableInputGuard: true, enableOutputGuard: true,
       enableIngress: false, selectedIngressTierId: 'software-lb', egressUsdPerGb: 0.09,
+      enableHaDr: false, selectedHaDrTierId: 'multi-az',
     },
   },
   {
@@ -374,6 +380,7 @@ export const USE_CASE_PRESETS = [
       guardGpuId: 'l40s-pcie', guardGpuUnitPriceUsd: 8500,
       enableInputGuard: true, enableOutputGuard: true,
       enableIngress: true, selectedIngressTierId: 'software-lb', egressUsdPerGb: 0.09,
+      enableHaDr: false, selectedHaDrTierId: 'multi-az',
     },
   },
 
@@ -429,6 +436,7 @@ export const USE_CASE_PRESETS = [
       guardGpuId: 'l40s-pcie', guardGpuUnitPriceUsd: 8500,
       enableInputGuard: true, enableOutputGuard: true,
       enableIngress: true, selectedIngressTierId: 'api-gateway', egressUsdPerGb: 0.09,
+      enableHaDr: true, selectedHaDrTierId: 'multi-az',
     },
   },
   {
@@ -482,6 +490,7 @@ export const USE_CASE_PRESETS = [
       guardGpuId: 'l40s-pcie', guardGpuUnitPriceUsd: 8500,
       enableInputGuard: true, enableOutputGuard: true,
       enableIngress: true, selectedIngressTierId: 'software-lb', egressUsdPerGb: 0.09,
+      enableHaDr: true, selectedHaDrTierId: 'multi-az',
     },
   },
   {
@@ -535,6 +544,7 @@ export const USE_CASE_PRESETS = [
       guardGpuId: 'l40s-pcie', guardGpuUnitPriceUsd: 8500,
       enableInputGuard: true, enableOutputGuard: true,
       enableIngress: true, selectedIngressTierId: 'api-gateway', egressUsdPerGb: 0.09,
+      enableHaDr: true, selectedHaDrTierId: 'multi-az',
     },
   },
   {
@@ -588,6 +598,7 @@ export const USE_CASE_PRESETS = [
       guardGpuId: 'l40s-pcie', guardGpuUnitPriceUsd: 8500,
       enableInputGuard: true, enableOutputGuard: true,
       enableIngress: true, selectedIngressTierId: 'api-gateway', egressUsdPerGb: 0.09,
+      enableHaDr: true, selectedHaDrTierId: 'warm-standby',
     },
   },
   {
@@ -641,6 +652,7 @@ export const USE_CASE_PRESETS = [
       guardGpuId: 'l40s-pcie', guardGpuUnitPriceUsd: 8500,
       enableInputGuard: true, enableOutputGuard: true,
       enableIngress: false, selectedIngressTierId: 'software-lb', egressUsdPerGb: 0.09,
+      enableHaDr: false, selectedHaDrTierId: 'multi-az',
     },
   },
 
@@ -696,6 +708,7 @@ export const USE_CASE_PRESETS = [
       guardGpuId: 'l40s-pcie', guardGpuUnitPriceUsd: 8500,
       enableInputGuard: true, enableOutputGuard: true,
       enableIngress: false, selectedIngressTierId: 'software-lb', egressUsdPerGb: 0.09,
+      enableHaDr: false, selectedHaDrTierId: 'multi-az',
     },
   },
   {
@@ -749,6 +762,7 @@ export const USE_CASE_PRESETS = [
       guardGpuId: 'l40s-pcie', guardGpuUnitPriceUsd: 8500,
       enableInputGuard: true, enableOutputGuard: true,
       enableIngress: true, selectedIngressTierId: 'cdn-edge', egressUsdPerGb: 0.085,
+      enableHaDr: true, selectedHaDrTierId: 'multi-site-active-active',
     },
   },
   {
@@ -802,6 +816,7 @@ export const USE_CASE_PRESETS = [
       guardGpuId: 'l40s-pcie', guardGpuUnitPriceUsd: 8500,
       enableInputGuard: true, enableOutputGuard: true,
       enableIngress: false, selectedIngressTierId: 'software-lb', egressUsdPerGb: 0.09,
+      enableHaDr: false, selectedHaDrTierId: 'multi-az',
     },
   },
 ];

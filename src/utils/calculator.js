@@ -1532,6 +1532,57 @@ export function calculateMigConsolidation(config) {
   };
 }
 
+/**
+ * Applies MIG's throughputScaleFactor to calculateInfra()'s throughput block, so the TTFT/TPOT
+ * (and everything derived from them -- SLA queueing, Guardrails/Ingress request-rate sizing, the
+ * displayed Inference Performance panel) reflect what a replica confined to a MIG slice actually
+ * delivers, instead of calculateInfra()'s own whole-dedicated-GPU numbers. MIG eligibility
+ * guarantees TP=1, PP=1, and non-LLM-D, which collapses ttftSec to t_compute alone and t_step to
+ * max(t_mem, t_comp) alone (every other latency term -- all-reduce, pipeline bubble, KV transfer
+ * -- is architecturally zero in that regime), so every latency figure scales uniformly by
+ * 1/scale and every rate (tok/s) figure scales uniformly by scale. Returns infraResults unchanged
+ * (same reference) when MIG isn't active/eligible or the selected profile is the full 7-slice GPU
+ * (scale === 1, no penalty to apply).
+ */
+export function applyMigThroughputScaling(infraResults, migResults) {
+  const scale = migResults?.eligible ? migResults.throughputScaleFactor : 1;
+  if (!migResults?.eligible || scale >= 1 || !infraResults.throughput) {
+    return infraResults;
+  }
+
+  const t = infraResults.throughput;
+  const t_step = t.t_step / scale;
+  const t_compute = t.t_compute / scale;
+  const ttftSec = t_compute + t.t_allreduce + t.t_pipeline + t.t_kv_transfer;
+  const replicaThroughput = t.replicaThroughput * scale;
+  const clusterThroughput = t.clusterThroughput * scale;
+  const promptTokensPerSecPerReplica = Math.round(t.promptTokensPerSecPerReplica * scale);
+  const promptTokensPerSecPerGpu = Math.round(t.promptTokensPerSecPerGpu * scale);
+  const clusterBatchPromptTps = Math.round(t.clusterBatchPromptTps * scale);
+
+  return {
+    ...infraResults,
+    throughput: {
+      ...t,
+      t_mem: t.t_mem / scale,
+      t_comp: t.t_comp / scale,
+      t_step,
+      tpotMs: Number((t_step * 1000).toFixed(2)),
+      replicaThroughput: Math.round(replicaThroughput),
+      clusterThroughput: Math.round(clusterThroughput),
+      tokensPerSecPerReplica: Math.round(replicaThroughput),
+      tokensPerSecPerGpu: Math.round(replicaThroughput), // decodeTpCount is always 1 under MIG eligibility
+      batchThroughputTps: Math.round(clusterThroughput),
+      t_compute,
+      ttftSec,
+      ttftMs: Number((ttftSec * 1000).toFixed(2)),
+      promptTokensPerSecPerGpu,
+      promptTokensPerSecPerReplica,
+      clusterBatchPromptTps,
+    },
+  };
+}
+
 // Numerically-stable Erlang B recursion (avoids factorial/exponential overflow
 // at large c). B(0,a)=1; B(n,a) = (a*B(n-1,a)) / (n + a*B(n-1,a))
 function erlangB(c, a) {

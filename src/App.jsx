@@ -40,7 +40,7 @@ import { EMBEDDING_MODELS, VECTOR_DB_PLATFORMS, DEFAULT_EMBEDDING_MODEL_ID, DEFA
 import { GUARDRAIL_MODELS, DEFAULT_GUARDRAIL_MODEL_ID } from './data/guardrails';
 import { INGRESS_TIERS, DEFAULT_INGRESS_TIER_ID, DEFAULT_EGRESS_USD_PER_GB } from './data/ingress';
 import { HA_DR_TIERS, DEFAULT_HA_DR_TIER_ID } from './data/hadr';
-import { calculateInfra, calculateStorage, calculateCost, calculateMigConsolidation, calculateSla, calculateRag, calculateGuardrails, calculateIngress, calculateHaDr, recommendSharding } from './utils/calculator';
+import { calculateInfra, calculateStorage, calculateCost, calculateMigConsolidation, applyMigThroughputScaling, calculateSla, calculateRag, calculateGuardrails, calculateIngress, calculateHaDr, recommendSharding } from './utils/calculator';
 import { InfoHelper } from './components/InfoHelper';
 import { TopologyDiagram } from './components/TopologyDiagram';
 import { GlossaryPage } from './components/GlossaryPage';
@@ -428,7 +428,7 @@ export default function App() {
     decodeNodes
   ]);
 
-  const { memory, facility, network, bom, throughput } = results;
+  const { memory, facility, network, bom } = results;
   const isLlmd = !!memory.llmd;
 
   // 3. Storage Sizing (capacity + throughput), independent of the compute solve above
@@ -476,15 +476,22 @@ export default function App() {
     });
   }, [results, gpu, platform, enableMig, selectedMigProfileId]);
 
+  // MIG packs a replica onto a fraction of a physical GPU's SM/memory-bandwidth -- calculateInfra()
+  // itself always sizes throughput for a whole dedicated GPU, so this applies MIG's throughput
+  // penalty to what's actually displayed and consumed downstream (SLA queueing, Guardrails/Ingress
+  // request-rate sizing), keeping TTFT/TPOT honest whenever MIG is active. A no-op otherwise.
+  const effectiveResults = useMemo(() => applyMigThroughputScaling(results, mig), [results, mig]);
+  const throughput = effectiveResults.throughput;
+
   // 5. SLA / Tail-Latency Queueing -- an M/M/c (Erlang C) queueing overlay at the replica level.
   // Purely informational: it estimates how queueing delay grows TTFT at a target utilization, but
   // doesn't change GPU count or feed into Cost (unlike MIG/durability, it doesn't change capex).
   const sla = useMemo(() => {
     return calculateSla({
-      infraResults: results,
+      infraResults: effectiveResults,
       targetUtilization,
     });
-  }, [results, targetUtilization]);
+  }, [effectiveResults, targetUtilization]);
 
   // 6. RAG Pipeline -- embedding-compute + vector-DB serving pool. Unlike MIG/SLA, this is real
   // standing infrastructure (not a "what if" overlay), so its capex/power feed into Cost below.
@@ -513,14 +520,14 @@ export default function App() {
   const guardrails = useMemo(() => {
     return calculateGuardrails({
       enabled: enableGuardrails,
-      infraResults: results,
+      infraResults: effectiveResults,
       guardModel,
       guardGpu,
       guardGpuUnitPriceUsd,
       enableInputGuard,
       enableOutputGuard,
     });
-  }, [enableGuardrails, results, guardModel, guardGpu, guardGpuUnitPriceUsd, enableInputGuard, enableOutputGuard]);
+  }, [enableGuardrails, effectiveResults, guardModel, guardGpu, guardGpuUnitPriceUsd, enableInputGuard, enableOutputGuard]);
 
   // 9. Ingress / Edge -- load-balancing/TLS/edge layer in front of the cluster. Third Add-on
   // Module: self-hosted tiers add capex/power like RAG/guardrails, and ALL tiers add a recurring
@@ -529,11 +536,11 @@ export default function App() {
   const ingress = useMemo(() => {
     return calculateIngress({
       enabled: enableIngress,
-      infraResults: results,
+      infraResults: effectiveResults,
       ingressTier,
       egressUsdPerGb,
     });
-  }, [enableIngress, results, ingressTier, egressUsdPerGb]);
+  }, [enableIngress, effectiveResults, ingressTier, egressUsdPerGb]);
 
   // 10. HA/DR -- incremental compute+storage a multi-AZ or cross-region DR tier adds on top of
   // the primary site. Same MIG-consolidated GPU count used for Cost below, for consistency.

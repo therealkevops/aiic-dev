@@ -1335,6 +1335,10 @@ export function calculateCost(config) {
     // real standing infrastructure rather than just reshaping existing hardware.
     ragComputeCapexUsd = 0,
     ragItPowerKw = 0,
+    // Guardrails overlay (see calculateGuardrails()): the same additive capex/power pattern as
+    // RAG, applied to a second add-on module -- an input/output safety-classifier pool.
+    guardrailsComputeCapexUsd = 0,
+    guardrailsItPowerKw = 0,
   } = config;
 
   const isLlmd = !!infraResults.memory.llmd;
@@ -1357,21 +1361,22 @@ export function calculateCost(config) {
 
   const networkHardwareCapexUsd = computeCapexUsd * (networkHardwareAdderPct / 100);
   const storageCapexUsd = storageResults ? (storageResults.achievedCapacityTb * storageUsdPerTbRaw) : 0;
-  const totalCapexUsd = computeCapexUsd + networkHardwareCapexUsd + storageCapexUsd + ragComputeCapexUsd;
+  const totalCapexUsd = computeCapexUsd + networkHardwareCapexUsd + storageCapexUsd + ragComputeCapexUsd + guardrailsComputeCapexUsd;
 
   const hoursPerYear = 24 * 365;
   const baseItPowerKw = itPowerKwOverride != null ? itPowerKwOverride : infraResults.facility.totalItPowerKw;
-  const billedItPowerKw = baseItPowerKw + ragItPowerKw;
+  const billedItPowerKw = baseItPowerKw + ragItPowerKw + guardrailsItPowerKw;
   // Colo bills $/kW/month on IT load (the colo provider's own facility overhead/cooling is
   // baked into their rate); an owned DC bills the utility $/kWh on the PUE-adjusted total load.
   // The MIG IT-power override has no PUE figure of its own, so the owned-DC branch applies the
-  // same PUE multiplier the rest of this deployment already uses. RAG's own IT power gets the
-  // same PUE treatment -- it's colocated with the rest of the deployment, not a separate facility.
+  // same PUE multiplier the rest of this deployment already uses. Add-on modules' (RAG,
+  // guardrails) own IT power gets the same PUE treatment -- they're colocated with the rest of
+  // the deployment, not a separate facility.
   const impliedPue = infraResults.facility.totalItPowerKw > 0
     ? infraResults.facility.totalFacilityPowerKw / infraResults.facility.totalItPowerKw
     : 1;
   const baseFacilityPowerKw = itPowerKwOverride != null ? baseItPowerKw * impliedPue : infraResults.facility.totalFacilityPowerKw;
-  const billedFacilityPowerKw = baseFacilityPowerKw + (ragItPowerKw * impliedPue);
+  const billedFacilityPowerKw = baseFacilityPowerKw + ((ragItPowerKw + guardrailsItPowerKw) * impliedPue);
   const annualPowerCostUsd = useColo
     ? billedItPowerKw * coloUsdPerKwPerMonth * 12
     : billedFacilityPowerKw * hoursPerYear * powerUsdPerKwh;
@@ -1402,6 +1407,7 @@ export function calculateCost(config) {
     networkHardwareCapexUsd,
     storageCapexUsd,
     ragCapexUsd: ragComputeCapexUsd,
+    guardrailsCapexUsd: guardrailsComputeCapexUsd,
     totalCapexUsd,
     annualPowerCostUsd,
     annualLicensingCostUsd,
@@ -1710,5 +1716,95 @@ export function calculateRag(config) {
     vectorDbPowerKw,
     ragComputeCapexUsd,
     ragItPowerKw,
+  };
+}
+
+// ─── Guardrails / Safety Classifier Layer ──────────────────────────────────────────────────────
+/**
+ * Sizes an input/output safety-classifier pool that screens every request: an input guard
+ * (classifies the prompt before generation starts, gating TTFT) and/or an output guard
+ * (classifies the full response before it's returned). Guard models are small(er) LLMs used in
+ * a single-forward-pass classification role -- like calculateRag()'s embedding pool, this is
+ * genuine new standing infrastructure (not a "what if" overlay), so its capex/power feed into
+ * calculateCost() the same way RAG's do. The added per-request latency is surfaced for
+ * transparency but is NOT wired into calculateSla()'s queueing model -- that stays scoped to the
+ * main LLM replica's own concurrency, matching the scope boundary already established for RAG.
+ */
+export function calculateGuardrails(config) {
+  const {
+    enabled = false,
+    infraResults,
+    guardModel,              // one of GUARDRAIL_MODELS
+    guardGpu,                // one of GPU_CATALOG -- typically a small/cheap card, like RAG's embedding GPU
+    guardGpuUnitPriceUsd = 0,
+    enableInputGuard = true,
+    enableOutputGuard = true,
+  } = config;
+
+  if (!enabled) {
+    return { enabled: false, eligible: false, reason: "Guardrails sizing is disabled." };
+  }
+
+  if (infraResults.workloadType !== "inference") {
+    return { enabled: true, eligible: false, reason: "Guardrails apply to inference workloads -- training has no request-serving path to screen." };
+  }
+
+  if (!enableInputGuard && !enableOutputGuard) {
+    return { enabled: true, eligible: false, reason: "Enable at least one of the input guard or output guard to size the guardrail pool." };
+  }
+
+  const t = infraResults.throughput;
+  if (!t) {
+    return { enabled: true, eligible: false, reason: "No throughput data available for this configuration." };
+  }
+
+  // Every request that reaches the LLM passes through the guard(s) once -- request rate is
+  // derived from the already-sized cluster decode throughput, not a separate user guess, since
+  // guardrail load is 1:1 with LLM request volume (unlike RAG's retrieval QPS, which isn't).
+  const promptTokens = infraResults.memory.promptTokens;
+  const promptTokenRatio = infraResults.memory.promptTokenRatio;
+  const avgOutputTokens = Math.max(1, t.contextLength * (1 - promptTokenRatio));
+  const clusterThroughputTps = t.clusterThroughput;
+  const requestRatePerSec = clusterThroughputTps / avgOutputTokens;
+
+  // Single-forward-pass classification cost (the few output tokens a guard emits -- "safe" /
+  // "unsafe" plus a category code -- are negligible next to prompt/response lengths, so this
+  // mirrors calculateRag()'s embedding treatment rather than modeling autoregressive decode).
+  const MFU_GUARDRAIL = 0.4; // mid-tier MFU, consistent with calculateRag()'s embedding MFU
+  const gpuEffFlops = (guardGpu.fp16Tflops || 366) * 1e12 * MFU_GUARDRAIL;
+  const flopsPerParamToken = 2 * guardModel.paramsBillion * 1e9;
+
+  const inputGuardFlopsPerReq = enableInputGuard ? flopsPerParamToken * promptTokens : 0;
+  const outputGuardFlopsPerReq = enableOutputGuard ? flopsPerParamToken * avgOutputTokens : 0;
+
+  // Throughput sizing: enough GPUs to keep up with the cluster's steady-state request rate.
+  const totalGuardFlopsPerSec = (inputGuardFlopsPerReq + outputGuardFlopsPerReq) * requestRatePerSec;
+  const guardGpusNeeded = Math.max(1, Math.ceil(totalGuardFlopsPerSec / gpuEffFlops));
+
+  // Latency sizing: a single request's own guard pass, on one GPU -- what it adds to that
+  // request's end-to-end timeline, independent of how many GPUs are provisioned for throughput.
+  const inputGuardLatencySec = inputGuardFlopsPerReq / gpuEffFlops;
+  const outputGuardLatencySec = outputGuardFlopsPerReq / gpuEffFlops;
+  const addedTtftSec = inputGuardLatencySec; // blocks generation from starting
+  const addedTotalLatencySec = inputGuardLatencySec + outputGuardLatencySec; // full round-trip addition
+
+  const guardrailsComputeCapexUsd = guardGpusNeeded * guardGpuUnitPriceUsd;
+  const guardGpuPowerKw = ((guardGpu.chassisTdpKw || 3.8) / (guardGpu.gpusPerChassis || 8)) * guardGpusNeeded;
+
+  return {
+    enabled: true,
+    eligible: true,
+    reason: null,
+    guardModel,
+    enableInputGuard,
+    enableOutputGuard,
+    requestRatePerSec,
+    guardGpusNeeded,
+    guardrailsComputeCapexUsd,
+    guardrailsItPowerKw: guardGpuPowerKw,
+    inputGuardLatencySec,
+    outputGuardLatencySec,
+    addedTtftSec,
+    addedTotalLatencySec,
   };
 }

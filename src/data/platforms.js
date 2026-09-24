@@ -329,5 +329,108 @@ export const PLATFORM_SYSTEMS = [
     oobSwitchModel: "NVIDIA Spectrum SN2201 (48-port 1G)",
     transceiverType: "NVIDIA LinkX 400G OSFP Flat-top / Twinax DACs",
     notes: "Proven reference architecture for standard AI datacenter clusters and SuperPOD pods."
+  },
+
+  // --- NVIDIA HGX: Open 8-GPU Baseboard Reference Design (Generic ODM/OEM) ---
+  // The NVSwitch baseboard licensed to ODMs/OEMs (Foxconn, Quanta, Wiwynn, Supermicro, etc.) —
+  // the same 8-GPU tray inside every DGX / Cisco / Supermicro box above, without a specific
+  // vendor's chassis, host platform, or management stack layered on top.
+  {
+    id: "nvidia-hgx-h200",
+    vendor: "nvidia",
+    name: "NVIDIA HGX H200 (8x H200 141GB SXM5) — Generic OEM Reference Design",
+    shortName: "HGX H200 (Generic)",
+    gpuId: "h200-sxm",
+    formFactor: "8U Universal GPU Tray (HGX Baseboard)",
+    gpusPerChassis: 8,
+    chassisTdpKw: 10.2,
+    chassisHeightRu: 8,
+    nicSpeedGbps: 400,         // 400Gb/s ConnectX-7 NICs (OEM-selected)
+    switchPowerKw: 2.5,        // NVIDIA Spectrum-4 SN5600 / Quantum-2 QM9700
+    hostCpu: "Dual x86 Host CPUs (Intel Xeon or AMD EPYC — OEM's choice)",
+    systemRam: "2.0 TB System Memory (typical)",
+    hostNics: "8x 400Gb/s ConnectX-7 OSFP NICs (1 per GPU, OEM-selected)",
+    leafSwitchModel: "NVIDIA Quantum-2 QM9700 (NDR 400G InfiniBand) or Spectrum-4 SN5600 (RoCEv2)",
+    spineSwitchModel: "NVIDIA Quantum-2 QM9700 or Spectrum-4 SN5600",
+    storageSwitchModel: "NVIDIA Spectrum-3 SN4600 (64-port 200G Ethernet)",
+    oobSwitchModel: "NVIDIA Spectrum SN2201 (48-port 1G Management)",
+    transceiverType: "NVIDIA LinkX 400G OSFP Flat-top / Twinax Copper Cables",
+    managementSuite: "OEM BMC / Redfish (vendor-neutral) + optional NVIDIA Base Command Manager",
+    notes: "Open HGX 8-GPU NVSwitch baseboard reference design. Use this when sizing for a whitebox / ODM-built cluster rather than a specific vendor's turnkey chassis — the compute math is identical to DGX H200, only the host platform and management stack are generic."
+  },
+  {
+    id: "nvidia-hgx-b200",
+    vendor: "nvidia",
+    name: "NVIDIA HGX B200 (8x B200 180GB SXM6) — Generic OEM Reference Design",
+    shortName: "HGX B200 (Generic)",
+    gpuId: "b200-sxm",
+    formFactor: "8U Universal GPU Tray (HGX Baseboard)",
+    gpusPerChassis: 8,
+    chassisTdpKw: 14.3,
+    chassisHeightRu: 8,
+    nicSpeedGbps: 800,         // 800Gb/s ConnectX-8 SuperNICs (OEM-selected)
+    switchPowerKw: 2.5,        // NVIDIA Spectrum-4 SN5600 / Quantum-2 QM9700
+    hostCpu: "Dual x86 Host CPUs (Intel Xeon 6 or AMD EPYC — OEM's choice)",
+    systemRam: "2.0 TB System Memory (typical)",
+    hostNics: "8x 800Gb/s ConnectX-8 SuperNICs (1 per GPU, OEM-selected)",
+    leafSwitchModel: "NVIDIA Quantum-2 QM9700 / XDR InfiniBand or Spectrum-4 SN5600 (RoCEv2)",
+    spineSwitchModel: "NVIDIA Quantum-2 QM9700 or Spectrum-4 SN5600",
+    storageSwitchModel: "NVIDIA Spectrum-4 SN5400 (64-port 400G Ethernet)",
+    oobSwitchModel: "NVIDIA Spectrum SN2201 (48-port 1G)",
+    transceiverType: "NVIDIA LinkX 800G/400G OSFP Transceivers & Copper DACs",
+    managementSuite: "OEM BMC / Redfish (vendor-neutral) + optional NVIDIA Base Command Manager",
+    notes: "Open HGX 8-GPU Blackwell baseboard reference design for whitebox / ODM-built clusters. Compute math is identical to DGX B200; only the host platform and management stack are generic."
+  },
+
+  // --- NVIDIA MGX: Grace Superchip Modular Reference Design ---
+  // MGX is NVIDIA's modular mechanical/tray specification (tool-less trays, shared power
+  // shelves) that OEMs assemble into fixed-configuration 1U/2U servers — distinct from Cisco's
+  // X-Series blade-pair-in-a-shared-chassis modularity. Its differentiated use case is the
+  // Grace CPU superchip line: coherent NVLink-C2C CPU-GPU memory in a compact node.
+  {
+    id: "nvidia-mgx-gh200",
+    vendor: "nvidia",
+    name: "NVIDIA MGX Grace Hopper GH200 (2x GH200 Superchip, 141GB HBM3e each)",
+    shortName: "MGX GH200 (Grace Hopper)",
+    gpuId: "h200-sxm",
+    formFactor: "2U Rack Chassis (MGX Modular Reference Design)",
+    gpusPerChassis: 2,
+    chassisTdpKw: 2.0,         // ~900-1000W per superchip (Grace CPU + H200-class GPU) + overhead
+    chassisHeightRu: 2,
+    nicSpeedGbps: 400,         // 400Gb/s ConnectX-7
+    switchPowerKw: 2.5,        // NVIDIA Quantum-2 QM9700 / Spectrum-4 SN5600
+    hostCpu: "2x NVIDIA Grace CPU (72-core Arm Neoverse V2 each, 144 cores total) — 900 GB/s coherent NVLink-C2C to its own GPU",
+    systemRam: "2x 480GB LPDDR5X (960GB total, unified-addressable with GPU HBM3e)",
+    hostNics: "2x 400Gb/s ConnectX-7 OSFP NICs (1 per superchip)",
+    leafSwitchModel: "NVIDIA Quantum-2 QM9700 (NDR 400G InfiniBand) or Spectrum-4 SN5600 (RoCEv2)",
+    spineSwitchModel: "NVIDIA Quantum-2 QM9700 or Spectrum-4 SN5600",
+    storageSwitchModel: "NVIDIA Spectrum-3 SN4600 (64-port 200G Ethernet)",
+    oobSwitchModel: "NVIDIA Spectrum SN2201 (48-port 1G)",
+    transceiverType: "NVIDIA LinkX 400G OSFP Flat-top / Twinax Copper Cables",
+    managementSuite: "OEM BMC / Redfish + NVIDIA Base Command Manager",
+    notes: "Each of the 2 GPUs has its own dedicated Grace CPU joined by 900 GB/s coherent NVLink-C2C — no PCIe host bottleneck, unified CPU+GPU memory addressing. Well suited to memory-capacity-bound workloads (huge embedding tables, CPU-offloaded KV cache, vector search) that benefit from fast CPU-GPU memory coherence rather than raw NVLink GPU-GPU bandwidth."
+  },
+  {
+    id: "nvidia-mgx-gb200-nvl2",
+    vendor: "nvidia",
+    name: "NVIDIA MGX GB200 NVL2 (2x Grace Blackwell Superchip, 180GB HBM3e each)",
+    shortName: "MGX GB200 NVL2",
+    gpuId: "b200-sxm",
+    formFactor: "2U Rack Chassis (MGX Modular Reference Design)",
+    gpusPerChassis: 2,
+    chassisTdpKw: 2.7,         // ~1.2-1.3kW per superchip (Grace CPU + B200-class GPU) + overhead
+    chassisHeightRu: 2,
+    nicSpeedGbps: 800,         // 800Gb/s ConnectX-8 SuperNICs
+    switchPowerKw: 2.5,        // NVIDIA Spectrum-4 SN5600 / Quantum-2 QM9700
+    hostCpu: "2x NVIDIA Grace CPU (72-core Arm Neoverse V2 each) — 900 GB/s coherent NVLink-C2C to its own GPU",
+    systemRam: "2x 480GB LPDDR5X (960GB total, unified-addressable with GPU HBM3e)",
+    hostNics: "2x 800Gb/s ConnectX-8 SuperNICs (1 per superchip)",
+    leafSwitchModel: "NVIDIA Quantum-2 QM9700 / XDR InfiniBand or Spectrum-4 SN5600 (RoCEv2)",
+    spineSwitchModel: "NVIDIA Quantum-2 QM9700 or Spectrum-4 SN5600",
+    storageSwitchModel: "NVIDIA Spectrum-4 SN5400 (64-port 400G Ethernet)",
+    oobSwitchModel: "NVIDIA Spectrum SN2201 (48-port 1G)",
+    transceiverType: "NVIDIA LinkX 800G/400G OSFP Transceivers & Copper DACs",
+    managementSuite: "OEM BMC / Redfish + NVIDIA Base Command Manager",
+    notes: "The entry point into the Grace Blackwell family: 2 fully coherent Grace-Blackwell superchips per 2U node, NVLink-paired to each other. This is distinct from the rack-scale GB200 NVL72 (a single 72-GPU non-blocking NVLink domain spanning an entire liquid-cooled rack) — that architecture isn't modeled here yet, since it breaks this calculator's TP-stays-inside-one-chassis assumption. NVL2 pairs behave like any other 2-GPU NVLink node for sharding purposes."
   }
 ];

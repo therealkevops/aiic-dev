@@ -826,9 +826,29 @@ ${workloadType === 'inference' && throughput ? `
                       </optgroup>
                     </>
                   ) : (
-                    availablePlatforms.map((p) => (
-                      <option key={p.id} value={p.id}>{p.name} — {p.formFactor}</option>
-                    ))
+                    <>
+                      <optgroup label="NVIDIA DGX SuperPOD (Turnkey)">
+                        {availablePlatforms
+                          .filter((p) => p.id.includes('dgx'))
+                          .map((p) => (
+                            <option key={p.id} value={p.id}>{p.name} — {p.formFactor}</option>
+                          ))}
+                      </optgroup>
+                      <optgroup label="NVIDIA HGX (Generic OEM Reference Design)">
+                        {availablePlatforms
+                          .filter((p) => p.id.includes('hgx'))
+                          .map((p) => (
+                            <option key={p.id} value={p.id}>{p.name} — {p.formFactor}</option>
+                          ))}
+                      </optgroup>
+                      <optgroup label="NVIDIA MGX (Grace Superchip Reference Design)">
+                        {availablePlatforms
+                          .filter((p) => p.id.includes('mgx'))
+                          .map((p) => (
+                            <option key={p.id} value={p.id}>{p.name} — {p.formFactor}</option>
+                          ))}
+                      </optgroup>
+                    </>
                   )}
                 </select>
               </Field>

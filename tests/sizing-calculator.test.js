@@ -1164,6 +1164,51 @@ describe('8. Massive-Scale Data Parallel Replica Sizing (S7)', () => {
     );
   });
 
+  it('closes a large rounding gap at extreme concurrency (regression: a bounded +1-per-iteration DP correction silently under-provisioned by thousands of GPUs)', () => {
+    // At high replica counts, closing the whole-number-streams-per-replica rounding gap by
+    // one stream can require adding hundreds or thousands of replicas at once (the needed DP
+    // step size grows with concurrency / streamsPerReplica^2). A correction that only nudges
+    // DP up by 1 at a time, bounded to a small number of iterations, silently stops short at
+    // exactly this scale. 16,384 concurrent streams against a 32k context is large enough to
+    // require a four-figure correction, not a handful of replicas.
+    const llama70b = getModel('llama3-70b');
+    const h200 = getGpu('h200-sxm');
+    const platform = getPlatform('cisco-c885a-h200');
+
+    const rec = recommendSharding({
+      workloadType: 'inference',
+      model: llama70b,
+      precision: getPrecision('fp8'),
+      kvPrecision: 'fp8',
+      prefixCacheRatio: 0,
+      promptTokenRatio: 0.8,
+      contextLength: 32768,
+      concurrency: 16384,
+      gpu: h200,
+      platform
+    });
+
+    const res = calculateInfra({
+      workloadType: 'inference',
+      model: llama70b,
+      precision: getPrecision('fp8'),
+      kvPrecision: 'fp8',
+      prefixCacheRatio: 0,
+      promptTokenRatio: 0.8,
+      contextLength: 32768,
+      concurrency: 16384,
+      gpu: h200,
+      platform,
+      tp: rec.tp, pp: rec.pp, dp: rec.dp,
+      networkProtocol: 'rocev2'
+    });
+
+    assert.equal(
+      res.memory.isOOM, false,
+      `Expected recommendSharding's DP=${rec.dp} to fit 16,384 concurrent streams without OOM, but each GPU needs ${res.memory.perGpuTotalUsedGb.toFixed(1)} GB of ${res.memory.usableGpuCapacityGb.toFixed(1)} GB usable`
+    );
+  });
+
   it('sizes a 2,048-GPU training run (TP=8, PP=4, DP=64) without breaking network/facility math', () => {
     const llama70b = getModel('llama3-70b');
     const h100 = getGpu('h100-sxm');

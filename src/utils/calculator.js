@@ -311,22 +311,22 @@ export function recommendSharding(params) {
       kvCapacityPerReplica = perGpuAvailForKvGb * (tpEff * recommendedPp);
     }
 
-    recommendedDp = kvCapacityPerReplica > 0 ? Math.max(1, Math.ceil(requiredKvForC / kvCapacityPerReplica)) : 1;
-
-    // Integer correction: the estimate above divides total demand by capacity as if
-    // streams could split fractionally across replicas. In reality each replica serves a
-    // whole number of streams (ceil(concurrency / dp)), which is always >= the fractional
-    // average whenever concurrency doesn't divide evenly — so verify the resulting
-    // per-replica KV load actually fits and step DP up until it does. Bounded: this only
-    // ever adds a handful of replicas to correct a rounding remainder.
-    if (kvCapacityPerReplica > 0) {
-      for (let guard = 0; guard < 64; guard++) {
-        const streamsPerReplica = Math.ceil(concurrency / recommendedDp);
-        const perReplicaTokens = (privateTokensPerStream * streamsPerReplica) + effectiveGlobalPrefixTokens;
-        const perReplicaKvGb = (bytesPerTokenSeq * perReplicaTokens) / 1e9;
-        if (perReplicaKvGb <= kvCapacityPerReplica) break;
-        recommendedDp += 1;
-      }
+    // Each replica actually serves a WHOLE number of streams (ceil(concurrency / dp)), not
+    // the fractional average requiredKvForC / kvCapacityPerReplica implies. Solve directly
+    // for the largest whole-number stream count one replica can hold, then derive dp from
+    // that — this must be closed-form, not an incremental "+1 and recheck" search: at high
+    // replica counts, closing the rounding gap by one stream/replica can require adding
+    // hundreds or thousands of replicas at once (the required dp step size grows with
+    // concurrency / streamsPerReplica^2), so a bounded per-1 loop silently stops short and
+    // under-provisions DP at exactly the scale this matters most.
+    if (kvCapacityPerReplica > 0 && privateTokensPerStream > 0) {
+      const maxStreamsPerReplica = Math.max(
+        1,
+        Math.floor(((kvCapacityPerReplica * 1e9) / bytesPerTokenSeq - effectiveGlobalPrefixTokens) / privateTokensPerStream)
+      );
+      recommendedDp = Math.max(1, Math.ceil(concurrency / maxStreamsPerReplica));
+    } else {
+      recommendedDp = kvCapacityPerReplica > 0 ? Math.max(1, Math.ceil(requiredKvForC / kvCapacityPerReplica)) : 1;
     }
   }
 

@@ -429,6 +429,11 @@ ${workloadType === 'inference' && throughput ? `
                 <option key={p.id} value={p.id}>{p.label}</option>
               ))}
             </optgroup>
+            <optgroup label="Agentic">
+              {USE_CASE_PRESETS.filter(p => p.category === 'agentic').map(p => (
+                <option key={p.id} value={p.id}>{p.label}</option>
+              ))}
+            </optgroup>
             <optgroup label="Neo-Cloud">
               {USE_CASE_PRESETS.filter(p => p.category === 'neocloud').map(p => (
                 <option key={p.id} value={p.id}>{p.label}</option>

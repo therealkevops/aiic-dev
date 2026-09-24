@@ -25,7 +25,8 @@ import {
   Timer,
   Search,
   Shield,
-  Globe
+  Globe,
+  LifeBuoy
 } from 'lucide-react';
 
 import { MODEL_PRESETS, PRECISION_OPTIONS } from './data/models';
@@ -38,7 +39,8 @@ import { MIG_PROFILES } from './data/mig';
 import { EMBEDDING_MODELS, VECTOR_DB_PLATFORMS, DEFAULT_EMBEDDING_MODEL_ID, DEFAULT_VECTOR_DB_ID } from './data/rag';
 import { GUARDRAIL_MODELS, DEFAULT_GUARDRAIL_MODEL_ID } from './data/guardrails';
 import { INGRESS_TIERS, DEFAULT_INGRESS_TIER_ID, DEFAULT_EGRESS_USD_PER_GB } from './data/ingress';
-import { calculateInfra, calculateStorage, calculateCost, calculateMigConsolidation, calculateSla, calculateRag, calculateGuardrails, calculateIngress, recommendSharding } from './utils/calculator';
+import { HA_DR_TIERS, DEFAULT_HA_DR_TIER_ID } from './data/hadr';
+import { calculateInfra, calculateStorage, calculateCost, calculateMigConsolidation, calculateSla, calculateRag, calculateGuardrails, calculateIngress, calculateHaDr, recommendSharding } from './utils/calculator';
 import { InfoHelper } from './components/InfoHelper';
 import { TopologyDiagram } from './components/TopologyDiagram';
 import { GlossaryPage } from './components/GlossaryPage';
@@ -178,6 +180,10 @@ export default function App() {
   const [selectedIngressTierId, setSelectedIngressTierId] = useState(DEFAULT_INGRESS_TIER_ID);
   const [egressUsdPerGb, setEgressUsdPerGb] = useState(DEFAULT_EGRESS_USD_PER_GB);
 
+  // --- High Availability / Disaster Recovery State ---
+  const [enableHaDr, setEnableHaDr] = useState(false);
+  const [selectedHaDrTierId, setSelectedHaDrTierId] = useState(DEFAULT_HA_DR_TIER_ID);
+
   // --- Use-case preset (header dropdown) ---
   const [selectedPresetId, setSelectedPresetId] = useState('');
 
@@ -255,6 +261,8 @@ export default function App() {
     setEnableIngress(c.enableIngress);
     setSelectedIngressTierId(c.selectedIngressTierId);
     setEgressUsdPerGb(c.egressUsdPerGb);
+    setEnableHaDr(c.enableHaDr);
+    setSelectedHaDrTierId(c.selectedHaDrTierId);
     setActiveInputTab('workload');
   };
 
@@ -527,7 +535,25 @@ export default function App() {
     });
   }, [enableIngress, results, ingressTier, egressUsdPerGb]);
 
-  // 10. Cost & TCO -- consumes the already-computed infra + storage + MIG + RAG + guardrails + ingress results, prices nothing new
+  // 10. HA/DR -- incremental compute+storage a multi-AZ or cross-region DR tier adds on top of
+  // the primary site. Same MIG-consolidated GPU count used for Cost below, for consistency.
+  const haDrTier = HA_DR_TIERS.find(t => t.id === selectedHaDrTierId) || HA_DR_TIERS[0];
+  const migComputeGpuCountOverride = (mig.eligible && mig.physicalGpusNeeded < mig.naiveGpuCount) ? mig.physicalGpusNeeded : null;
+  const migItPowerKwOverride = (mig.eligible && mig.physicalGpusNeeded < mig.naiveGpuCount) ? mig.itPowerKw : null;
+  const haDr = useMemo(() => {
+    return calculateHaDr({
+      enabled: enableHaDr,
+      infraResults: results,
+      storageResults: storage,
+      haDrTier,
+      gpuUnitPriceUsd,
+      storageUsdPerTbRaw: storageTier.estimatedUsdPerTbRaw,
+      computeGpuCountOverride: migComputeGpuCountOverride,
+      itPowerKwOverride: migItPowerKwOverride,
+    });
+  }, [enableHaDr, results, storage, haDrTier, gpuUnitPriceUsd, storageTier, migComputeGpuCountOverride, migItPowerKwOverride]);
+
+  // 11. Cost & TCO -- consumes the already-computed infra + storage + MIG + RAG + guardrails + ingress + HA/DR results, prices nothing new
   const decodeGpuId = memory.llmd?.decode?.gpu?.id;
   const decodeGpuPricing = decodeGpuId ? GPU_PRICING[decodeGpuId] : null;
   const cost = useMemo(() => {
@@ -551,8 +577,8 @@ export default function App() {
       // identical to the non-MIG case rather than showing a slightly different number driven by
       // itPowerKw's coarser estimate (chassis power only, no network/switch power) with no real
       // consolidation to justify it.
-      computeGpuCountOverride: (mig.eligible && mig.physicalGpusNeeded < mig.naiveGpuCount) ? mig.physicalGpusNeeded : null,
-      itPowerKwOverride: (mig.eligible && mig.physicalGpusNeeded < mig.naiveGpuCount) ? mig.itPowerKw : null,
+      computeGpuCountOverride: migComputeGpuCountOverride,
+      itPowerKwOverride: migItPowerKwOverride,
       ragComputeCapexUsd: rag.eligible ? rag.ragComputeCapexUsd : 0,
       ragItPowerKw: rag.eligible ? rag.ragItPowerKw : 0,
       guardrailsComputeCapexUsd: guardrails.eligible ? guardrails.guardrailsComputeCapexUsd : 0,
@@ -560,6 +586,8 @@ export default function App() {
       ingressComputeCapexUsd: ingress.eligible ? ingress.ingressComputeCapexUsd : 0,
       ingressItPowerKw: ingress.eligible ? ingress.ingressItPowerKw : 0,
       ingressAnnualOpexUsd: ingress.eligible ? ingress.ingressAnnualOpexUsd : 0,
+      haDrComputeCapexUsd: haDr.eligible ? haDr.haDrComputeCapexUsd : 0,
+      haDrItPowerKw: haDr.eligible ? haDr.haDrItPowerKw : 0,
     });
   }, [
     results,
@@ -577,7 +605,9 @@ export default function App() {
     tcoYears,
     guardrails,
     ingress,
-    mig,
+    haDr,
+    migComputeGpuCountOverride,
+    migItPowerKwOverride,
     rag,
   ]);
 
@@ -653,27 +683,33 @@ ${guardrails.eligible ? `
 - Ingress Nodes Provisioned: ${ingress.nodesNeeded}x ${ingressTier.name} (cluster request rate: ${ingress.requestRatePerSec.toFixed(2)} req/s)
 - Added Latency (TLS + Routing): +${ingress.addedLatencyMs} ms
 - Annual Egress Bandwidth: ${Math.round(ingress.annualEgressGb).toLocaleString()} GB/yr ($${Math.round(ingress.annualEgressCostUsd).toLocaleString()}/yr)
-- Ingress Capex / Annual Opex: $${Math.round(ingress.ingressComputeCapexUsd).toLocaleString()} / $${Math.round(ingress.ingressAnnualOpexUsd).toLocaleString()}/yr (included in Cost & TCO below)\n` : ''}
-9. FACILITY & POWER FOOTPRINT
+- Ingress Capex / Annual Opex: $${Math.round(ingress.ingressComputeCapexUsd).toLocaleString()} / $${Math.round(ingress.ingressAnnualOpexUsd).toLocaleString()}/yr (included in Cost & TCO below)\n` : ''}${haDr.eligible ? `
+9. HA/DR (INCREMENTAL RESILIENCE CAPACITY)
+- Tier: ${haDrTier.name} (${haDrTier.scope})
+- RTO / RPO: ${haDrTier.rtoDescription} / ${haDrTier.rpoDescription}
+- Primary Site GPUs: ${haDr.baseGpuCount}
+- Incremental Compute + Storage Capex: $${Math.round(haDr.haDrComputeCapexUsd).toLocaleString()} (included in Cost & TCO below)
+- HA/DR IT Power Draw: ${haDr.haDrItPowerKw.toFixed(2)} kW\n` : ''}
+10. FACILITY & POWER FOOTPRINT
 - Compute Power: ${facility.chassisPowerKw.toFixed(1)} kW
 - Network Power: ${facility.networkPowerKw.toFixed(1)} kW
 - Total IT Power: ${facility.totalItPowerKw.toFixed(1)} kW
 - Total Facility Power (${pue.toFixed(2)} PUE): ${facility.totalFacilityPowerKw.toFixed(1)} kW
 - Datacenter Racks: ~${facility.totalRacks} standard 42U Racks (${facility.totalRuNeeded} RU)
 
-10. COST & TCO (ILLUSTRATIVE ESTIMATE -- NOT A VENDOR QUOTE)
-- Total Capex: $${Math.round(cost.totalCapexUsd).toLocaleString()} (Compute $${Math.round(cost.computeCapexUsd).toLocaleString()} + Network/Storage $${Math.round(cost.networkHardwareCapexUsd + cost.storageCapexUsd).toLocaleString()}${rag.eligible ? ` + RAG $${Math.round(cost.ragCapexUsd).toLocaleString()}` : ''}${guardrails.eligible ? ` + Guardrails $${Math.round(cost.guardrailsCapexUsd).toLocaleString()}` : ''}${ingress.eligible ? ` + Ingress $${Math.round(cost.ingressCapexUsd).toLocaleString()}` : ''})
+11. COST & TCO (ILLUSTRATIVE ESTIMATE -- NOT A VENDOR QUOTE)
+- Total Capex: $${Math.round(cost.totalCapexUsd).toLocaleString()} (Compute $${Math.round(cost.computeCapexUsd).toLocaleString()} + Network/Storage $${Math.round(cost.networkHardwareCapexUsd + cost.storageCapexUsd).toLocaleString()}${rag.eligible ? ` + RAG $${Math.round(cost.ragCapexUsd).toLocaleString()}` : ''}${guardrails.eligible ? ` + Guardrails $${Math.round(cost.guardrailsCapexUsd).toLocaleString()}` : ''}${ingress.eligible ? ` + Ingress $${Math.round(cost.ingressCapexUsd).toLocaleString()}` : ''}${haDr.eligible ? ` + HA/DR $${Math.round(cost.haDrCapexUsd).toLocaleString()}` : ''})
 - Annual Opex: $${Math.round(cost.annualOpexUsd).toLocaleString()}/yr (Power $${Math.round(cost.annualPowerCostUsd).toLocaleString()} + Licensing $${Math.round(cost.annualLicensingCostUsd).toLocaleString()} + Support $${Math.round(cost.annualSupportCostUsd).toLocaleString()}${ingress.eligible ? ` + Ingress Egress/Fees $${Math.round(cost.ingressAnnualOpexUsd).toLocaleString()}` : ''})
 - ${cost.tcoYears}-Year TCO: $${Math.round(cost.tcoUsd).toLocaleString()} (~$${cost.effectiveUsdPerGpuHour.toFixed(2)}/GPU-hr effective)
 - vs. ${cost.tcoYears}-Yr Cloud Rental ($${cost.cloudEquivalentUsdPerHr.toFixed(2)}/hr cluster-wide): ${cost.buildVsBuySavingsUsd >= 0 ? `Owning saves $${Math.round(cost.buildVsBuySavingsUsd).toLocaleString()}` : `Cloud saves $${Math.round(-cost.buildVsBuySavingsUsd).toLocaleString()}`}
 - Capex Break-Even vs. Cloud: ${cost.breakEvenMonths != null ? `~${Math.round(cost.breakEvenMonths)} months` : 'Never — cloud is cheaper at these rates'}
 ${workloadType === 'inference' && throughput ? `
-11. ESTIMATED INFERENCE PERFORMANCE (PREFILL & DECODE)
+12. ESTIMATED INFERENCE PERFORMANCE (PREFILL & DECODE)
 - Prefill TTFT (Prompt Latency): ~${throughput.ttftMs < 1000 ? `${Number(throughput.ttftMs).toFixed(2)} ms` : `${Number(throughput.ttftSec).toFixed(2)} s`} (at ${contextLength.toLocaleString()} tokens)${isLlmd ? ` [includes ~${throughput.kvTransferLatencyMs}ms RoCEv2 handoff]` : ''}
 - Prompt Ingestion Speed: ~${throughput.promptTokensPerSecPerReplica?.toLocaleString()} prompt tok/s per replica
 - Generation Latency (TPOT): ~${throughput.tpotMs} ms/tok (~${throughput.tokensPerSecPerGpu} tok/s per stream)
 - Cluster Generation Throughput: ~${throughput.batchThroughputTps?.toLocaleString()} gen tok/s total (×${dp} DP × ${concurrency} streams)\n` : ''}${sla.eligible ? `
-12. SLA & TAIL LATENCY (M/M/c QUEUEING AT TARGET ρ=${(sla.targetUtilization * 100).toFixed(0)}%${sla.wasClamped ? ', clamped' : ''})
+13. SLA & TAIL LATENCY (M/M/c QUEUEING AT TARGET ρ=${(sla.targetUtilization * 100).toFixed(0)}%${sla.wasClamped ? ', clamped' : ''})
 - Concurrency per Replica (C): ${sla.concurrencyPerReplica}
 - P(Request Queues) — Erlang C: ${(sla.probabilityOfQueueing * 100).toFixed(1)}%
 - Mean Queueing Delay: ${(sla.meanWaitSec * 1000).toFixed(1)} ms
@@ -695,6 +731,7 @@ ${workloadType === 'inference' && throughput ? `
     { id: 'stack', label: 'Serving Stack', icon: Workflow, meta: orchestrator.toUpperCase() },
     { id: 'guardrails', label: 'Guardrails', icon: Shield, meta: guardrails.eligible ? `${guardrails.guardGpusNeeded}x ${guardModel.name}` : (enableGuardrails ? 'N/A' : 'Off') },
     { id: 'ingress', label: 'Ingress & Edge', icon: Globe, meta: ingress.eligible ? `${ingress.nodesNeeded}x ${ingressTier.name}` : (enableIngress ? 'N/A' : 'Off') },
+    { id: 'hadr', label: 'HA / DR', icon: LifeBuoy, meta: haDr.eligible ? haDrTier.name : (enableHaDr ? 'N/A' : 'Off') },
     { id: 'mig', label: 'MIG Partitioning', icon: Grid2x2, meta: mig.eligible ? mig.selectedProfile.id : (enableMig ? 'N/A' : 'Off') },
     { id: 'sla', label: 'SLA & Tail Latency', icon: Timer, meta: sla.eligible ? `P99 ${sla.ttftP99Sec < 1 ? `${(sla.ttftP99Sec * 1000).toFixed(0)}ms` : `${sla.ttftP99Sec.toFixed(1)}s`}` : 'N/A' },
     { id: 'cost', label: 'Cost & TCO', icon: DollarSign, meta: `$${cost.effectiveUsdPerGpuHour.toFixed(2)}/GPU-hr` },
@@ -2275,11 +2312,82 @@ ${workloadType === 'inference' && throughput ? `
             </Card>
           )}
 
-          {/* 10. MIG (Multi-Instance GPU) Partitioning */}
+          {/* 10. High Availability / Disaster Recovery: replica multipliers, RTO/RPO */}
+          {activeInputTab === 'hadr' && (
+            <Card
+              icon={LifeBuoy}
+              title="10. HA / DR"
+              right={haDr.enabled ? <Tag tone={haDr.eligible ? 'good' : 'warn'}>{haDr.eligible ? 'Eligible' : 'Not eligible'}</Tag> : <Tag>Off</Tag>}
+              className="space-y-4"
+            >
+              <Banner tone="info" icon={AlertTriangle}>
+                HA/DR sizes the incremental compute and storage a resilience tier adds on top of the primary site's already-sized deployment — a standby or active-active copy uses identical hardware to the primary, so only the incremental (tier − 1x) capacity is new spend. Ongoing cross-region replication bandwidth is out of scope for this estimate; only the standing compute/storage capacity and its power draw are sized.
+              </Banner>
+
+              <ToggleRow
+                label="HA/DR Sizing"
+                description={enableHaDr ? 'Sizing incremental compute + storage for the selected resilience tier.' : 'No additional HA/DR compute or storage sized.'}
+                checked={enableHaDr}
+                onChange={setEnableHaDr}
+              />
+
+              {enableHaDr && !haDr.eligible && (
+                <Banner tone="warn" icon={AlertTriangle}>
+                  {haDr.reason}
+                </Banner>
+              )}
+
+              {enableHaDr && haDr.eligible && (
+                <>
+                  <Field label="HA/DR Tier" helper={
+                    <InfoHelper
+                      title="HA/DR Tier"
+                      text="Multi-AZ protects against a single availability zone failure within one region, with automatic failover. The remaining four are the standard cross-region disaster recovery strategies (AWS's well-established framework), trading cost for progressively lower RTO (time to recover) and RPO (data loss window)."
+                      whyItMatters="Compute/storage multipliers are illustrative for a typical deployment of each pattern -- the real ratio depends on how much of the secondary environment is kept warm. Only the incremental (tier − 1x) capacity beyond the primary site is new spend."
+                    />
+                  }>
+                    <div className="grid grid-cols-1 gap-1.5">
+                      {HA_DR_TIERS.map((t) => (
+                        <ChoiceCard
+                          key={t.id}
+                          selected={selectedHaDrTierId === t.id}
+                          onClick={() => setSelectedHaDrTierId(t.id)}
+                          title={`${t.name} (${t.computeMultiplier.toFixed(2)}x compute · ${t.storageMultiplier.toFixed(2)}x storage)`}
+                          desc={`${t.scope} · RTO: ${t.rtoDescription} · RPO: ${t.rpoDescription} · ${t.notes}`}
+                        />
+                      ))}
+                    </div>
+                  </Field>
+
+                  <div className="pt-3 border-t border-zinc-800/70">
+                    <SectionLabel>RECOVERY OBJECTIVES</SectionLabel>
+                    <Rows>
+                      <Row k="Scope" v={haDrTier.scope} mono={false} />
+                      <Row k="RTO (Recovery Time Objective)" v={haDrTier.rtoDescription} tone="accent" />
+                      <Row k="RPO (Recovery Point Objective)" v={haDrTier.rpoDescription} tone="accent" />
+                    </Rows>
+                  </div>
+
+                  <div className="pt-3 border-t border-zinc-800/70">
+                    <SectionLabel>INCREMENTAL CAPACITY (BEYOND THE PRIMARY SITE)</SectionLabel>
+                    <Rows>
+                      <Row k="Primary site GPUs" v={`${haDr.baseGpuCount}`} mono={false} />
+                      <Row k="Incremental compute capex" v={`$${Math.round(haDr.incrementalComputeCapexUsd).toLocaleString()}`} tone="accent" />
+                      <Row k="Incremental storage capex" v={`$${Math.round(haDr.incrementalStorageCapexUsd).toLocaleString()}`} tone="accent" />
+                      <Row k="Total HA/DR capex" v={`$${Math.round(haDr.haDrComputeCapexUsd).toLocaleString()}`} tone="good" />
+                      <Row k="HA/DR IT power draw" v={`${haDr.haDrItPowerKw.toFixed(2)} kW`} mono={false} />
+                    </Rows>
+                  </div>
+                </>
+              )}
+            </Card>
+          )}
+
+          {/* 11. MIG (Multi-Instance GPU) Partitioning */}
           {activeInputTab === 'mig' && (
             <Card
               icon={Grid2x2}
-              title="10. MIG Partitioning"
+              title="11. MIG Partitioning"
               right={mig.enabled ? <Tag tone={mig.eligible ? 'good' : 'warn'}>{mig.eligible ? 'Eligible' : 'Not eligible'}</Tag> : <Tag>Off</Tag>}
               className="space-y-4"
             >
@@ -2338,11 +2446,11 @@ ${workloadType === 'inference' && throughput ? `
             </Card>
           )}
 
-          {/* 11. SLA / Tail-Latency Queueing */}
+          {/* 12. SLA / Tail-Latency Queueing */}
           {activeInputTab === 'sla' && (
             <Card
               icon={Timer}
-              title="11. SLA & Tail Latency"
+              title="12. SLA & Tail Latency"
               right={sla.eligible ? <Tag tone={sla.highUtilizationWarning ? 'warn' : 'good'}>{sla.highUtilizationWarning ? 'Near saturation' : 'Eligible'}</Tag> : <Tag>N/A</Tag>}
               className="space-y-4"
             >
@@ -2407,11 +2515,11 @@ ${workloadType === 'inference' && throughput ? `
             </Card>
           )}
 
-          {/* 12. Cost & TCO */}
+          {/* 13. Cost & TCO */}
           {activeInputTab === 'cost' && (
             <Card
               icon={DollarSign}
-              title="12. Cost & TCO"
+              title="13. Cost & TCO"
               right={<Tag tone={cost.buildVsBuySavingsUsd >= 0 ? 'good' : 'warn'}>{cost.buildVsBuySavingsUsd >= 0 ? 'Owning wins' : 'Cloud wins'}</Tag>}
               className="space-y-4"
             >
@@ -2534,6 +2642,9 @@ ${workloadType === 'inference' && throughput ? `
                   )}
                   {ingress.eligible && (
                     <Row k="Ingress capex" v={`$${Math.round(cost.ingressCapexUsd).toLocaleString()}`} mono={false} />
+                  )}
+                  {haDr.eligible && (
+                    <Row k="HA/DR capex" v={`$${Math.round(cost.haDrCapexUsd).toLocaleString()}`} mono={false} />
                   )}
                   <Row k="Total capex" v={`$${Math.round(cost.totalCapexUsd).toLocaleString()}`} tone="accent" />
                   <Row k="Annual opex" v={`$${Math.round(cost.annualOpexUsd).toLocaleString()}/yr`} mono={false} />
@@ -2818,6 +2929,17 @@ ${workloadType === 'inference' && throughput ? `
                     <Row k="Added latency" v={`+${ingress.addedLatencyMs} ms`} mono={false} />
                     <Row k="Annual egress bandwidth" v={`${Math.round(ingress.annualEgressGb).toLocaleString()} GB/yr ($${Math.round(ingress.annualEgressCostUsd).toLocaleString()}/yr)`} mono={false} />
                     <Row k="Ingress capex / annual opex" v={`$${Math.round(ingress.ingressComputeCapexUsd).toLocaleString()} / $${Math.round(ingress.ingressAnnualOpexUsd).toLocaleString()}/yr`} mono={false} />
+                  </Rows>
+                </Disclosure>
+              )}
+
+              {haDr.eligible && (
+                <Disclosure icon={LifeBuoy} title="HA/DR (incremental resilience capacity)" right={haDrTier.name}>
+                  <Rows>
+                    <Row k="HA/DR tier" v={`${haDrTier.name} (${haDrTier.scope})`} tone="accent" />
+                    <Row k="RTO / RPO" v={`${haDrTier.rtoDescription} / ${haDrTier.rpoDescription}`} tone="accent" />
+                    <Row k="Incremental compute + storage capex" v={`$${Math.round(haDr.haDrComputeCapexUsd).toLocaleString()}`} tone="good" />
+                    <Row k="HA/DR IT power draw" v={`${haDr.haDrItPowerKw.toFixed(2)} kW`} mono={false} />
                   </Rows>
                 </Disclosure>
               )}

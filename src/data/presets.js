@@ -57,6 +57,7 @@ export const USE_CASE_PRESETS = [
       enableInputGuard: true, enableOutputGuard: true,
       enableIngress: true, selectedIngressTierId: 'software-lb', egressUsdPerGb: 0.09,
       enableHaDr: true, selectedHaDrTierId: 'multi-az',
+      enableMlops: true, selectedMlopsStrategyId: 'canary-release', canaryTrafficPct: 10,
     },
   },
   {
@@ -111,6 +112,7 @@ export const USE_CASE_PRESETS = [
       enableInputGuard: true, enableOutputGuard: true,
       enableIngress: true, selectedIngressTierId: 'software-lb', egressUsdPerGb: 0.09,
       enableHaDr: true, selectedHaDrTierId: 'multi-az',
+      enableMlops: true, selectedMlopsStrategyId: 'canary-release', canaryTrafficPct: 10,
     },
   },
   {
@@ -165,6 +167,7 @@ export const USE_CASE_PRESETS = [
       enableInputGuard: true, enableOutputGuard: true,
       enableIngress: true, selectedIngressTierId: 'cloud-managed-lb', egressUsdPerGb: 0.09,
       enableHaDr: true, selectedHaDrTierId: 'warm-standby',
+      enableMlops: true, selectedMlopsStrategyId: 'canary-release', canaryTrafficPct: 10,
     },
   },
   {
@@ -219,6 +222,7 @@ export const USE_CASE_PRESETS = [
       enableInputGuard: true, enableOutputGuard: true,
       enableIngress: true, selectedIngressTierId: 'software-lb', egressUsdPerGb: 0.09,
       enableHaDr: true, selectedHaDrTierId: 'multi-az',
+      enableMlops: true, selectedMlopsStrategyId: 'canary-release', canaryTrafficPct: 10,
     },
   },
   {
@@ -273,6 +277,7 @@ export const USE_CASE_PRESETS = [
       enableInputGuard: true, enableOutputGuard: true,
       enableIngress: false, selectedIngressTierId: 'software-lb', egressUsdPerGb: 0.09,
       enableHaDr: false, selectedHaDrTierId: 'multi-az',
+      enableMlops: false, selectedMlopsStrategyId: 'canary-release', canaryTrafficPct: 10,
     },
   },
   {
@@ -327,6 +332,7 @@ export const USE_CASE_PRESETS = [
       enableInputGuard: true, enableOutputGuard: true,
       enableIngress: false, selectedIngressTierId: 'software-lb', egressUsdPerGb: 0.09,
       enableHaDr: false, selectedHaDrTierId: 'multi-az',
+      enableMlops: false, selectedMlopsStrategyId: 'canary-release', canaryTrafficPct: 10,
     },
   },
   {
@@ -381,6 +387,7 @@ export const USE_CASE_PRESETS = [
       enableInputGuard: true, enableOutputGuard: true,
       enableIngress: true, selectedIngressTierId: 'software-lb', egressUsdPerGb: 0.09,
       enableHaDr: false, selectedHaDrTierId: 'multi-az',
+      enableMlops: false, selectedMlopsStrategyId: 'canary-release', canaryTrafficPct: 10,
     },
   },
 
@@ -437,6 +444,7 @@ export const USE_CASE_PRESETS = [
       enableInputGuard: true, enableOutputGuard: true,
       enableIngress: true, selectedIngressTierId: 'api-gateway', egressUsdPerGb: 0.09,
       enableHaDr: true, selectedHaDrTierId: 'multi-az',
+      enableMlops: true, selectedMlopsStrategyId: 'canary-release', canaryTrafficPct: 10,
     },
   },
   {
@@ -491,6 +499,7 @@ export const USE_CASE_PRESETS = [
       enableInputGuard: true, enableOutputGuard: true,
       enableIngress: true, selectedIngressTierId: 'software-lb', egressUsdPerGb: 0.09,
       enableHaDr: true, selectedHaDrTierId: 'multi-az',
+      enableMlops: true, selectedMlopsStrategyId: 'canary-release', canaryTrafficPct: 10,
     },
   },
   {
@@ -545,6 +554,7 @@ export const USE_CASE_PRESETS = [
       enableInputGuard: true, enableOutputGuard: true,
       enableIngress: true, selectedIngressTierId: 'api-gateway', egressUsdPerGb: 0.09,
       enableHaDr: true, selectedHaDrTierId: 'multi-az',
+      enableMlops: true, selectedMlopsStrategyId: 'canary-release', canaryTrafficPct: 10,
     },
   },
   {
@@ -599,6 +609,7 @@ export const USE_CASE_PRESETS = [
       enableInputGuard: true, enableOutputGuard: true,
       enableIngress: true, selectedIngressTierId: 'api-gateway', egressUsdPerGb: 0.09,
       enableHaDr: true, selectedHaDrTierId: 'warm-standby',
+      enableMlops: true, selectedMlopsStrategyId: 'canary-release', canaryTrafficPct: 10,
     },
   },
   {
@@ -653,6 +664,7 @@ export const USE_CASE_PRESETS = [
       enableInputGuard: true, enableOutputGuard: true,
       enableIngress: false, selectedIngressTierId: 'software-lb', egressUsdPerGb: 0.09,
       enableHaDr: false, selectedHaDrTierId: 'multi-az',
+      enableMlops: false, selectedMlopsStrategyId: 'canary-release', canaryTrafficPct: 10,
     },
   },
 
@@ -709,6 +721,7 @@ export const USE_CASE_PRESETS = [
       enableInputGuard: true, enableOutputGuard: true,
       enableIngress: false, selectedIngressTierId: 'software-lb', egressUsdPerGb: 0.09,
       enableHaDr: false, selectedHaDrTierId: 'multi-az',
+      enableMlops: false, selectedMlopsStrategyId: 'canary-release', canaryTrafficPct: 10,
     },
   },
   {
@@ -763,6 +776,7 @@ export const USE_CASE_PRESETS = [
       enableInputGuard: true, enableOutputGuard: true,
       enableIngress: true, selectedIngressTierId: 'cdn-edge', egressUsdPerGb: 0.085,
       enableHaDr: true, selectedHaDrTierId: 'multi-site-active-active',
+      enableMlops: true, selectedMlopsStrategyId: 'blue-green-cutover', canaryTrafficPct: 10,
     },
   },
   {
@@ -817,6 +831,7 @@ export const USE_CASE_PRESETS = [
       enableInputGuard: true, enableOutputGuard: true,
       enableIngress: false, selectedIngressTierId: 'software-lb', egressUsdPerGb: 0.09,
       enableHaDr: false, selectedHaDrTierId: 'multi-az',
+      enableMlops: false, selectedMlopsStrategyId: 'canary-release', canaryTrafficPct: 10,
     },
   },
 ];

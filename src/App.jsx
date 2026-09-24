@@ -26,7 +26,8 @@ import {
   Search,
   Shield,
   Globe,
-  LifeBuoy
+  LifeBuoy,
+  GitBranch
 } from 'lucide-react';
 
 import { MODEL_PRESETS, PRECISION_OPTIONS } from './data/models';
@@ -40,7 +41,8 @@ import { EMBEDDING_MODELS, VECTOR_DB_PLATFORMS, DEFAULT_EMBEDDING_MODEL_ID, DEFA
 import { GUARDRAIL_MODELS, DEFAULT_GUARDRAIL_MODEL_ID } from './data/guardrails';
 import { INGRESS_TIERS, DEFAULT_INGRESS_TIER_ID, DEFAULT_EGRESS_USD_PER_GB } from './data/ingress';
 import { HA_DR_TIERS, DEFAULT_HA_DR_TIER_ID } from './data/hadr';
-import { calculateInfra, calculateStorage, calculateCost, calculateMigConsolidation, applyMigThroughputScaling, calculateSla, calculateRag, calculateGuardrails, calculateIngress, calculateHaDr, recommendSharding } from './utils/calculator';
+import { MLOPS_STRATEGIES, DEFAULT_MLOPS_STRATEGY_ID, DEFAULT_CANARY_TRAFFIC_PCT } from './data/mlops';
+import { calculateInfra, calculateStorage, calculateCost, calculateMigConsolidation, applyMigThroughputScaling, calculateSla, calculateRag, calculateGuardrails, calculateIngress, calculateHaDr, calculateMlops, recommendSharding } from './utils/calculator';
 import { InfoHelper } from './components/InfoHelper';
 import { TopologyDiagram } from './components/TopologyDiagram';
 import { GlossaryPage } from './components/GlossaryPage';
@@ -184,6 +186,11 @@ export default function App() {
   const [enableHaDr, setEnableHaDr] = useState(false);
   const [selectedHaDrTierId, setSelectedHaDrTierId] = useState(DEFAULT_HA_DR_TIER_ID);
 
+  // --- MLOps Lifecycle (Model Rollout Validation) State ---
+  const [enableMlops, setEnableMlops] = useState(false);
+  const [selectedMlopsStrategyId, setSelectedMlopsStrategyId] = useState(DEFAULT_MLOPS_STRATEGY_ID);
+  const [canaryTrafficPct, setCanaryTrafficPct] = useState(DEFAULT_CANARY_TRAFFIC_PCT);
+
   // --- Use-case preset (header dropdown) ---
   const [selectedPresetId, setSelectedPresetId] = useState('');
 
@@ -263,6 +270,9 @@ export default function App() {
     setEgressUsdPerGb(c.egressUsdPerGb);
     setEnableHaDr(c.enableHaDr);
     setSelectedHaDrTierId(c.selectedHaDrTierId);
+    setEnableMlops(c.enableMlops ?? false);
+    setSelectedMlopsStrategyId(c.selectedMlopsStrategyId ?? DEFAULT_MLOPS_STRATEGY_ID);
+    setCanaryTrafficPct(c.canaryTrafficPct ?? DEFAULT_CANARY_TRAFFIC_PCT);
     setActiveInputTab('workload');
   };
 
@@ -565,7 +575,23 @@ export default function App() {
     });
   }, [enableHaDr, results, storage, haDrTier, gpuUnitPriceUsd, decodeGpuPricing, storageTier, migComputeGpuCountOverride, migItPowerKwOverride]);
 
-  // 11. Cost & TCO -- consumes the already-computed infra + storage + MIG + RAG + guardrails + ingress + HA/DR results, prices nothing new
+  // 10b. MLOps Lifecycle -- additive compute pool for canary/shadow/blue-green model-rollout
+  // validation, sized off the same primary compute pool and MIG-consolidated GPU count as HA/DR.
+  const mlopsStrategy = MLOPS_STRATEGIES.find(s => s.id === selectedMlopsStrategyId) || MLOPS_STRATEGIES[0];
+  const mlops = useMemo(() => {
+    return calculateMlops({
+      enabled: enableMlops,
+      infraResults: results,
+      mlopsStrategy,
+      canaryTrafficPct,
+      gpuUnitPriceUsd,
+      decodeGpuUnitPriceUsd: decodeGpuPricing?.estimatedUnitPriceUsd ?? null,
+      computeGpuCountOverride: migComputeGpuCountOverride,
+      itPowerKwOverride: migItPowerKwOverride,
+    });
+  }, [enableMlops, results, mlopsStrategy, canaryTrafficPct, gpuUnitPriceUsd, decodeGpuPricing, migComputeGpuCountOverride, migItPowerKwOverride]);
+
+  // 11. Cost & TCO -- consumes the already-computed infra + storage + MIG + RAG + guardrails + ingress + HA/DR + MLOps results, prices nothing new
   const cost = useMemo(() => {
     return calculateCost({
       infraResults: results,
@@ -598,6 +624,8 @@ export default function App() {
       ingressAnnualOpexUsd: ingress.eligible ? ingress.ingressAnnualOpexUsd : 0,
       haDrComputeCapexUsd: haDr.eligible ? haDr.haDrComputeCapexUsd : 0,
       haDrItPowerKw: haDr.eligible ? haDr.haDrItPowerKw : 0,
+      mlopsComputeCapexUsd: mlops.eligible ? mlops.mlopsComputeCapexUsd : 0,
+      mlopsItPowerKw: mlops.eligible ? mlops.mlopsItPowerKw : 0,
     });
   }, [
     results,
@@ -616,6 +644,7 @@ export default function App() {
     guardrails,
     ingress,
     haDr,
+    mlops,
     migComputeGpuCountOverride,
     migItPowerKwOverride,
     rag,
@@ -699,16 +728,22 @@ ${guardrails.eligible ? `
 - RTO / RPO: ${haDrTier.rtoDescription} / ${haDrTier.rpoDescription}
 - Primary Site GPUs: ${haDr.baseGpuCount}
 - Incremental Compute + Storage Capex: $${Math.round(haDr.haDrComputeCapexUsd).toLocaleString()} (included in Cost & TCO below)
-- HA/DR IT Power Draw: ${haDr.haDrItPowerKw.toFixed(2)} kW\n` : ''}
-10. FACILITY & POWER FOOTPRINT
+- HA/DR IT Power Draw: ${haDr.haDrItPowerKw.toFixed(2)} kW\n` : ''}${mlops.eligible ? `
+10. MLOPS LIFECYCLE (MODEL ROLLOUT VALIDATION)
+- Strategy: ${mlopsStrategy.name} (${mlopsStrategy.scope})
+- Rollback Speed: ${mlopsStrategy.rollbackSpeed}
+${mlopsStrategy.id === 'canary-release' ? `- Canary Traffic Share: ${canaryTrafficPct}%\n` : ''}- Validation Pool GPUs: ${mlops.validationGpuCount} (of ${mlops.baseGpuCount} primary site GPUs)
+- MLOps Capex: $${Math.round(mlops.mlopsComputeCapexUsd).toLocaleString()} (included in Cost & TCO below)
+- MLOps IT Power Draw: ${mlops.mlopsItPowerKw.toFixed(2)} kW\n` : ''}
+11. FACILITY & POWER FOOTPRINT
 - Compute Power: ${facility.chassisPowerKw.toFixed(1)} kW
 - Network Power: ${facility.networkPowerKw.toFixed(1)} kW
 - Total IT Power: ${facility.totalItPowerKw.toFixed(1)} kW
 - Total Facility Power (${pue.toFixed(2)} PUE): ${facility.totalFacilityPowerKw.toFixed(1)} kW
 - Datacenter Racks: ~${facility.totalRacks} standard 42U Racks (${facility.totalRuNeeded} RU)
 
-11. COST & TCO (ILLUSTRATIVE ESTIMATE -- NOT A VENDOR QUOTE)
-- Total Capex: $${Math.round(cost.totalCapexUsd).toLocaleString()} (Compute $${Math.round(cost.computeCapexUsd).toLocaleString()} + Network/Storage $${Math.round(cost.networkHardwareCapexUsd + cost.storageCapexUsd).toLocaleString()}${rag.eligible ? ` + RAG $${Math.round(cost.ragCapexUsd).toLocaleString()}` : ''}${guardrails.eligible ? ` + Guardrails $${Math.round(cost.guardrailsCapexUsd).toLocaleString()}` : ''}${ingress.eligible ? ` + Ingress $${Math.round(cost.ingressCapexUsd).toLocaleString()}` : ''}${haDr.eligible ? ` + HA/DR $${Math.round(cost.haDrCapexUsd).toLocaleString()}` : ''})
+12. COST & TCO (ILLUSTRATIVE ESTIMATE -- NOT A VENDOR QUOTE)
+- Total Capex: $${Math.round(cost.totalCapexUsd).toLocaleString()} (Compute $${Math.round(cost.computeCapexUsd).toLocaleString()} + Network/Storage $${Math.round(cost.networkHardwareCapexUsd + cost.storageCapexUsd).toLocaleString()}${rag.eligible ? ` + RAG $${Math.round(cost.ragCapexUsd).toLocaleString()}` : ''}${guardrails.eligible ? ` + Guardrails $${Math.round(cost.guardrailsCapexUsd).toLocaleString()}` : ''}${ingress.eligible ? ` + Ingress $${Math.round(cost.ingressCapexUsd).toLocaleString()}` : ''}${haDr.eligible ? ` + HA/DR $${Math.round(cost.haDrCapexUsd).toLocaleString()}` : ''}${mlops.eligible ? ` + MLOps $${Math.round(cost.mlopsCapexUsd).toLocaleString()}` : ''})
 - Annual Opex: $${Math.round(cost.annualOpexUsd).toLocaleString()}/yr (Power $${Math.round(cost.annualPowerCostUsd).toLocaleString()} + Licensing $${Math.round(cost.annualLicensingCostUsd).toLocaleString()} + Support $${Math.round(cost.annualSupportCostUsd).toLocaleString()}${ingress.eligible ? ` + Ingress Egress/Fees $${Math.round(cost.ingressAnnualOpexUsd).toLocaleString()}` : ''})
 - ${cost.tcoYears}-Year TCO: $${Math.round(cost.tcoUsd).toLocaleString()} (~$${cost.effectiveUsdPerGpuHour.toFixed(2)}/GPU-hr effective)
 - vs. ${cost.tcoYears}-Yr Cloud Rental ($${cost.cloudEquivalentUsdPerHr.toFixed(2)}/hr cluster-wide): ${cost.buildVsBuySavingsUsd >= 0 ? `Owning saves $${Math.round(cost.buildVsBuySavingsUsd).toLocaleString()}` : `Cloud saves $${Math.round(-cost.buildVsBuySavingsUsd).toLocaleString()}`}
@@ -742,6 +777,7 @@ ${workloadType === 'inference' && throughput ? `
     { id: 'guardrails', label: 'Guardrails', icon: Shield, meta: guardrails.eligible ? `${guardrails.guardGpusNeeded}x ${guardModel.name}` : (enableGuardrails ? 'N/A' : 'Off') },
     { id: 'ingress', label: 'Ingress & Edge', icon: Globe, meta: ingress.eligible ? `${ingress.nodesNeeded}x ${ingressTier.name}` : (enableIngress ? 'N/A' : 'Off') },
     { id: 'hadr', label: 'HA / DR', icon: LifeBuoy, meta: haDr.eligible ? haDrTier.name : (enableHaDr ? 'N/A' : 'Off') },
+    { id: 'mlops', label: 'MLOps Lifecycle', icon: GitBranch, meta: mlops.eligible ? mlopsStrategy.name : (enableMlops ? 'N/A' : 'Off') },
     { id: 'mig', label: 'MIG Partitioning', icon: Grid2x2, meta: mig.eligible ? mig.selectedProfile.id : (enableMig ? 'N/A' : 'Off') },
     { id: 'sla', label: 'SLA & Tail Latency', icon: Timer, meta: sla.eligible ? `P99 ${sla.ttftP99Sec < 1 ? `${(sla.ttftP99Sec * 1000).toFixed(0)}ms` : `${sla.ttftP99Sec.toFixed(1)}s`}` : 'N/A' },
     { id: 'cost', label: 'Cost & TCO', icon: DollarSign, meta: `$${cost.effectiveUsdPerGpuHour.toFixed(2)}/GPU-hr` },
@@ -2393,6 +2429,79 @@ ${workloadType === 'inference' && throughput ? `
             </Card>
           )}
 
+          {/* 10b. MLOps Lifecycle: canary/shadow/blue-green model-rollout validation pool sizing */}
+          {activeInputTab === 'mlops' && (
+            <Card
+              icon={GitBranch}
+              title="MLOps Lifecycle"
+              right={mlops.enabled ? <Tag tone={mlops.eligible ? 'good' : 'warn'}>{mlops.eligible ? 'Eligible' : 'Not eligible'}</Tag> : <Tag>Off</Tag>}
+              className="space-y-4"
+            >
+              <Banner tone="info" icon={AlertTriangle}>
+                MLOps sizes a standing validation pool for safely rolling out a new model version -- canary release routes a small configurable traffic slice, shadow deployment mirrors 100% of traffic for silent evaluation, and blue/green cutover validates a full duplicate pool before an instant flip. Unlike HA/DR (a resilience multiplier on top of the primary), this pool is purely additive spend with no "already counted" base to subtract.
+              </Banner>
+
+              <ToggleRow
+                label="MLOps Validation Pool Sizing"
+                description={enableMlops ? 'Sizing an additive validation pool for the selected rollout strategy.' : 'No additional MLOps validation compute sized.'}
+                checked={enableMlops}
+                onChange={setEnableMlops}
+              />
+
+              {enableMlops && !mlops.eligible && (
+                <Banner tone="warn" icon={AlertTriangle}>
+                  {mlops.reason}
+                </Banner>
+              )}
+
+              {enableMlops && mlops.eligible && (
+                <>
+                  <Field label="Rollout Strategy" helper={
+                    <InfoHelper
+                      title="Rollout Strategy"
+                      text="Canary release only needs enough capacity for its own traffic slice, making it the cheapest validation pattern. Shadow deployment and blue/green cutover both require a full-scale duplicate pool -- shadow for silent, zero-user-risk evaluation, blue/green for the fastest rollback via an instant router flip."
+                      whyItMatters="The validation pool's size (and therefore its capex) is driven entirely by this choice: a canary's cost scales with its traffic share, while shadow and blue/green always cost the same as the primary pool."
+                    />
+                  }>
+                    <div className="grid grid-cols-1 gap-1.5">
+                      {MLOPS_STRATEGIES.map((s) => (
+                        <ChoiceCard
+                          key={s.id}
+                          selected={selectedMlopsStrategyId === s.id}
+                          onClick={() => setSelectedMlopsStrategyId(s.id)}
+                          title={`${s.name}${s.capacityMultiplier != null ? ` (${s.capacityMultiplier.toFixed(2)}x pool)` : ''}`}
+                          desc={`${s.scope} · Rollback: ${s.rollbackSpeed} · ${s.notes}`}
+                        />
+                      ))}
+                    </div>
+                  </Field>
+
+                  {mlopsStrategy.id === 'canary-release' && (
+                    <SliderField
+                      label="Canary Traffic Share:"
+                      valueLabel={`${canaryTrafficPct}%`}
+                      min="1" max="100" step="1"
+                      value={canaryTrafficPct}
+                      onChange={(e) => setCanaryTrafficPct(Number(e.target.value))}
+                      marks={['1% (Minimal)', '10% (Typical)', '100% (Full)']}
+                    />
+                  )}
+
+                  <div className="pt-3 border-t border-zinc-800/70">
+                    <SectionLabel>VALIDATION POOL SIZING</SectionLabel>
+                    <Rows>
+                      <Row k="Primary site GPUs" v={`${mlops.baseGpuCount}`} mono={false} />
+                      <Row k="Validation pool GPUs" v={`${mlops.validationGpuCount}`} tone="accent" />
+                      <Row k="Capacity multiplier" v={`${mlops.capacityMultiplier.toFixed(2)}x`} tone="accent" />
+                      <Row k="MLOps capex" v={`$${Math.round(mlops.mlopsComputeCapexUsd).toLocaleString()}`} tone="good" />
+                      <Row k="MLOps IT power draw" v={`${mlops.mlopsItPowerKw.toFixed(2)} kW`} mono={false} />
+                    </Rows>
+                  </div>
+                </>
+              )}
+            </Card>
+          )}
+
           {/* 11. MIG (Multi-Instance GPU) Partitioning */}
           {activeInputTab === 'mig' && (
             <Card
@@ -2655,6 +2764,9 @@ ${workloadType === 'inference' && throughput ? `
                   )}
                   {haDr.eligible && (
                     <Row k="HA/DR capex" v={`$${Math.round(cost.haDrCapexUsd).toLocaleString()}`} mono={false} />
+                  )}
+                  {mlops.eligible && (
+                    <Row k="MLOps capex" v={`$${Math.round(cost.mlopsCapexUsd).toLocaleString()}`} mono={false} />
                   )}
                   <Row k="Total capex" v={`$${Math.round(cost.totalCapexUsd).toLocaleString()}`} tone="accent" />
                   <Row k="Annual opex" v={`$${Math.round(cost.annualOpexUsd).toLocaleString()}/yr`} mono={false} />
@@ -2950,6 +3062,18 @@ ${workloadType === 'inference' && throughput ? `
                     <Row k="RTO / RPO" v={`${haDrTier.rtoDescription} / ${haDrTier.rpoDescription}`} tone="accent" />
                     <Row k="Incremental compute + storage capex" v={`$${Math.round(haDr.haDrComputeCapexUsd).toLocaleString()}`} tone="good" />
                     <Row k="HA/DR IT power draw" v={`${haDr.haDrItPowerKw.toFixed(2)} kW`} mono={false} />
+                  </Rows>
+                </Disclosure>
+              )}
+
+              {mlops.eligible && (
+                <Disclosure icon={GitBranch} title="MLOps lifecycle (model rollout validation pool)" right={mlopsStrategy.name}>
+                  <Rows>
+                    <Row k="Rollout strategy" v={`${mlopsStrategy.name} (${mlopsStrategy.scope})`} tone="accent" />
+                    <Row k="Rollback speed" v={mlopsStrategy.rollbackSpeed} tone="accent" />
+                    <Row k="Validation pool GPUs" v={`${mlops.validationGpuCount} (of ${mlops.baseGpuCount} primary)`} mono={false} />
+                    <Row k="MLOps capex" v={`$${Math.round(mlops.mlopsComputeCapexUsd).toLocaleString()}`} tone="good" />
+                    <Row k="MLOps IT power draw" v={`${mlops.mlopsItPowerKw.toFixed(2)} kW`} mono={false} />
                   </Rows>
                 </Disclosure>
               )}

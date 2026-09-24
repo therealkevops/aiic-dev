@@ -1350,6 +1350,10 @@ export function calculateCost(config) {
     // capex/power pattern as RAG/guardrails/ingress.
     haDrComputeCapexUsd = 0,
     haDrItPowerKw = 0,
+    // MLOps overlay (see calculateMlops()): the standing canary/shadow/blue-green validation
+    // pool's capex/power, same additive pattern as RAG/guardrails/ingress/HA-DR.
+    mlopsComputeCapexUsd = 0,
+    mlopsItPowerKw = 0,
   } = config;
 
   const isLlmd = !!infraResults.memory.llmd;
@@ -1372,22 +1376,22 @@ export function calculateCost(config) {
 
   const networkHardwareCapexUsd = computeCapexUsd * (networkHardwareAdderPct / 100);
   const storageCapexUsd = storageResults ? (storageResults.achievedCapacityTb * storageUsdPerTbRaw) : 0;
-  const totalCapexUsd = computeCapexUsd + networkHardwareCapexUsd + storageCapexUsd + ragComputeCapexUsd + guardrailsComputeCapexUsd + ingressComputeCapexUsd + haDrComputeCapexUsd;
+  const totalCapexUsd = computeCapexUsd + networkHardwareCapexUsd + storageCapexUsd + ragComputeCapexUsd + guardrailsComputeCapexUsd + ingressComputeCapexUsd + haDrComputeCapexUsd + mlopsComputeCapexUsd;
 
   const hoursPerYear = 24 * 365;
   const baseItPowerKw = itPowerKwOverride != null ? itPowerKwOverride : infraResults.facility.totalItPowerKw;
-  const billedItPowerKw = baseItPowerKw + ragItPowerKw + guardrailsItPowerKw + ingressItPowerKw + haDrItPowerKw;
+  const billedItPowerKw = baseItPowerKw + ragItPowerKw + guardrailsItPowerKw + ingressItPowerKw + haDrItPowerKw + mlopsItPowerKw;
   // Colo bills $/kW/month on IT load (the colo provider's own facility overhead/cooling is
   // baked into their rate); an owned DC bills the utility $/kWh on the PUE-adjusted total load.
   // The MIG IT-power override has no PUE figure of its own, so the owned-DC branch applies the
   // same PUE multiplier the rest of this deployment already uses. Add-on modules' (RAG,
-  // guardrails, ingress, HA/DR) own IT power gets the same PUE treatment -- they're colocated
-  // with the rest of the deployment, not a separate facility.
+  // guardrails, ingress, HA/DR, MLOps) own IT power gets the same PUE treatment -- they're
+  // colocated with the rest of the deployment, not a separate facility.
   const impliedPue = infraResults.facility.totalItPowerKw > 0
     ? infraResults.facility.totalFacilityPowerKw / infraResults.facility.totalItPowerKw
     : 1;
   const baseFacilityPowerKw = itPowerKwOverride != null ? baseItPowerKw * impliedPue : infraResults.facility.totalFacilityPowerKw;
-  const billedFacilityPowerKw = baseFacilityPowerKw + ((ragItPowerKw + guardrailsItPowerKw + ingressItPowerKw + haDrItPowerKw) * impliedPue);
+  const billedFacilityPowerKw = baseFacilityPowerKw + ((ragItPowerKw + guardrailsItPowerKw + ingressItPowerKw + haDrItPowerKw + mlopsItPowerKw) * impliedPue);
   const annualPowerCostUsd = useColo
     ? billedItPowerKw * coloUsdPerKwPerMonth * 12
     : billedFacilityPowerKw * hoursPerYear * powerUsdPerKwh;
@@ -1424,6 +1428,7 @@ export function calculateCost(config) {
     guardrailsCapexUsd: guardrailsComputeCapexUsd,
     ingressCapexUsd: ingressComputeCapexUsd,
     haDrCapexUsd: haDrComputeCapexUsd,
+    mlopsCapexUsd: mlopsComputeCapexUsd,
     ingressAnnualOpexUsd,
     totalCapexUsd,
     annualPowerCostUsd,
@@ -2025,5 +2030,73 @@ export function calculateHaDr(config) {
     incrementalStorageCapexUsd,
     haDrComputeCapexUsd,
     haDrItPowerKw,
+  };
+}
+
+// ─── MLOps Lifecycle: Canary / Shadow / Blue-Green Validation Pool ─────────────────────────────
+/**
+ * Sizes the standing compute pool a safe model-rollout strategy needs alongside the primary
+ * serving cluster: a canary pool sized to its own slice of live traffic, or a full-scale shadow/
+ * blue-green pool that mirrors or matches 100% of primary capacity during validation. Unlike
+ * HA/DR's tier multipliers (which describe TOTAL redundant capacity including the primary, hence
+ * `multiplier - 1` for the incremental spend), a validation pool is purely additive -- there's no
+ * "base 1x already counted" to subtract, so its capacityMultiplier is applied directly. Mirrors
+ * calculateHaDr()'s LLM-D split-pricing and MIG-override treatment for consistency, and is
+ * computed independently of calculateCost()'s own capex figures to avoid the same circular
+ * dependency HA/DR avoids (this overlay's output also feeds back into that same call).
+ */
+export function calculateMlops(config) {
+  const {
+    enabled = false,
+    infraResults,
+    mlopsStrategy,           // one of MLOPS_STRATEGIES
+    canaryTrafficPct = 10,   // only meaningful when mlopsStrategy.id === 'canary-release'
+    gpuUnitPriceUsd = 0,
+    decodeGpuUnitPriceUsd = null, // only used when infraResults is LLM-D heterogeneous
+    computeGpuCountOverride = null, // pass MIG's consolidated GPU count when eligible, for consistency with calculateCost()
+    itPowerKwOverride = null,
+  } = config;
+
+  if (!enabled) {
+    return { enabled: false, eligible: false, reason: "MLOps validation-pool sizing is disabled." };
+  }
+
+  if (infraResults.workloadType !== "inference") {
+    return { enabled: true, eligible: false, reason: "Canary/shadow/blue-green rollout sizing applies to inference workloads -- training has no live-traffic rollout concept." };
+  }
+
+  const isLlmd = !!infraResults.memory.llmd;
+  let baseGpuCount;
+  let baseComputeCapexUsd;
+  if (isLlmd) {
+    const prefillGpus = infraResults.memory.llmd.prefill.gpus;
+    const decodeGpus = infraResults.memory.llmd.decode.gpus;
+    const decPrice = decodeGpuUnitPriceUsd != null ? decodeGpuUnitPriceUsd : gpuUnitPriceUsd;
+    baseGpuCount = prefillGpus + decodeGpus;
+    baseComputeCapexUsd = (prefillGpus * gpuUnitPriceUsd) + (decodeGpus * decPrice);
+  } else {
+    baseGpuCount = computeGpuCountOverride != null ? computeGpuCountOverride : infraResults.totalGpus;
+    baseComputeCapexUsd = baseGpuCount * gpuUnitPriceUsd;
+  }
+  const baseItPowerKw = itPowerKwOverride != null ? itPowerKwOverride : infraResults.facility.totalItPowerKw;
+
+  const capacityMultiplier = mlopsStrategy.id === "canary-release"
+    ? Math.max(0, canaryTrafficPct) / 100
+    : mlopsStrategy.capacityMultiplier;
+
+  const validationGpuCount = Math.max(1, Math.ceil(baseGpuCount * capacityMultiplier));
+  const mlopsComputeCapexUsd = baseComputeCapexUsd * capacityMultiplier;
+  const mlopsItPowerKw = baseItPowerKw * capacityMultiplier;
+
+  return {
+    enabled: true,
+    eligible: true,
+    reason: null,
+    mlopsStrategy,
+    capacityMultiplier,
+    baseGpuCount,
+    validationGpuCount,
+    mlopsComputeCapexUsd,
+    mlopsItPowerKw,
   };
 }

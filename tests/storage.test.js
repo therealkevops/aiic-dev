@@ -11,13 +11,14 @@ import { calculateInfra, calculateStorage } from '../src/utils/calculator.js';
 import { MODEL_PRESETS, PRECISION_OPTIONS } from '../src/data/models.js';
 import { GPU_CATALOG } from '../src/data/hardware.js';
 import { PLATFORM_SYSTEMS } from '../src/data/platforms.js';
-import { STORAGE_TIERS } from '../src/data/storage.js';
+import { STORAGE_TIERS, DURABILITY_SCHEMES } from '../src/data/storage.js';
 
 const getModel = (id) => MODEL_PRESETS.find(m => m.id === id);
 const getPrecision = (id) => PRECISION_OPTIONS.find(p => p.id === id);
 const getGpu = (id) => GPU_CATALOG.find(g => g.id === id);
 const getPlatform = (id) => PLATFORM_SYSTEMS.find(p => p.id === id);
 const getTier = (id) => STORAGE_TIERS.find(t => t.id === id);
+const getDurability = (id) => DURABILITY_SCHEMES.find(d => d.id === id);
 
 const baseServingConfig = (platform, gpu) => ({
   servingEngine: 'vllm',
@@ -231,6 +232,89 @@ describe('4. RU Provisioning & Fit Warnings', () => {
       assert.ok(storage.fits, `${tier.id} should always be sized to fit — RU count grows until it does`);
       assert.ok(storage.achievedCapacityTb >= storage.requiredCapacityTb);
       assert.ok(storage.achievedThroughputGBs >= storage.requiredThroughputGBs);
+    }
+  });
+});
+
+describe('5. Storage Durability Overhead (Phase 3)', () => {
+  const model = getModel('llama33-70b');
+  const precision = getPrecision('fp16');
+  const platform = getPlatform('cisco-c885a-h100');
+  const gpu = getGpu(platform.gpuId);
+  const infraResults = calculateInfra({
+    workloadType: 'training', model, precision, kvPrecision: 'fp16',
+    prefixCacheRatio: 0, promptTokenRatio: 0.8, contextLength: 4096,
+    concurrency: 4, gpu, platform, tp: 8, pp: 1, dp: 4,
+    trainingType: 'pretrain_sft', zeroStage: 3, networkProtocol: 'rocev2', pue: 1.35,
+    servingConfig: baseServingConfig(platform, gpu),
+  });
+  const tier = getTier('weka-nvme');
+
+  it('every durability scheme has a replication factor >= 1', () => {
+    for (const scheme of DURABILITY_SCHEMES) {
+      assert.ok(scheme.replicationFactor >= 1, `${scheme.id} replicationFactor must be >= 1`);
+    }
+  });
+
+  it('replicated-3x has a higher replication factor than erasure-coded schemes (less efficient, more durable)', () => {
+    const r3x = getDurability('replicated-3x');
+    const ec83 = getDurability('erasure-coded-8-3');
+    const ec104 = getDurability('erasure-coded-10-4');
+    assert.ok(r3x.replicationFactor > ec83.replicationFactor);
+    assert.ok(r3x.replicationFactor > ec104.replicationFactor);
+  });
+
+  it('with no durability scheme (null), raw and usable capacity are identical (RF=1, backward compatible)', () => {
+    const storage = calculateStorage({
+      workloadType: 'training', infraResults, storageTier: tier,
+      checkpointRetentionCount: 3, checkpointTargetWriteTimeSec: 60, datasetSizeTb: 50,
+      durabilityScheme: null,
+    });
+    assert.equal(storage.replicationFactor, 1);
+    assert.equal(storage.requiredRawCapacityTb, storage.requiredCapacityTb);
+    assert.equal(storage.achievedCapacityTb, storage.achievedUsableCapacityTb);
+  });
+
+  it('requiredRawCapacityTb equals requiredCapacityTb x replicationFactor', () => {
+    const scheme = getDurability('erasure-coded-8-3');
+    const storage = calculateStorage({
+      workloadType: 'training', infraResults, storageTier: tier,
+      checkpointRetentionCount: 3, checkpointTargetWriteTimeSec: 60, datasetSizeTb: 50,
+      durabilityScheme: scheme,
+    });
+    assert.ok(Math.abs(storage.requiredRawCapacityTb - (storage.requiredCapacityTb * scheme.replicationFactor)) < 1e-9);
+  });
+
+  it('a higher replication factor never requires less raw capacity or fewer RU', () => {
+    const low = calculateStorage({
+      workloadType: 'training', infraResults, storageTier: tier,
+      checkpointRetentionCount: 3, checkpointTargetWriteTimeSec: 60, datasetSizeTb: 50,
+      durabilityScheme: getDurability('erasure-coded-8-3'),
+    });
+    const high = calculateStorage({
+      workloadType: 'training', infraResults, storageTier: tier,
+      checkpointRetentionCount: 3, checkpointTargetWriteTimeSec: 60, datasetSizeTb: 50,
+      durabilityScheme: getDurability('replicated-3x'),
+    });
+    assert.ok(high.requiredRawCapacityTb > low.requiredRawCapacityTb);
+    assert.ok(high.provisionedRu >= low.provisionedRu);
+  });
+
+  it('achievedUsableCapacityTb equals achievedCapacityTb (raw) / replicationFactor, and fits checks usable against the logical requirement', () => {
+    const scheme = getDurability('replicated-3x');
+    const storage = calculateStorage({
+      workloadType: 'training', infraResults, storageTier: tier,
+      checkpointRetentionCount: 3, checkpointTargetWriteTimeSec: 60, datasetSizeTb: 50,
+      durabilityScheme: scheme,
+    });
+    assert.ok(Math.abs(storage.achievedUsableCapacityTb - (storage.achievedCapacityTb / scheme.replicationFactor)) < 1e-9);
+    assert.ok(storage.achievedUsableCapacityTb >= storage.requiredCapacityTb);
+    assert.equal(storage.fits, true);
+  });
+
+  it('every storage tier has a raw $/TB estimate (renamed from the Phase 1 "usable" field for accuracy)', () => {
+    for (const t of STORAGE_TIERS) {
+      assert.ok(t.estimatedUsdPerTbRaw > 0, `missing estimatedUsdPerTbRaw for ${t.id}`);
     }
   });
 });

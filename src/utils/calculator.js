@@ -1191,6 +1191,7 @@ export function calculateStorage(config) {
     modelRepoTargetLoadTimeSec = 120,
     corpusSizeGb = 0,
     enableKvOffload = false,
+    durabilityScheme = null, // one entry from DURABILITY_SCHEMES; null = RF 1.0 (no redundancy modeled -- not recommended)
   } = config;
 
   const { memory, totalGpus, throughput } = infraResults;
@@ -1259,22 +1260,34 @@ export function calculateStorage(config) {
     }
   }
 
-  const ruForCapacity = Math.max(1, Math.ceil(requiredCapacityTb / storageTier.capacityPerRuTb));
+  // requiredCapacityTb is the logical/usable data need; what must actually be PROVISIONED
+  // (raw, what the vendor bills) is larger by the durability scheme's replication factor.
+  const replicationFactor = durabilityScheme ? durabilityScheme.replicationFactor : 1.0;
+  const requiredRawCapacityTb = requiredCapacityTb * replicationFactor;
+
+  const ruForCapacity = Math.max(1, Math.ceil(requiredRawCapacityTb / storageTier.capacityPerRuTb));
   const ruForThroughput = Math.max(1, Math.ceil(requiredThroughputGBs / storageTier.throughputPerRuGBs));
   const provisionedRu = Math.max(ruForCapacity, ruForThroughput);
   const bindingConstraint = ruForThroughput > ruForCapacity ? 'throughput' : 'capacity';
 
+  // achievedCapacityTb stays RAW (what's actually purchased -- Cost prices this figure);
+  // achievedUsableCapacityTb is what's actually available to the workload after redundancy.
   const achievedCapacityTb = provisionedRu * storageTier.capacityPerRuTb;
+  const achievedUsableCapacityTb = achievedCapacityTb / replicationFactor;
   const achievedThroughputGBs = provisionedRu * storageTier.throughputPerRuGBs;
-  const fits = achievedCapacityTb >= requiredCapacityTb && achievedThroughputGBs >= requiredThroughputGBs;
+  const fits = achievedUsableCapacityTb >= requiredCapacityTb && achievedThroughputGBs >= requiredThroughputGBs;
 
   return {
     workloadType,
     storageTier,
+    durabilityScheme,
+    replicationFactor,
     requiredCapacityTb,
+    requiredRawCapacityTb,
     requiredThroughputGBs,
     provisionedRu,
     achievedCapacityTb,
+    achievedUsableCapacityTb,
     achievedThroughputGBs,
     bindingConstraint,
     fits,
@@ -1299,7 +1312,7 @@ export function calculateCost(config) {
     decodeGpuUnitPriceUsd = null,    // only used when infraResults is LLM-D heterogeneous
     decodeCloudRateUsdPerHr = null,
     networkHardwareAdderPct = 15,    // network + OOB hardware as % of compute capex
-    storageUsdPerTbUsable = 0,       // $/TB for the achieved (provisioned) storage capacity
+    storageUsdPerTbRaw = 0,           // $/TB (raw) for the achieved (provisioned) storage capacity
     powerUsdPerKwh = 0.12,
     useColo = false,                 // colo bills $/kW/month on IT load; owned DC bills $/kWh on facility (PUE-adjusted) load
     coloUsdPerKwPerMonth = 150,
@@ -1336,7 +1349,7 @@ export function calculateCost(config) {
   }
 
   const networkHardwareCapexUsd = computeCapexUsd * (networkHardwareAdderPct / 100);
-  const storageCapexUsd = storageResults ? (storageResults.achievedCapacityTb * storageUsdPerTbUsable) : 0;
+  const storageCapexUsd = storageResults ? (storageResults.achievedCapacityTb * storageUsdPerTbRaw) : 0;
   const totalCapexUsd = computeCapexUsd + networkHardwareCapexUsd + storageCapexUsd;
 
   const hoursPerYear = 24 * 365;

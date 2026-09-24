@@ -27,7 +27,7 @@ import {
 import { MODEL_PRESETS, PRECISION_OPTIONS } from './data/models';
 import { GPU_CATALOG, NETWORK_PROTOCOLS } from './data/hardware';
 import { PLATFORM_VENDORS, PLATFORM_SYSTEMS } from './data/platforms';
-import { STORAGE_TIERS } from './data/storage';
+import { STORAGE_TIERS, DURABILITY_SCHEMES } from './data/storage';
 import { GPU_PRICING, DEFAULT_GPU_PRICING, NVIDIA_AI_ENTERPRISE_USD_PER_GPU_PER_YEAR, DEFAULT_NETWORK_HARDWARE_ADDER_PCT, DEFAULT_SUPPORT_PCT_PER_YEAR, DEFAULT_POWER_USD_PER_KWH, DEFAULT_COLO_USD_PER_KW_PER_MONTH, DEFAULT_TCO_YEARS } from './data/pricing';
 import { USE_CASE_PRESETS } from './data/presets';
 import { MIG_PROFILES } from './data/mig';
@@ -125,6 +125,7 @@ export default function App() {
   const [modelRepoTargetLoadTimeSec, setModelRepoTargetLoadTimeSec] = useState(120);
   const [corpusSizeGb, setCorpusSizeGb] = useState(0);
   const [enableKvOffload, setEnableKvOffload] = useState(false);
+  const [selectedDurabilitySchemeId, setSelectedDurabilitySchemeId] = useState('erasure-coded-8-3');
 
   // --- Cost & TCO State ---
   // Defaults match the default platform's GPU (h200-sxm); every figure here is an editable
@@ -189,6 +190,7 @@ export default function App() {
     setModelRepoTargetLoadTimeSec(c.modelRepoTargetLoadTimeSec);
     setCorpusSizeGb(c.corpusSizeGb);
     setEnableKvOffload(c.enableKvOffload);
+    setSelectedDurabilitySchemeId(c.selectedDurabilitySchemeId);
     setGpuUnitPriceUsd(c.gpuUnitPriceUsd);
     setCloudRateUsdPerHr(c.cloudRateUsdPerHr);
     setNetworkHardwareAdderPct(c.networkHardwareAdderPct);
@@ -370,6 +372,7 @@ export default function App() {
 
   // 3. Storage Sizing (capacity + throughput), independent of the compute solve above
   const storageTier = STORAGE_TIERS.find(t => t.id === selectedStorageTierId) || STORAGE_TIERS[0];
+  const durabilityScheme = DURABILITY_SCHEMES.find(d => d.id === selectedDurabilitySchemeId) || DURABILITY_SCHEMES[0];
   const storage = useMemo(() => {
     return calculateStorage({
       workloadType,
@@ -382,6 +385,7 @@ export default function App() {
       modelRepoTargetLoadTimeSec,
       corpusSizeGb,
       enableKvOffload,
+      durabilityScheme,
     });
   }, [
     workloadType,
@@ -394,6 +398,7 @@ export default function App() {
     modelRepoTargetLoadTimeSec,
     corpusSizeGb,
     enableKvOffload,
+    durabilityScheme,
   ]);
 
   // 4. MIG Partitioning -- a "what if" overlay, only meaningful for single-GPU-per-replica
@@ -422,7 +427,7 @@ export default function App() {
       decodeGpuUnitPriceUsd: decodeGpuPricing?.estimatedUnitPriceUsd ?? null,
       decodeCloudRateUsdPerHr: decodeGpuPricing?.estimatedCloudRateUsdPerHr ?? null,
       networkHardwareAdderPct,
-      storageUsdPerTbUsable: storageTier.estimatedUsdPerTbUsable,
+      storageUsdPerTbRaw: storageTier.estimatedUsdPerTbRaw,
       powerUsdPerKwh,
       useColo,
       coloUsdPerKwPerMonth,
@@ -496,9 +501,11 @@ ${bom.activeParamsNote ? `- MoE Active Params: ${bom.activeParamsNote}\n` : ''}-
 4. DATA PLATFORM & STORAGE (${storage.fits ? 'Sized to fit' : 'UNDERSIZED — increase RU or pick a faster tier'})
 - Storage Platform: ${storage.provisionedRu}x RU ${storage.storageTier.vendor} ${storage.storageTier.name}
 - Protocol: ${storage.storageTier.protocol}
-- Required Capacity: ${storage.requiredCapacityTb.toFixed(2)} TB
+- Durability Scheme: ${storage.durabilityScheme?.label || 'None (RF 1x)'}
+- Usable Capacity Needed: ${storage.requiredCapacityTb.toFixed(2)} TB
+- Raw Capacity to Provision: ${storage.requiredRawCapacityTb.toFixed(2)} TB (${storage.replicationFactor.toFixed(2)}x)
 - Required Throughput: ${storage.requiredThroughputGBs.toFixed(2)} GB/s (binding: ${storage.bindingConstraint})
-- Achieved (Provisioned): ${storage.achievedCapacityTb.toFixed(0)} TB / ${storage.achievedThroughputGBs.toFixed(1)} GB/s
+- Achieved (Raw / Usable): ${storage.achievedCapacityTb.toFixed(0)} TB / ${storage.achievedUsableCapacityTb.toFixed(0)} TB, ${storage.achievedThroughputGBs.toFixed(1)} GB/s
 ${storage.breakdown.map(b => `  * ${b.label}: ${b.capacityTb.toFixed(2)} TB — ${b.note}`).join('\n')}
 
 5. MANAGEMENT, SERVING STACK & ORCHESTRATION
@@ -1351,6 +1358,26 @@ ${workloadType === 'inference' && throughput ? `
                 </div>
               </Field>
 
+              <Field label="Durability Scheme" helper={
+                <InfoHelper
+                  title="Durability Scheme"
+                  text="How much raw capacity is consumed protecting data against drive/node failure. A replication factor of 2x means 2 raw TB are purchased for every 1 TB of usable data; erasure coding trades some of that overhead for better efficiency at the same or better failure tolerance."
+                  whyItMatters="This directly multiplies the raw capacity (and RU, and capex) that must be provisioned — skipping it entirely (no redundancy) is unrealistic for anything that isn't disposable/cache data."
+                />
+              }>
+                <div className="grid grid-cols-1 gap-1.5">
+                  {DURABILITY_SCHEMES.map((d) => (
+                    <ChoiceCard
+                      key={d.id}
+                      selected={selectedDurabilitySchemeId === d.id}
+                      onClick={() => setSelectedDurabilitySchemeId(d.id)}
+                      title={`${d.label} (${d.replicationFactor.toFixed(2)}x raw)`}
+                      desc={d.description}
+                    />
+                  ))}
+                </div>
+              </Field>
+
               {workloadType === 'training' ? (
                 <>
                   <SliderField
@@ -1444,11 +1471,13 @@ ${workloadType === 'inference' && throughput ? `
 
               <div className="pt-3 border-t border-zinc-800/70">
                 <Rows>
-                  <Row k="Required capacity" v={`${storage.requiredCapacityTb.toFixed(2)} TB`} tone="accent" />
+                  <Row k="Usable capacity needed" v={`${storage.requiredCapacityTb.toFixed(2)} TB`} tone="accent" />
+                  <Row k="Raw capacity to provision" v={`${storage.requiredRawCapacityTb.toFixed(2)} TB (${storage.replicationFactor.toFixed(2)}x)`} tone="accent" />
                   <Row k="Required throughput" v={`${storage.requiredThroughputGBs.toFixed(2)} GB/s`} tone="accent" />
                   <Row k="Binding constraint" v={storage.bindingConstraint === 'throughput' ? 'Throughput' : 'Capacity'} mono={false} />
                   <Row k="Provisioned" v={`${storage.provisionedRu} RU of ${storage.storageTier.vendor}`} mono={false} />
-                  <Row k="Achieved" v={`${storage.achievedCapacityTb.toFixed(0)} TB / ${storage.achievedThroughputGBs.toFixed(1)} GB/s`} tone={storage.fits ? 'good' : 'warn'} />
+                  <Row k="Achieved (raw / usable)" v={`${storage.achievedCapacityTb.toFixed(0)} TB / ${storage.achievedUsableCapacityTb.toFixed(0)} TB`} mono={false} />
+                  <Row k="Achieved throughput" v={`${storage.achievedThroughputGBs.toFixed(1)} GB/s`} tone={storage.fits ? 'good' : 'warn'} />
                 </Rows>
               </div>
             </Card>
@@ -2127,9 +2156,11 @@ ${workloadType === 'inference' && throughput ? `
                 <Rows>
                   <Row k="Storage platform" v={`${storage.provisionedRu}x RU ${storage.storageTier.vendor} ${storage.storageTier.name}`} mono={false} />
                   <Row k="Protocol" v={storage.storageTier.protocol} mono={false} />
-                  <Row k="Required capacity" v={`${storage.requiredCapacityTb.toFixed(2)} TB`} tone="accent" />
+                  <Row k="Durability scheme" v={`${storage.durabilityScheme?.label || 'None (RF 1x)'}`} mono={false} />
+                  <Row k="Usable capacity needed" v={`${storage.requiredCapacityTb.toFixed(2)} TB`} tone="accent" />
+                  <Row k="Raw capacity to provision" v={`${storage.requiredRawCapacityTb.toFixed(2)} TB (${storage.replicationFactor.toFixed(2)}x)`} tone="accent" />
                   <Row k="Required throughput" v={`${storage.requiredThroughputGBs.toFixed(2)} GB/s`} tone="accent" />
-                  <Row k="Achieved (provisioned)" v={`${storage.achievedCapacityTb.toFixed(0)} TB / ${storage.achievedThroughputGBs.toFixed(1)} GB/s`} tone={storage.fits ? 'good' : 'warn'} />
+                  <Row k="Achieved (raw / usable)" v={`${storage.achievedCapacityTb.toFixed(0)} TB / ${storage.achievedUsableCapacityTb.toFixed(0)} TB`} tone={storage.fits ? 'good' : 'warn'} />
                   {storage.breakdown.map((b, i) => (
                     <Row key={i} k={b.label} v={`${b.capacityTb.toFixed(2)} TB — ${b.note}`} mono={false} />
                   ))}

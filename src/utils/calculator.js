@@ -364,7 +364,11 @@ export function recommendSharding(params) {
     fitsInOneNode = true;
     rationale = `Workload base (~${totalReplicaMemoryGb.toFixed(1)} GB) fits across 4 GPUs inside 1 chassis. TP=${recommendedTp} balances matrix multiplications over NVLink. Pipeline Parallelism is unnecessary (PP=1).`;
   } else if (totalReplicaMemoryGb <= singleNodeCapacityGb) {
-    const candidateTp = gpusPerChassis >= 8 ? 8 : gpusPerChassis;
+    // On 8-GPU nodes this is TP=8. Rack-scale NVLink domains (NVL72) can go wider without
+    // leaving NVLink, so take the smallest power-of-two TP that fits.
+    let candidateTp = gpusPerChassis >= 8 ? 8 : gpusPerChassis;
+    while (candidateTp < gpusPerChassis && totalReplicaMemoryGb > candidateTp * usableGpuVramGb) candidateTp *= 2;
+    candidateTp = Math.min(candidateTp, gpusPerChassis);
     recommendedTp = getValidTp(candidateTp, numHeads);
     recommendedPp = 1;
     fitsInOneNode = true;
@@ -398,7 +402,9 @@ export function recommendSharding(params) {
 
   // Wide EP: the replica spans epNodes chassis at full in-chassis TP, with no pipeline stages.
   if (epNodes > 1) {
-    const epTp = getValidTp(gpusPerChassis, numHeads);
+    // An expert-parallel group is a chassis on 8-GPU nodes; inside a rack-scale NVLink domain
+    // it is an 8-GPU TP group, and several groups can sit in the same domain.
+    const epTp = getValidTp(Math.min(gpusPerChassis, 8), numHeads);
     const { routedGb, nonExpertGb } = splitExpertWeightsGb(model, totalReplicaMemoryGb);
     const perGpuGb = nonExpertGb / epTp + routedGb / (epTp * epNodes);
     recommendedTp = epTp;
@@ -898,8 +904,8 @@ export function calculateInfra(config) {
     warnings.push(`Selected GPU uses PCIe bus (no NVLink). High Tensor Parallelism (TP=${tp}) will cause All-Reduce communication bottlenecks.`);
   }
 
-  if (pp > 1 && tp < gpusPerChassis && !isLlmd) {
-    warnings.push(`Sub-optimal sharding: You configured Pipeline Parallelism (PP=${pp}) across nodes while TP is only ${tp}. Maximize intra-node TP to ${gpusPerChassis} first over NVLink before splitting across nodes with PP.`);
+  if (pp > 1 && tp < Math.min(8, gpusPerChassis) && !isLlmd) {
+    warnings.push(`Sub-optimal sharding: You configured Pipeline Parallelism (PP=${pp}) across nodes while TP is only ${tp}. Maximize intra-node TP to ${Math.min(8, gpusPerChassis)} first over NVLink before splitting across nodes with PP.`);
   }
 
   // FIX: Pipeline bubble overhead warning
@@ -920,6 +926,10 @@ export function calculateInfra(config) {
 
   if (epNodes > 1 && oversubscriptionRatio > 1) {
     warnings.push(`Wide expert parallelism sends all-to-all traffic across chassis at every MoE layer, but the fabric is ${oversubscriptionRatio}:1 oversubscribed. Expect higher per-token latency than modeled; use a non-blocking (1:1) fabric for expert-parallel groups.`);
+  }
+
+  if (platform?.nvlinkDomainGpus && !isLlmd && gpusAllocated > totalGpus) {
+    warnings.push(`${platform.shortName} is bought as whole ${gpusPerChassis}-GPU racks: this design uses ${totalGpus} of ${gpusAllocated} installed GPUs. Cost & TCO counts every installed GPU; add concurrency or replicas to use the rest.`);
   }
 
   // TensorRT-LLM is NVIDIA-only; AMD Instinct serving runs vLLM or SGLang on ROCm.
@@ -997,10 +1007,11 @@ export function calculateInfra(config) {
     transceivers   = 2 * fabricCables;
   } else {
     // C3: Rail-optimised leaf-spine fabric
-    const R = gpusPerChassis; // rails
+    const R = platform?.scaleOutRails || gpusPerChassis; // rails
     const D = Math.floor(CONFIG.switchPorts / 2); // downlink ports per leaf at 1:1 (32)
     const N_gpus = totalGpus;
-    const N_chassis = nodes;
+    // GPUs per rail: one per chassis on 8-GPU nodes; rack-scale systems spread their NICs over R rails.
+    const N_chassis = platform?.scaleOutRails ? Math.ceil(N_gpus / R) : nodes;
 
     if (N_gpus <= CONFIG.switchPorts) {
       leafSwitches  = 1;
@@ -1061,7 +1072,8 @@ export function calculateInfra(config) {
   const totalFacilityPowerKw = facilityTotalPower;
 
   // M2: Rack bin-packing
-  const rackKw = config.rackKw || config.rackKW || CONFIG.rackKW || 28;
+  // Rack-scale systems (NVL72) come as one fixed ~120-135 kW liquid-cooled rack.
+  const rackKw = platform?.rackKw || config.rackKw || config.rackKW || CONFIG.rackKW || 28;
   const chassisRU = chassisHeightRu || 8;
   const chassisTDP_W = chassisTdpKw ? (chassisTdpKw * 1000) : 10200;
   const perRack = Math.max(1, Math.floor(Math.min(CONFIG.rackRU / chassisRU, (rackKw * 1000) / chassisTDP_W)));
@@ -1227,9 +1239,14 @@ export function calculateInfra(config) {
     // Wide EP all-to-all: every token's hidden state goes to its k experts and back, mostly to
     // other chassis (FP8 dispatch + BF16 combine = 3 bytes/element), over the GPUs' NICs.
     const moeLayers = model.moeLayers || layers;
+    // Inside one NVLink domain (e.g. NVL72) the exchange runs over NVLink instead of the NICs.
+    const a2aInDomain = tp * epNodes <= gpusPerChassis;
+    const a2aLinkBw = a2aInDomain
+      ? (gpu.linkBwUniGBs ? gpu.linkBwUniGBs * 1e9 : CONFIG.nvlinkBwUni) * 0.8
+      : nicSpeedGbps * 1e9 * 0.9 / 8;
     const t_a2a = epNodes > 1
-      ? (C_rep * moeLayers * (model.activeExperts || 8) * hiddenDim * 3 * (1 - 1 / epNodes)) / (tp * epNodes * (nicSpeedGbps * 1e9 * 0.9 / 8))
-        + moeLayers * 2 * CONFIG.a2aLatency
+      ? (C_rep * moeLayers * (model.activeExperts || 8) * hiddenDim * 3 * (1 - 1 / epNodes)) / (tp * epNodes * a2aLinkBw)
+        + moeLayers * 2 * (a2aInDomain ? CONFIG.a2aLatency / 3 : CONFIG.a2aLatency)
       : 0;
     const t_comm = (decodeTpCount > 1 ? 2 * layers * CONFIG.allreduceLatency : 0) + t_a2a;
     const t_step_plain = Math.max(t_mem, t_comp) + t_comm;
@@ -1324,6 +1341,7 @@ export function calculateInfra(config) {
     modelParallelSize,
     totalGpus,
     epNodes,
+    isRackScale: !!platform?.nvlinkDomainGpus,
     gpusAllocated,
     nodes,
     // Memory
@@ -1611,7 +1629,10 @@ export function calculateCost(config) {
     cloudEquivalentUsdPerHr = (prefillGpus * cloudRateUsdPerHr) + (decodeGpus * decCloud);
   } else {
     const totalGpus = infraResults.totalGpus;
-    const billedGpuCount = computeGpuCountOverride != null ? computeGpuCountOverride : totalGpus;
+    // Rack-scale NVLink systems are bought per rack, so every installed GPU is paid for.
+    const billedGpuCount = computeGpuCountOverride != null
+      ? computeGpuCountOverride
+      : (infraResults.isRackScale ? (infraResults.gpusAllocated || totalGpus) : totalGpus);
     computeCapexUsd = billedGpuCount * gpuUnitPriceUsd;
     cloudEquivalentUsdPerHr = totalGpus * cloudRateUsdPerHr;
   }

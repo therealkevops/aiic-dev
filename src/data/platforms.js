@@ -341,6 +341,58 @@ export const PLATFORM_SYSTEMS = [
 
   // --- NVIDIA DGX SuperPOD Platforms ---
   {
+    id: "nvidia-gb200-nvl72",
+    vendor: "nvidia",
+    name: "NVIDIA GB200 NVL72 (72x GB200 186GB, one NVLink domain)",
+    shortName: "GB200 NVL72",
+    gpuId: "gb200",
+    formFactor: "48U liquid-cooled rack (18 compute trays + 9 NVLink switch trays)",
+    gpusPerChassis: 72,        // one NVLink domain = one rack
+    nvlinkDomainGpus: 72,
+    chassisTdpKw: 120,        // whole rack
+    chassisHeightRu: 48,
+    rackKw: 130,           // rack-scale power & liquid cooling; replaces the default per-rack limit
+    scaleOutRails: 8,          // rail-optimized scale-out fabric uses 8 rails, as on 8-GPU nodes
+    nicSpeedGbps: 400,
+    switchPowerKw: 2.5,
+    hostCpu: "36x NVIDIA Grace CPUs (2 per compute tray, 72 Arm Neoverse V2 cores each)",
+    systemRam: "Up to 17 TB LPDDR5X (coherent with GPU HBM over NVLink-C2C)",
+    hostNics: "72x 400Gb/s ConnectX SuperNICs (1 per GPU) + BlueField-3 DPUs",
+    leafSwitchModel: "NVIDIA Quantum-X800 (XDR InfiniBand) or Spectrum-X SN5600 (RoCEv2)",
+    spineSwitchModel: "NVIDIA Quantum-X800 or Spectrum-X SN5600",
+    storageSwitchModel: "NVIDIA Spectrum-4 SN5400 (64-port 400G Ethernet)",
+    oobSwitchModel: "NVIDIA Spectrum SN2201 (48-port 1G)",
+    transceiverType: "NVIDIA LinkX 800G/400G OSFP Transceivers & Copper DACs",
+    managementSuite: "NVIDIA Mission Control / Base Command Manager",
+    notes: "Rack-scale system: 72 Blackwell GPUs and 36 Grace CPUs in one NVLink domain (130 TB/s aggregate). Tensor and expert parallelism can span the rack, so large MoE models and long-context serving avoid network hops. Requires ~120 kW liquid-cooled racks."
+  },
+  {
+    id: "nvidia-gb300-nvl72",
+    vendor: "nvidia",
+    name: "NVIDIA GB300 NVL72 (72x GB300 288GB, one NVLink domain)",
+    shortName: "GB300 NVL72",
+    gpuId: "gb300",
+    formFactor: "48U liquid-cooled rack (18 compute trays + 9 NVLink switch trays)",
+    gpusPerChassis: 72,        // one NVLink domain = one rack
+    nvlinkDomainGpus: 72,
+    chassisTdpKw: 135,        // whole rack
+    chassisHeightRu: 48,
+    rackKw: 145,           // rack-scale power & liquid cooling; replaces the default per-rack limit
+    scaleOutRails: 8,          // rail-optimized scale-out fabric uses 8 rails, as on 8-GPU nodes
+    nicSpeedGbps: 800,
+    switchPowerKw: 2.5,
+    hostCpu: "36x NVIDIA Grace CPUs (2 per compute tray, 72 Arm Neoverse V2 cores each)",
+    systemRam: "Up to 17 TB LPDDR5X (coherent with GPU HBM over NVLink-C2C)",
+    hostNics: "72x 800Gb/s ConnectX SuperNICs (1 per GPU) + BlueField-3 DPUs",
+    leafSwitchModel: "NVIDIA Quantum-X800 (XDR InfiniBand) or Spectrum-X SN5600 (RoCEv2)",
+    spineSwitchModel: "NVIDIA Quantum-X800 or Spectrum-X SN5600",
+    storageSwitchModel: "NVIDIA Spectrum-4 SN5400 (64-port 400G Ethernet)",
+    oobSwitchModel: "NVIDIA Spectrum SN2201 (48-port 1G)",
+    transceiverType: "NVIDIA LinkX 800G/400G OSFP Transceivers & Copper DACs",
+    managementSuite: "NVIDIA Mission Control / Base Command Manager",
+    notes: "Blackwell Ultra rack-scale system: 72 GPUs with 288GB each (20.7 TB of HBM3e) in one NVLink domain. Aimed at reasoning inference and trillion-parameter MoE. Requires ~135 kW liquid-cooled racks."
+  },
+  {
     id: "nvidia-dgx-h200",
     vendor: "nvidia",
     name: "NVIDIA DGX H200 (8x H200 141GB SXM5)",
@@ -529,7 +581,7 @@ export const PLATFORM_SYSTEMS = [
     oobSwitchModel: "NVIDIA Spectrum SN2201 (48-port 1G)",
     transceiverType: "NVIDIA LinkX 800G/400G OSFP Transceivers & Copper DACs",
     managementSuite: "OEM BMC / Redfish + NVIDIA Base Command Manager",
-    notes: "The entry point into the Grace Blackwell family: 2 fully coherent Grace-Blackwell superchips per 2U node, NVLink-paired to each other. This is distinct from the rack-scale GB200 NVL72 (a single 72-GPU non-blocking NVLink domain spanning an entire liquid-cooled rack) — that architecture isn't modeled here yet, since it breaks this calculator's TP-stays-inside-one-chassis assumption. NVL2 pairs behave like any other 2-GPU NVLink node for sharding purposes."
+    notes: "The entry point into the Grace Blackwell family: 2 fully coherent Grace-Blackwell superchips per 2U node, NVLink-paired to each other. This is distinct from the rack-scale GB200 NVL72 (a single 72-GPU non-blocking NVLink domain spanning an entire liquid-cooled rack) — see the GB200/GB300 NVL72 platforms for that. NVL2 pairs behave like any other 2-GPU NVLink node for sharding purposes."
   },
 
   // --- AMD Instinct OEM Platforms (8-GPU OAM Universal Baseboard) ---

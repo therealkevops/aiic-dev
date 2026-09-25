@@ -203,3 +203,20 @@ test('training time: 6ND compute, Young/Daly checkpointing and failure-driven go
   assert.equal(lora.recommendedSpareNodes, 0);
   assert.ok(t.recommendedSpareNodes >= 1);
 });
+
+test('rack-scale NVL72: wide TP and in-rack expert parallelism stay on NVLink; racks billed whole', () => {
+  const base = { ...DEFAULT_CONFIG, selectedVendor: 'nvidia', kvPrecision: 'fp8', contextLength: 32768 };
+  const kimi = computeScenario({ ...base, selectedModelId: 'kimi-k2', selectedPlatformId: 'nvidia-gb200-nvl72', concurrency: 1024 });
+  assert.equal(kimi.pp, 1);
+  assert.ok(kimi.tp >= 8);
+  const hgxEp = computeScenario({ ...base, selectedModelId: 'deepseek-r1-671b', selectedPlatformId: 'nvidia-hgx-b200', concurrency: 2048, expertParallelNodes: 4 });
+  const nvlEp = computeScenario({ ...base, selectedModelId: 'deepseek-r1-671b', selectedPlatformId: 'nvidia-gb200-nvl72', concurrency: 2048, expertParallelNodes: 4 });
+  assert.ok(nvlEp.throughput.t_a2a < hgxEp.throughput.t_a2a, 'all-to-all over NVLink is faster than over NICs');
+  // A small design on one rack still pays for all 72 GPUs.
+  const small = computeScenario({ ...base, selectedModelId: 'llama33-70b', selectedPlatformId: 'nvidia-gb200-nvl72', concurrency: 8 });
+  assert.equal(small.results.gpusAllocated, 72);
+  assert.ok(small.warnings.some(w => w.includes('whole 72-GPU racks')));
+  assert.equal(small.cost.computeCapexUsd, 72 * DEFAULT_CONFIG.gpuUnitPriceUsd);
+  // Racks are sized at the platform's own power rating, not the 28 kW default.
+  assert.ok(small.facility.totalRacks <= 2);
+});

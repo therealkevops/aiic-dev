@@ -183,7 +183,7 @@ export function ShardingTab({ ctx }) {
       {epAvailable && (
         <Card icon={Layers} title="Expert Parallelism (MoE)" className="space-y-3">
           <ScaleField
-            label="Chassis per replica (expert-parallel span)"
+            label={platform.nvlinkDomainGpus ? '8-GPU groups per replica (expert-parallel span)' : 'Chassis per replica (expert-parallel span)'}
             value={expertParallelNodes}
             onChange={setExpertParallelNodes}
             presets={[1, 2, 4, 8]}
@@ -192,7 +192,7 @@ export function ShardingTab({ ctx }) {
             helper={
               <InfoHelper
                 title="Wide Expert Parallelism"
-                text={`At 1, each replica fits in one chassis and its ${model.routedExperts} routed experts are split by TP. Above 1, a replica spans that many chassis: attention and shared weights stay TP=${platform.gpusPerChassis} inside each chassis, each chassis serves its own share of the streams, and the routed experts are spread across every GPU in the group. Tokens are exchanged between chassis (all-to-all) at every MoE layer.`}
+                text={`At 1, each replica's ${model.routedExperts} routed experts are split by TP. Above 1, a replica spans that many ${platform.nvlinkDomainGpus ? '8-GPU groups' : 'chassis'}: attention and shared weights stay TP=${Math.min(platform.gpusPerChassis, 8)} inside each group, each group serves its own share of the streams, and the routed experts are spread across every GPU in the replica. Tokens are exchanged between groups (all-to-all) at every MoE layer${platform.nvlinkDomainGpus ? ' -- over NVLink while the replica stays inside the rack\'s 72-GPU domain' : ''}.`}
                 whyItMatters="Spreading experts leaves far more memory per GPU for KV cache, so large MoE deployments (DeepSeek, Kimi K2, Qwen3-235B) often need many fewer GPUs, and models too big for one chassis no longer need pipeline stages. The cost is all-to-all traffic on the scale-out fabric, which adds per-token latency and needs a non-blocking network."
               />
             }

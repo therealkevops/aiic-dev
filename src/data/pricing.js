@@ -16,6 +16,8 @@ export const GPU_PRICING = {
   "l40s-pcie":      { estimatedUnitPriceUsd: 8500,  estimatedCloudRateUsdPerHr: 1.20 },
   "a100-sxm-80gb":  { estimatedUnitPriceUsd: 9000,  estimatedCloudRateUsdPerHr: 1.50 },
   "b300-sxm":       { estimatedUnitPriceUsd: 50000, estimatedCloudRateUsdPerHr: 9.00 },
+  "gb200":          { estimatedUnitPriceUsd: 55000, estimatedCloudRateUsdPerHr: 9.00 }, // per GPU, rack integration included
+  "gb300":          { estimatedUnitPriceUsd: 65000, estimatedCloudRateUsdPerHr: 11.00 },
   "rtx-pro-6000":   { estimatedUnitPriceUsd: 10000, estimatedCloudRateUsdPerHr: 1.80 },
   "mi300x":         { estimatedUnitPriceUsd: 15000, estimatedCloudRateUsdPerHr: 2.50 },
   "mi325x":         { estimatedUnitPriceUsd: 20000, estimatedCloudRateUsdPerHr: 3.00 },

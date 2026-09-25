@@ -74,7 +74,7 @@ test('every preset renders every tab and matches the golden snapshot', async () 
   const page = await browser.newPage({ viewport: { width: 1600, height: 1000 } });
   const errors = [];
   page.on('pageerror', e => errors.push(e.message));
-  await page.goto(URL, { waitUntil: 'networkidle' });
+  await page.goto(`${URL}#/advanced`, { waitUntil: 'networkidle' });
 
   const snapshot = {};
   for (const preset of USE_CASE_PRESETS) {
@@ -107,7 +107,7 @@ test('pin a scenario, compare it with another, and export a report', async () =>
   const page = await browser.newPage({ viewport: { width: 1600, height: 1000 }, acceptDownloads: true });
   const errors = [];
   page.on('pageerror', e => errors.push(e.message));
-  await page.goto(URL, { waitUntil: 'networkidle' });
+  await page.goto(`${URL}#/advanced`, { waitUntil: 'networkidle' });
   await page.getByTestId('preset-select').selectOption('ent-rag-assistant');
   await page.getByTestId('pin-scenario').click();
   await page.getByTestId('preset-select').selectOption('ent-agent-sql-analysis');
@@ -129,7 +129,7 @@ test('guided setup recommends a design and applies it', async () => {
   const page = await browser.newPage({ viewport: { width: 1600, height: 1000 } });
   const errors = [];
   page.on('pageerror', e => errors.push(e.message));
-  await page.goto(URL, { waitUntil: 'networkidle' });
+  await page.goto(`${URL}#/advanced`, { waitUntil: 'networkidle' });
   await page.getByTestId('guided-setup').click();
   const dialog = page.getByTestId('guided-setup-dialog');
   await dialog.getByRole('button', { name: /^AI agents/ }).click();
@@ -143,4 +143,27 @@ test('guided setup recommends a design and applies it', async () => {
   assert.equal(await page.getByTestId('preset-select').inputValue(), '');
   assert.equal(errors.length, 0, errors.join('; '));
   await page.close();
+});
+
+test('home page on first visit, then the last-used mode', async () => {
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const page = await context.newPage();
+  const errors = [];
+  page.on('pageerror', e => errors.push(e.message));
+  await page.goto(URL, { waitUntil: 'networkidle' });
+  assert.equal(await page.getByTestId('mode-card-learn').count(), 1, 'first visit shows the home page');
+  await page.getByTestId('open-advanced').click();
+  assert.match(page.url(), /#\/advanced$/);
+  assert.equal(await page.getByTestId('kpi-gpus').count(), 1);
+  // A later visit to the root opens the last-used mode.
+  await page.goto(URL, { waitUntil: 'networkidle' });
+  assert.equal(await page.getByTestId('kpi-gpus').count(), 1, 'remembered mode skips the home page');
+  // Switch to Learning from the header; the product name returns home.
+  await page.getByTestId('mode-learn').click();
+  assert.match(page.url(), /#\/learn$/);
+  assert.equal(await page.getByTestId('lesson-list').count(), 1);
+  await page.getByTestId('go-home').click();
+  assert.equal(await page.getByTestId('mode-card-advanced').count(), 1);
+  assert.equal(errors.length, 0, errors.join('; '));
+  await context.close();
 });

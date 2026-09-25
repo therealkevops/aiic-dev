@@ -1802,7 +1802,7 @@
   },
   "neo-frontier-pretrain": {
     "kpis": {
-      "gpus": "1024",
+      "gpus": "1,024",
       "nodes": "128",
       "power": "1978.2 kW",
       "status": "Fits"

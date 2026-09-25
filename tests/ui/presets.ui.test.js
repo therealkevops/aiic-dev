@@ -61,7 +61,7 @@ async function readState(page) {
     status: await page.getByTestId('kpi-status').innerText(),
   };
   const nav = await page.$$eval('[data-testid^="nav-"]', els => Object.fromEntries(
-    els.map(el => [el.dataset.testid.slice(4), el.querySelector('.truncate')?.textContent ?? ''])
+    els.map(el => [el.dataset.testid.slice(4), el.querySelector('[data-nav-meta]')?.textContent ?? ''])
   ));
   // Full results-pane text (reviewable line diff) ...
   const results = (await page.getByTestId('results-pane').innerText()).split('\n').map(l => l.trim()).filter(Boolean);

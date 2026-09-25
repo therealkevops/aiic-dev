@@ -2430,6 +2430,7 @@ export function calculateTokenEconomics({
   promptTokensPerRequest,
   outputTokensPerRequest,      // visible answer + reasoning tokens
   dutyCyclePct = 50,
+  requestsPerSecAtPeak: requestsPerSecAtPeakInput = null, // known peak request rate (traffic mode)
   apiInputUsdPer1M = 0,
   apiOutputUsdPer1M = 0,
 }) {
@@ -2442,7 +2443,9 @@ export function calculateTokenEconomics({
   const fullyLoadedMonthlyCostUsd = cost.totalCapexUsd / (cost.tcoYears * 12) + cost.annualOpexUsd / 12;
   const monthlyCostUsd = (cost.servingCapexUsd ?? cost.totalCapexUsd) / (cost.tcoYears * 12)
     + (cost.servingAnnualOpexUsd ?? cost.annualOpexUsd) / 12;
-  const requestsPerSecAtPeak = throughput.batchThroughputTps / outputTokensPerRequest;
+  const requestsPerSecAtPeak = requestsPerSecAtPeakInput > 0
+    ? requestsPerSecAtPeakInput
+    : throughput.batchThroughputTps / outputTokensPerRequest;
   const duty = Math.min(1, Math.max(0.01, dutyCyclePct / 100));
   const requestsPerMonthAtFull = requestsPerSecAtPeak * 3600 * hoursPerMonth;
   const requestsPerMonth = requestsPerMonthAtFull * duty;

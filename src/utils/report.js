@@ -21,7 +21,9 @@ function assumptions(config, s) {
   ];
   if (c.workloadType === 'inference') {
     rows.push(
-      ['Concurrent streams', c.concurrency.toLocaleString()],
+      s.traffic
+        ? ['Peak traffic', `${s.traffic.requestsPerSec.toFixed(2)} requests/s → ${s.traffic.concurrency.toLocaleString()} concurrent requests at ${Math.round(s.traffic.utilization * 100)}% utilization`]
+        : ['Concurrent streams', c.concurrency.toLocaleString()],
       ['Prefix cache sharing', `${Math.round(c.prefixCacheRatio * 100)}%`],
       ['Reasoning tokens per output token', c.reasoningTokensPerOutputToken || 0],
       ['Request-length mix', c.requestMixEnabled ? `${c.shortRequestPct}% short (${c.shortRequestTokens.toLocaleString()} tokens)` : 'Off'],

@@ -147,3 +147,21 @@ test('prefix caching switch and chunked prefill switch change the sizing', () =>
   const unchunked = computeScenario({ ...docs, enableChunkedPrefill: false });
   assert.ok(unchunked.memory.perGpuActGb > chunked.memory.perGpuActGb);
 });
+
+test('traffic mode solves concurrency with Little\'s law and scales with load', () => {
+  const base = applyPresetConfig(DEFAULT_CONFIG, USE_CASE_PRESETS.find(p => p.id === 'ent-customer-support').config);
+  const light = computeScenario({ ...base, sizingInputMode: 'traffic', trafficInputType: 'rps', peakRequestsPerSec: 1 });
+  const heavy = computeScenario({ ...base, sizingInputMode: 'traffic', trafficInputType: 'rps', peakRequestsPerSec: 20 });
+  const t = light.traffic;
+  // In-flight requests at the resulting utilization match rate x service time.
+  assert.ok(Math.abs(t.requestsPerSec * t.serviceTimeSec / t.concurrency - t.utilization) < 0.02);
+  assert.ok(t.utilization <= base.targetUtilization + 1e-9);
+  assert.ok(heavy.traffic.concurrency > light.traffic.concurrency * 10);
+  assert.ok(heavy.results.totalGpus > light.results.totalGpus);
+  // Users x requests/hour is the same as the equivalent rate.
+  const users = computeScenario({ ...base, sizingInputMode: 'traffic', trafficInputType: 'users', peakActiveUsers: 360, requestsPerUserPerHour: 10 });
+  assert.equal(users.traffic.requestsPerSec, 1);
+  assert.equal(users.traffic.concurrency, t.concurrency);
+  // Token economics uses the known request rate.
+  assert.ok(Math.abs(light.tokenEconomics.requestsPerMonth - 1 * 3600 * 730 * base.dutyCyclePct / 100) < 1);
+});

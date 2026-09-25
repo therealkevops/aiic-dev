@@ -22,6 +22,11 @@ export const DEFAULT_CONFIG = {
   promptTokenRatio: 0.8, // 0.8 = 80% prompt / 20% gen
   contextLength: 16384,
   concurrency: 8,
+  sizingInputMode: 'concurrency', // 'concurrency' (streams held at once) | 'traffic' (peak request rate)
+  trafficInputType: 'users', // traffic mode: 'users' (active users x requests/hour) | 'rps'
+  peakActiveUsers: 500, // traffic mode: users active in the peak hour
+  requestsPerUserPerHour: 20, // traffic mode: requests each active user sends per hour
+  peakRequestsPerSec: 5, // traffic mode: peak request rate when entered directly
   reasoningTokensPerOutputToken: 0, // hidden thinking tokens per visible output token (reasoning models)
   requestMixEnabled: false, // size KV for a mix of short and full-length requests
   shortRequestPct: 70, // share of requests that are short
@@ -116,6 +121,7 @@ const PRESET_FALLBACKS = {
   oversubscriptionRatio: 1,
   memoryHeadroomPct: 5,
   expertParallelNodes: 1,
+  sizingInputMode: 'concurrency',
   specMethod: 'draft-model',
   specDraftParamsB: 1,
   specNumTokens: 4,

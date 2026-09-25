@@ -153,6 +153,8 @@ export default function App() {
   // scenario results and App-level UI state/handlers.
   const ctx = {
     ...config, ...setters, ...scenario,
+    // In traffic mode the concurrency to size for is solved from the request rate.
+    concurrency: scenario.traffic ? scenario.traffic.concurrency : config.concurrency,
     page, setPage, activeInputTab, setActiveInputTab, selectedPresetId, applyPreset, activePreset,
     handleVendorChange, copiedBOM, technicalNavTabs, economicsNavTabs,
   };

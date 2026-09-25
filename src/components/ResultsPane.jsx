@@ -51,7 +51,7 @@ export function ResultsPane({ ctx }) {
         </Banner>
       ) : (
         <Banner
-          tone={memory.isOOM ? 'warn' : (memory.headroomGb < 10 ? 'warn' : 'good')}
+          tone={memory.isOOM ? 'warn' : (memory.headroomGb < 0.05 * memory.usableGpuCapacityGb ? 'warn' : 'good')}
           icon={memory.isOOM ? AlertTriangle : CheckCircle2}
           title={
             memory.isOOM

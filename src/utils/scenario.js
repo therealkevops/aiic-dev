@@ -338,6 +338,8 @@ function computeScenarioCore(config) {
         promptTokensPerRequest: workloadShape.promptTokens * meanScale,
         outputTokensPerRequest: (workloadShape.visibleOutputTokens + workloadShape.thinkingTokens) * meanScale,
         dutyCyclePct: c.dutyCyclePct,
+        // In traffic mode the peak request rate is an input; otherwise it follows from throughput.
+        requestsPerSecAtPeak: c._trafficRps || null,
         apiInputUsdPer1M: c.apiInputUsdPer1M,
         apiOutputUsdPer1M: c.apiOutputUsdPer1M,
       })
@@ -488,7 +490,49 @@ function computeMemorySized(config) {
   };
 }
 
-export function computeScenario(config) {
+/** Mean time a request occupies a batch slot: prefill plus its full generation. */
+function serviceTimeSec(s) {
+  const t = s.throughput;
+  if (!t) return 0;
+  const w = s.workloadShape;
+  const meanScale = w.avgSequenceTokens ? w.avgSequenceTokens / w.sequenceTokens : 1;
+  const outputTokens = (w.visibleOutputTokens + w.thinkingTokens) * meanScale;
+  return t.ttftSec + outputTokens * (Number(t.tpotMs) / 1000);
+}
+
+/** Peak request rate implied by the traffic inputs. */
+export function trafficRequestsPerSec(config) {
+  if (config.trafficInputType === 'users') {
+    return Math.max(0, (Number(config.peakActiveUsers) || 0) * (Number(config.requestsPerUserPerHour) || 0) / 3600);
+  }
+  return Math.max(0, Number(config.peakRequestsPerSec) || 0);
+}
+
+/**
+ * Traffic mode: turn a peak request rate into the number of requests the cluster must hold at
+ * once. By Little's law, in-flight requests = arrival rate × time each request spends being
+ * served; dividing by the target utilization leaves the queueing headroom the SLA tab models.
+ * Service time depends on the batch size (bigger batches decode more slowly), so this iterates
+ * to a fixed point.
+ */
+function resolveTraffic(config) {
+  const rps = trafficRequestsPerSec(config);
+  const targetRho = Math.min(0.95, Math.max(0.05, Number(config.targetUtilization) || 0.7));
+  const base = { ...config, sizingInputMode: 'concurrency', kvActiveSessionPct: 100 };
+  let concurrency = 1;
+  let serviceSec = 0;
+  let iterations = 0;
+  for (; iterations < 15; iterations++) {
+    const s = computeMemorySized({ ...base, concurrency });
+    serviceSec = serviceTimeSec(s);
+    const needed = Math.max(1, Math.ceil((rps * serviceSec) / targetRho));
+    if (needed <= concurrency) break;
+    concurrency = needed;
+  }
+  return { rps, concurrency, serviceSec, targetRho, iterations: iterations + 1, base };
+}
+
+function computeScenarioForConcurrencyMode(config) {
   const memorySized = computeMemorySized(config);
   const solverApplies = config.latencyTargetsEnabled
     && config.workloadType === 'inference'
@@ -497,4 +541,28 @@ export function computeScenario(config) {
     && !memorySized.autoRecommendation.error;
   if (!solverApplies) return { memorySizing: null, ...memorySized, latencySolve: null };
   return { memorySizing: null, ...solveForLatency(config, memorySized) };
+}
+
+export function computeScenario(config) {
+  if (config.sizingInputMode !== 'traffic' || config.workloadType !== 'inference') {
+    return { traffic: null, ...computeScenarioForConcurrencyMode(config) };
+  }
+  const t = resolveTraffic(config);
+  // Queueing on the SLA tab should reflect the utilization this traffic actually produces.
+  const sized = (rho) => computeScenarioForConcurrencyMode({ ...t.base, concurrency: t.concurrency, targetUtilization: rho, _trafficRps: t.rps });
+  let s = sized(t.targetRho);
+  const actualRho = (sv) => Math.min(0.98, Math.max(0.001, (t.rps * serviceTimeSec(sv)) / t.concurrency));
+  const rho = actualRho(s);
+  if (Math.abs(rho - t.targetRho) > 0.005) s = sized(rho);
+  return {
+    ...s,
+    traffic: {
+      requestsPerSec: t.rps,
+      concurrency: t.concurrency,
+      serviceTimeSec: serviceTimeSec(s),
+      utilization: rho,
+      targetUtilization: t.targetRho,
+      iterations: t.iterations,
+    },
+  };
 }

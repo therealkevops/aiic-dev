@@ -2,20 +2,21 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { ArrowLeft, ArrowRight, BookOpen, Check, CheckCircle2, ChevronDown, Lightbulb, RotateCcw, SlidersHorizontal, Target, X } from 'lucide-react';
 import { computeScenario } from '../../utils/scenario';
 import { CATALOG } from '../../learning/catalog';
-import { CONTROLS, LESSONS, METRICS } from '../../learning/lessons';
+import { CONTROLS, LESSONS, METRICS, controlId, controlOptions, controlSet, controlValue } from '../../learning/lessons';
 import { loadProgress, saveProgress } from '../../learning/progress';
 
 function Paragraphs({ text }) {
   return String(text).split('\n\n').map((p, i) => <p key={i} className="text-[13.5px] text-zinc-300 leading-relaxed">{p}</p>);
 }
 
-function ControlGroup({ id, value, onChange }) {
+function ControlGroup({ entry, value, onChange }) {
+  const id = controlId(entry);
   const def = CONTROLS[id];
   return (
     <div>
       <div className="text-[12px] font-medium text-zinc-300 mb-1.5">{def.label}</div>
       <div role="radiogroup" aria-label={def.label} className="flex flex-wrap gap-1.5">
-        {def.options.map(o => {
+        {controlOptions(entry).map(o => {
           const active = value === o.value;
           return (
             <button
@@ -250,9 +251,10 @@ export function LessonView({ lessonId, navigate, onOpenInAdvanced }) {
               <RotateCcw className="w-3 h-3" /> Reset
             </button>
           </div>
-          {lesson.controls.map(id => (
-            <ControlGroup key={id} id={id} value={config[id]} onChange={(v) => setValues(vs => ({ ...vs, [id]: v }))} />
-          ))}
+          {lesson.controls.map(entry => {
+            const id = controlId(entry);
+            return <ControlGroup key={id} entry={entry} value={controlValue(id, config)} onChange={(v) => setValues(vs => ({ ...vs, ...controlSet(id, v) }))} />;
+          })}
         </div>
 
         <div className="rounded-lg border border-zinc-800 bg-zinc-900/60">

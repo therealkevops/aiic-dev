@@ -2,13 +2,14 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { computeScenario } from '../src/utils/scenario.js';
 import { CATALOG } from '../src/learning/catalog.js';
-import { CONTROLS, LESSONS, METRICS } from '../src/learning/lessons.js';
+import { CONTROLS, LESSONS, METRICS, controlId, controlOptions, controlSet, controlValue } from '../src/learning/lessons.js';
 import { parseRoute, routeHash } from '../src/state/route.js';
 
 // Every combination of a lesson's control values.
 function* combinations(controls, i = 0, acc = {}) {
   if (i === controls.length) { yield { ...acc }; return; }
-  for (const o of CONTROLS[controls[i]].options) yield* combinations(controls, i + 1, { ...acc, [controls[i]]: o.value });
+  const id = controlId(controls[i]);
+  for (const o of controlOptions(controls[i])) yield* combinations(controls, i + 1, { ...acc, ...controlSet(id, o.value) });
 }
 
 test('routes round-trip', () => {
@@ -32,9 +33,10 @@ for (const [id, lesson] of Object.entries(LESSONS)) {
     const c = lesson.start();
     const s = computeScenario(c);
     assert.equal(s.memory.isOOM, false, 'starting design fits');
-    for (const ctl of lesson.controls) {
+    for (const entry of lesson.controls) {
+      const ctl = controlId(entry);
       assert.ok(CONTROLS[ctl], `unknown control ${ctl}`);
-      assert.ok(CONTROLS[ctl].options.some(o => o.value === c[ctl]), `${ctl} starts on one of its options`);
+      assert.ok(controlOptions(entry).some(o => o.value === controlValue(ctl, c)), `${ctl} starts on one of its options (${controlValue(ctl, c)})`);
     }
     for (const m of lesson.metrics) {
       assert.ok(METRICS[m], `unknown metric ${m}`);
@@ -94,4 +96,108 @@ test('lesson facts: KV cache', () => {
   const fp8 = at({ concurrency: 64, contextLength: 32768, kvPrecision: 'fp8' });
   assert.equal(fp8.results.totalGpus, 4);
   assert.equal(fp8.memory.bytesPerTokenSeq, 163840);
+});
+
+const lessonAt = (id, o = {}) => computeScenario({ ...LESSONS[id].start(), ...o });
+const near = (actual, expected, tol, label) => assert.ok(Math.abs(actual - expected) <= tol, `${label}: ${actual} vs ${expected}`);
+const tp = (v) => CONTROLS.tensorParallel.set(v);
+
+test('lesson facts: sharding', () => {
+  const start = lessonAt('sharding');
+  assert.equal(start.tp, 4); assert.equal(start.results.totalGpus, 4);
+  const tp2 = lessonAt('sharding', tp(2));
+  assert.equal(tp2.memory.isOOM, true); assert.ok(tp2.memory.perGpuTotalUsedGb > 220);
+  const tp8 = lessonAt('sharding', tp(8));
+  near(tp8.memory.perGpuWeightsGb, 51, 1, 'TP8 weights per GPU');
+  const c64 = lessonAt('sharding', { concurrency: 64 });
+  assert.deepEqual([c64.tp, c64.dp, c64.results.totalGpus], [4, 2, 8]);
+  const c128 = lessonAt('sharding', { concurrency: 128 });
+  assert.deepEqual([c128.tp, c128.dp, c128.results.totalGpus], [8, 1, 8]);
+  const h100 = lessonAt('sharding', { selectedPlatformId: 'cisco-c885a-h100', selectedPrecisionId: 'fp16' });
+  assert.deepEqual([h100.tp, h100.pp, h100.results.nodes], [8, 2, 2]);
+});
+
+test('lesson facts: speed', () => {
+  const one = lessonAt('speed');
+  near(Number(one.throughput.tpotMs), 20, 1, 'single-user TPOT'); near(one.throughput.ttftSec, 1.0, 0.05, 'TTFT');
+  const c32 = lessonAt('speed', { concurrency: 32 });
+  near(Number(c32.throughput.tpotMs), 40, 1.5, 'TPOT at 32'); near(c32.throughput.batchThroughputTps, 810, 20, 'throughput at 32');
+  const tp2 = lessonAt('speed', { concurrency: 32, ...tp(2) });
+  near(Number(tp2.throughput.tpotMs), 22, 1, 'TP2 TPOT'); near(tp2.throughput.ttftSec, 0.54, 0.03, 'TP2 TTFT');
+  const b200 = lessonAt('speed', { concurrency: 32, selectedPlatformId: 'cisco-c885a-b200' });
+  near(b200.throughput.ttftSec, 0.44, 0.03, 'B200 TTFT'); near(Number(b200.throughput.tpotMs), 24, 1, 'B200 TPOT');
+  const long = lessonAt('speed', { concurrency: 32, selectedPlatformId: 'cisco-c885a-b200', contextLength: 32768 });
+  assert.equal(long.results.totalGpus, 2); assert.equal(long.tp, 2);
+  near(Number(long.throughput.promptPflops) / Number(b200.throughput.promptPflops), 4.8, 0.3, 'prefill work ratio');
+});
+
+test('lesson facts: traffic', () => {
+  const s = lessonAt('traffic');
+  near(s.traffic.requestsPerSec, 1.39, 0.01, 'rate'); near(s.traffic.serviceTimeSec, 68, 3, 'service time'); near(s.traffic.concurrency, 135, 6, 'in flight');
+  near(s.sla.ttftP99Sec, 9, 1.5, 'P99 at 500 users');
+  const big = lessonAt('traffic', { peakActiveUsers: 5000 });
+  assert.equal(big.results.totalGpus, 24); near(big.traffic.concurrency, 1550, 40, 'in flight at 5000'); assert.ok(big.sla.ttftP99Sec < 0.5);
+  const head = lessonAt('traffic', { targetUtilization: 0.5 });
+  assert.equal(head.results.totalGpus, 4); assert.equal(head.tp, 2); assert.ok(head.sla.ttftP99Sec < 0.8);
+  const busy = lessonAt('traffic', { requestsPerUserPerHour: 60 });
+  assert.equal(busy.results.totalGpus, 16); near(busy.traffic.requestsPerSec, 8.33, 0.01, 'busy rate');
+});
+
+test('lesson facts: network', () => {
+  const s = lessonAt('network');
+  assert.deepEqual([s.results.totalGpus, s.network.leafSwitches, s.network.spineSwitches], [32, 1, 0]);
+  assert.equal(lessonAt('network', { manualDp: 8 }).network.leafSwitches, 1);
+  const n128 = lessonAt('network', { manualDp: 16 }).network;
+  assert.deepEqual([n128.leafSwitches, n128.spineSwitches, n128.transceivers], [8, 4, 768]);
+  near(n128.effectiveBisectionTbps, 51.2, 0.1, 'bisection');
+  const o2 = lessonAt('network', { manualDp: 16, oversubscriptionRatio: 2 }).network;
+  assert.deepEqual([o2.spineSwitches, o2.transceivers], [2, 512]);
+  near(o2.effectiveBisectionTbps, 25.6, 0.1, 'oversubscribed bisection');
+});
+
+test('lesson facts: facility', () => {
+  const s = lessonAt('facility');
+  near(s.facility.totalItPowerKw, 85, 2, 'IT'); near(s.facility.totalFacilityPowerKw, 115, 2, 'facility');
+  assert.deepEqual([s.facility.perRack, s.facility.totalRacks], [2, 5]);
+  const r15 = lessonAt('facility', { rackPowerKw: 15 }).facility;
+  assert.deepEqual([r15.perRack, r15.totalRacks], [1, 9]);
+  const air = lessonAt('facility', { selectedPlatformId: 'cisco-c885a-b200' });
+  near(air.facility.totalItPowerKw, 118, 2, 'B200 IT'); assert.deepEqual([air.facility.perRack, air.facility.totalRacks], [1, 9]);
+  const liquid = lessonAt('facility', { selectedPlatformId: 'cisco-c885a-b200', ...CONTROLS.coolingType.set('liquid') });
+  assert.deepEqual([liquid.facility.perRack, liquid.facility.totalRacks], [5, 3]);
+  near(air.facility.totalFacilityPowerKw - liquid.facility.totalFacilityPowerKw, 24, 2, 'facility saving');
+  near(air.energy.annualMwh - liquid.energy.annualMwh, 200, 15, 'energy saving');
+  near(air.cost.annualPowerCostUsd - liquid.cost.annualPowerCostUsd, 25000, 1500, 'power cost saving');
+});
+
+test('lesson facts: training', () => {
+  const s = lessonAt('training');
+  near(METRICS.trainingState.value(s), 1130, 10, 'training state'); near(s.memory.perGpuTotalUsedGb, 47, 1, 'ZeRO-3');
+  near(s.trainingTime.computeDays, 3.9, 0.1, '10B tokens');
+  assert.equal(lessonAt('training', { zeroStage: 0 }).memory.isOOM, true);
+  assert.equal(lessonAt('training', { zeroStage: 1 }).memory.isOOM, true);
+  near(lessonAt('training', { zeroStage: 0 }).memory.perGpuTotalUsedGb, 153, 2, 'ZeRO-0');
+  const z2 = lessonAt('training', { zeroStage: 2 });
+  assert.equal(z2.memory.isOOM, false); near(z2.memory.perGpuTotalUsedGb, 60, 1, 'ZeRO-2');
+  near(lessonAt('training', { trainingTokensB: 100 }).trainingTime.wallClockDays, 39, 0.5, '100B tokens');
+  const big = lessonAt('training', { trainingTokensB: 100, manualDp: 16 });
+  near(big.trainingTime.wallClockDays, 9.8, 0.2, '128 GPUs'); near(big.trainingTime.jobMtbfHours, 390, 5, 'job MTBF'); near(big.trainingTime.goodputPct, 99, 0.3, 'goodput');
+  const lora = lessonAt('training', { trainingTokensB: 100, manualDp: 16, trainingType: 'lora' });
+  near(lora.trainingTime.wallClockDays, 6.5, 0.2, 'LoRA days'); assert.ok(METRICS.trainingState.value(lora) < 150);
+});
+
+test('lesson facts: cost', () => {
+  const s = lessonAt('cost');
+  assert.equal(s.results.totalGpus, 8);
+  near(s.cost.totalCapexUsd, 392000, 1000, 'capex'); near(s.cost.annualOpexUsd, 112000, 1000, 'opex'); near(s.cost.tcoUsd, 729000, 2000, 'TCO');
+  near(s.cost.effectiveUsdPerGpuHour, 3.47, 0.02, '$/GPU-h'); near(s.tokenEconomics.costPer1MOutputTokensUsd, 1.22, 0.03, '$/1M');
+  near(lessonAt('cost', { dutyCyclePct: 20 }).tokenEconomics.costPer1MOutputTokensUsd, 3.05, 0.05, '20%');
+  near(lessonAt('cost', { dutyCyclePct: 80 }).tokenEconomics.costPer1MOutputTokensUsd, 0.76, 0.03, '80%');
+  near(s.cost.tcoUsd - lessonAt('cost', { gpuUnitPriceUsd: 25000 }).cost.tcoUsd, 133000, 2000, 'price cut saving');
+  near(s.cost.tcoUsd - lessonAt('cost', { enableNvidiaAiEnterprise: false }).cost.tcoUsd, 108000, 2000, 'licence saving');
+  const reserved = (x) => x.rentVsBuy.options.find(o => o.id === 'reserved').usd;
+  assert.ok(reserved(s) < s.cost.tcoUsd, 'reserved cloud cheaper over 3 years');
+  const five = lessonAt('cost', { tcoYears: 5 });
+  assert.ok(five.cost.tcoUsd < reserved(five), 'owning cheaper over 5 years');
+  near(five.cost.effectiveUsdPerGpuHour, 2.72, 0.02, '5-year $/GPU-h');
 });

@@ -21,7 +21,8 @@
       "mlops": "Canary Release",
       "mig": "Off",
       "sla": "P99 3.7s",
-      "cost": "$19.68/GPU-hr"
+      "cost": "$19.68/GPU-hr",
+      "planning": "Sensitivity · rent vs buy"
     },
     "results": [
       "Hardware verified: fits with 23.3 GB headroom per GPU",
@@ -135,11 +136,11 @@
       "Private AI Infrastructure Sizing Calculator · Cisco & NVIDIA Datacenter Platforms"
     ],
     "configPaneHashes": {
-      "workload": "b60034331d15",
+      "workload": "f789f052a347",
       "platform": "fd1ae427b069",
       "sharding": "69598a12d5bb",
       "network": "89795e5833bc",
-      "facility": "d3015bd3ba18",
+      "facility": "0b3bcb86bce9",
       "storage": "a1dcfd05ddf4",
       "rag": "71203c5231ba",
       "stack": "2ef5ee6aaf79",
@@ -149,7 +150,8 @@
       "mlops": "4de425f53b4e",
       "mig": "b5d8b480f2ee",
       "sla": "eaf296cec6ad",
-      "cost": "916158a1ac9e"
+      "cost": "916158a1ac9e",
+      "planning": "5336aab274fc"
     }
   },
   "ent-coding-copilot": {
@@ -174,7 +176,8 @@
       "mlops": "Canary Release",
       "mig": "Off",
       "sla": "P99 89.9s",
-      "cost": "$21.32/GPU-hr"
+      "cost": "$21.32/GPU-hr",
+      "planning": "Sensitivity · rent vs buy"
     },
     "results": [
       "Hardware verified: fits with 15.4 GB headroom per GPU",
@@ -286,11 +289,11 @@
       "Private AI Infrastructure Sizing Calculator · Cisco & NVIDIA Datacenter Platforms"
     ],
     "configPaneHashes": {
-      "workload": "cc498bee01e3",
+      "workload": "ac863fe7f56c",
       "platform": "fd1ae427b069",
       "sharding": "a20cdd8c85d3",
       "network": "28c663d87d43",
-      "facility": "97079bc8e90b",
+      "facility": "fedfc8c6971b",
       "storage": "b7388aa18128",
       "rag": "3b826620567c",
       "stack": "50ba4bc4fbd2",
@@ -300,7 +303,8 @@
       "mlops": "13b495698e8f",
       "mig": "b5d8b480f2ee",
       "sla": "d0c00d15b107",
-      "cost": "c357361c61ff"
+      "cost": "c357361c61ff",
+      "planning": "df7da9c7439f"
     }
   },
   "ent-customer-support": {
@@ -325,7 +329,8 @@
       "mlops": "Canary Release",
       "mig": "Off",
       "sla": "P99 131ms",
-      "cost": "$3.48/GPU-hr"
+      "cost": "$3.48/GPU-hr",
+      "planning": "Sensitivity · rent vs buy"
     },
     "results": [
       "Hardware verified: fits with 5.9 GB headroom per GPU",
@@ -429,11 +434,11 @@
       "Private AI Infrastructure Sizing Calculator · Cisco & NVIDIA Datacenter Platforms"
     ],
     "configPaneHashes": {
-      "workload": "a2e86adbbd2f",
+      "workload": "0970fc29b533",
       "platform": "1b035676037b",
       "sharding": "9319dc0fe3cd",
       "network": "89795e5833bc",
-      "facility": "0864fb1f85cc",
+      "facility": "68c67e994ba0",
       "storage": "9e8417e218e5",
       "rag": "ac05552d35c0",
       "stack": "2ef5ee6aaf79",
@@ -443,7 +448,8 @@
       "mlops": "6be903c1a150",
       "mig": "b5d8b480f2ee",
       "sla": "6568c9745ddf",
-      "cost": "aa78d424b597"
+      "cost": "aa78d424b597",
+      "planning": "521507f217f6"
     }
   },
   "ent-document-analysis": {
@@ -468,7 +474,8 @@
       "mlops": "Canary Release",
       "mig": "Off",
       "sla": "P99 4671.4s",
-      "cost": "$7.60/GPU-hr"
+      "cost": "$7.60/GPU-hr",
+      "planning": "Sensitivity · rent vs buy"
     },
     "results": [
       "Hardware verified: fits with 10.0 GB headroom per GPU",
@@ -582,11 +589,11 @@
       "Private AI Infrastructure Sizing Calculator · Cisco & NVIDIA Datacenter Platforms"
     ],
     "configPaneHashes": {
-      "workload": "41d3c0ec6b55",
+      "workload": "92b9d7de37b0",
       "platform": "fd1ae427b069",
       "sharding": "0f5b7f9310a4",
       "network": "085371cd9ae4",
-      "facility": "f05a7d5f6f1b",
+      "facility": "05abdbf1e97e",
       "storage": "b39862fc0c4e",
       "rag": "4a465d972891",
       "stack": "2ef5ee6aaf79",
@@ -596,7 +603,8 @@
       "mlops": "fab697d9e10b",
       "mig": "b5d8b480f2ee",
       "sla": "4f1ff97ec1c0",
-      "cost": "d11ed0efa071"
+      "cost": "d11ed0efa071",
+      "planning": "0470980f5f1b"
     }
   },
   "ent-lora-finetune": {
@@ -621,7 +629,8 @@
       "mlops": "Off",
       "mig": "Off",
       "sla": "N/A",
-      "cost": "$2.85/GPU-hr"
+      "cost": "$2.85/GPU-hr",
+      "planning": "Sensitivity · rent vs buy"
     },
     "results": [
       "Hardware verified: fits with 31.2 GB headroom per GPU",
@@ -730,7 +739,7 @@
       "platform": "a1e295898015",
       "sharding": "6348a4617f05",
       "network": "4fcf8a5b91c9",
-      "facility": "cb684f6e934e",
+      "facility": "37c0bf0b675f",
       "storage": "a9d14ef36fbb",
       "rag": "f7cab449b282",
       "stack": "2ef5ee6aaf79",
@@ -740,7 +749,8 @@
       "mlops": "5067b6453522",
       "mig": "b5d8b480f2ee",
       "sla": "630b3e0bbaed",
-      "cost": "a41cd8c2e172"
+      "cost": "a41cd8c2e172",
+      "planning": "f021a3e9590b"
     }
   },
   "ent-full-finetune": {
@@ -765,7 +775,8 @@
       "mlops": "Off",
       "mig": "Off",
       "sla": "N/A",
-      "cost": "$2.72/GPU-hr"
+      "cost": "$2.72/GPU-hr",
+      "planning": "Sensitivity · rent vs buy"
     },
     "results": [
       "Hardware verified: fits with 25.3 GB headroom per GPU",
@@ -874,7 +885,7 @@
       "platform": "a1e295898015",
       "sharding": "6d50e6b58f1b",
       "network": "b045f10505d7",
-      "facility": "0f1ca440d498",
+      "facility": "50427485a67a",
       "storage": "4d9bfeea7ef9",
       "rag": "f7cab449b282",
       "stack": "2ef5ee6aaf79",
@@ -884,7 +895,8 @@
       "mlops": "5067b6453522",
       "mig": "b5d8b480f2ee",
       "sla": "630b3e0bbaed",
-      "cost": "934ce84c013b"
+      "cost": "934ce84c013b",
+      "planning": "bda396a99b84"
     }
   },
   "ent-minimal-airgapped": {
@@ -909,7 +921,8 @@
       "mlops": "Off",
       "mig": "Off",
       "sla": "P99 21.8s",
-      "cost": "$3.84/GPU-hr"
+      "cost": "$3.84/GPU-hr",
+      "planning": "Sensitivity · rent vs buy"
     },
     "results": [
       "Hardware verified: fits with 36.2 GB headroom per GPU",
@@ -1009,11 +1022,11 @@
       "Private AI Infrastructure Sizing Calculator · Cisco & NVIDIA Datacenter Platforms"
     ],
     "configPaneHashes": {
-      "workload": "50c0d2e311c7",
+      "workload": "8bbeb03a0211",
       "platform": "1b035676037b",
       "sharding": "d718acb573a7",
       "network": "1a69d76e39ab",
-      "facility": "a98f99c0081f",
+      "facility": "dce173b4eab6",
       "storage": "9bcbc8a1fe55",
       "rag": "f7cab449b282",
       "stack": "2ef5ee6aaf79",
@@ -1023,7 +1036,8 @@
       "mlops": "5067b6453522",
       "mig": "b5d8b480f2ee",
       "sla": "1d05b8274ae1",
-      "cost": "5f0f142479f3"
+      "cost": "5f0f142479f3",
+      "planning": "d26ac8b7632a"
     }
   },
   "ent-agent-tool-use": {
@@ -1048,7 +1062,8 @@
       "mlops": "Canary Release",
       "mig": "Off",
       "sla": "P99 2.0s",
-      "cost": "$6.26/GPU-hr"
+      "cost": "$6.26/GPU-hr",
+      "planning": "Sensitivity · rent vs buy"
     },
     "results": [
       "Hardware verified: fits with 23.5 GB headroom per GPU",
@@ -1162,11 +1177,11 @@
       "Private AI Infrastructure Sizing Calculator · Cisco & NVIDIA Datacenter Platforms"
     ],
     "configPaneHashes": {
-      "workload": "dfd550bd34e6",
+      "workload": "0a437a3d3ba8",
       "platform": "fd1ae427b069",
       "sharding": "35be0848241c",
       "network": "085371cd9ae4",
-      "facility": "f05a7d5f6f1b",
+      "facility": "74e8aa5e7d60",
       "storage": "87b0ca3a36ec",
       "rag": "631f4c0c38c8",
       "stack": "73cc2a312391",
@@ -1176,7 +1191,8 @@
       "mlops": "fab697d9e10b",
       "mig": "b5d8b480f2ee",
       "sla": "af030382cecf",
-      "cost": "a3b37f272b40"
+      "cost": "a3b37f272b40",
+      "planning": "de11e628a5a2"
     }
   },
   "ent-agent-swe": {
@@ -1201,7 +1217,8 @@
       "mlops": "Canary Release",
       "mig": "Off",
       "sla": "P99 2012.6s",
-      "cost": "$11.92/GPU-hr"
+      "cost": "$11.92/GPU-hr",
+      "planning": "Sensitivity · rent vs buy"
     },
     "results": [
       "Hardware verified: fits with 15.6 GB headroom per GPU",
@@ -1315,11 +1332,11 @@
       "Private AI Infrastructure Sizing Calculator · Cisco & NVIDIA Datacenter Platforms"
     ],
     "configPaneHashes": {
-      "workload": "cce022415709",
+      "workload": "ac78654e3dbc",
       "platform": "fd1ae427b069",
       "sharding": "ae0e268760ba",
       "network": "1e24eadfd62f",
-      "facility": "1e8aa2f9806b",
+      "facility": "70a2a63bf006",
       "storage": "df6b3c45899a",
       "rag": "ca62efef9136",
       "stack": "50ba4bc4fbd2",
@@ -1329,7 +1346,8 @@
       "mlops": "a9d707057224",
       "mig": "b5d8b480f2ee",
       "sla": "e1e28d190d35",
-      "cost": "038739f7e1c4"
+      "cost": "038739f7e1c4",
+      "planning": "ef9c7fbeddcf"
     }
   },
   "ent-agent-deep-research": {
@@ -1354,7 +1372,8 @@
       "mlops": "Canary Release",
       "mig": "Off",
       "sla": "P99 851.7s",
-      "cost": "$8.79/GPU-hr"
+      "cost": "$8.79/GPU-hr",
+      "planning": "Sensitivity · rent vs buy"
     },
     "results": [
       "Hardware verified: fits with 12.4 GB headroom per GPU",
@@ -1470,11 +1489,11 @@
       "Private AI Infrastructure Sizing Calculator · Cisco & NVIDIA Datacenter Platforms"
     ],
     "configPaneHashes": {
-      "workload": "1817317ddb24",
+      "workload": "560717c156e0",
       "platform": "fd1ae427b069",
       "sharding": "b5349585d68b",
       "network": "085371cd9ae4",
-      "facility": "f05a7d5f6f1b",
+      "facility": "fc3277afc18c",
       "storage": "16c5781526cd",
       "rag": "7edafd445547",
       "stack": "2ef5ee6aaf79",
@@ -1484,7 +1503,8 @@
       "mlops": "fab697d9e10b",
       "mig": "b5d8b480f2ee",
       "sla": "460db3a0bfe8",
-      "cost": "664de85c1e0c"
+      "cost": "664de85c1e0c",
+      "planning": "e1b76ca5be00"
     }
   },
   "ent-agent-multi-orchestration": {
@@ -1509,7 +1529,8 @@
       "mlops": "Canary Release",
       "mig": "Off",
       "sla": "P99 554ms",
-      "cost": "$1.85/GPU-hr"
+      "cost": "$1.85/GPU-hr",
+      "planning": "Sensitivity · rent vs buy"
     },
     "results": [
       "Hardware verified: fits with 3.5 GB headroom per GPU",
@@ -1616,11 +1637,11 @@
       "Private AI Infrastructure Sizing Calculator · Cisco & NVIDIA Datacenter Platforms"
     ],
     "configPaneHashes": {
-      "workload": "9c348b3f0189",
+      "workload": "528311c91464",
       "platform": "1b035676037b",
       "sharding": "68ca303810d2",
       "network": "8c1508f6a8bf",
-      "facility": "0c5f9c7a1dc2",
+      "facility": "2ce954c42e08",
       "storage": "5353085cd410",
       "rag": "80ef257ae321",
       "stack": "2ef5ee6aaf79",
@@ -1630,7 +1651,8 @@
       "mlops": "d216b591e505",
       "mig": "b5d8b480f2ee",
       "sla": "20a8057b2e79",
-      "cost": "b54672c60a77"
+      "cost": "b54672c60a77",
+      "planning": "c2f32adfdb79"
     }
   },
   "ent-agent-sql-analysis": {
@@ -1655,7 +1677,8 @@
       "mlops": "Off",
       "mig": "Off",
       "sla": "P99 5.0s",
-      "cost": "$5.09/GPU-hr"
+      "cost": "$5.09/GPU-hr",
+      "planning": "Sensitivity · rent vs buy"
     },
     "results": [
       "Hardware verified: fits with 36.8 GB headroom per GPU",
@@ -1759,11 +1782,11 @@
       "Private AI Infrastructure Sizing Calculator · Cisco & NVIDIA Datacenter Platforms"
     ],
     "configPaneHashes": {
-      "workload": "a2e901caf7a6",
+      "workload": "219d243b0ef8",
       "platform": "fd1ae427b069",
       "sharding": "b401b147f01f",
       "network": "28c663d87d43",
-      "facility": "97079bc8e90b",
+      "facility": "42c17b02d551",
       "storage": "fad99f7f905c",
       "rag": "f7cab449b282",
       "stack": "2ef5ee6aaf79",
@@ -1773,7 +1796,8 @@
       "mlops": "5067b6453522",
       "mig": "b5d8b480f2ee",
       "sla": "d1de556baea8",
-      "cost": "138cc5cf281d"
+      "cost": "138cc5cf281d",
+      "planning": "88328224cb93"
     }
   },
   "neo-frontier-pretrain": {
@@ -1798,7 +1822,8 @@
       "mlops": "Off",
       "mig": "Off",
       "sla": "N/A",
-      "cost": "$3.06/GPU-hr"
+      "cost": "$3.06/GPU-hr",
+      "planning": "Sensitivity · rent vs buy"
     },
     "results": [
       "Hardware verified: fits with 153.4 GB headroom per GPU",
@@ -1917,7 +1942,7 @@
       "platform": "abdb59984326",
       "sharding": "d60aaab1a272",
       "network": "3deab01902dc",
-      "facility": "d9df2ecaa8cd",
+      "facility": "7ebfdfa76a79",
       "storage": "c77232e8c455",
       "rag": "f7cab449b282",
       "stack": "c65e3bdab78e",
@@ -1927,7 +1952,8 @@
       "mlops": "5067b6453522",
       "mig": "b5d8b480f2ee",
       "sla": "630b3e0bbaed",
-      "cost": "3a4aa0316532"
+      "cost": "3a4aa0316532",
+      "planning": "49f956f87a25"
     }
   },
   "neo-maas-inference": {
@@ -1952,7 +1978,8 @@
       "mlops": "Blue/Green Cutover",
       "mig": "Off",
       "sla": "P99 24.8s",
-      "cost": "$8.24/GPU-hr"
+      "cost": "$8.24/GPU-hr",
+      "planning": "Sensitivity · rent vs buy"
     },
     "results": [
       "Hardware verified: fits with 9.3 GB headroom per GPU",
@@ -2070,11 +2097,11 @@
       "Private AI Infrastructure Sizing Calculator · Cisco & NVIDIA Datacenter Platforms"
     ],
     "configPaneHashes": {
-      "workload": "5d3f9eba777a",
+      "workload": "34d722d66929",
       "platform": "abdb59984326",
       "sharding": "6f28b16df9a8",
       "network": "8781c73dd6d7",
-      "facility": "7c77766c24fa",
+      "facility": "30a346c6e3ac",
       "storage": "4bd7c992c508",
       "rag": "f7cab449b282",
       "stack": "c65e3bdab78e",
@@ -2084,7 +2111,8 @@
       "mlops": "32dcdaa1e779",
       "mig": "b5d8b480f2ee",
       "sla": "8b6734489b2b",
-      "cost": "bd02c94a0f40"
+      "cost": "bd02c94a0f40",
+      "planning": "a4ddc1eb202c"
     }
   },
   "neo-llmd-disaggregated": {
@@ -2109,7 +2137,8 @@
       "mlops": "Off",
       "mig": "Off",
       "sla": "N/A",
-      "cost": "$2.63/GPU-hr"
+      "cost": "$2.63/GPU-hr",
+      "planning": "Sensitivity · rent vs buy"
     },
     "results": [
       "LLM-D disaggregated architecture verified (dual-pool sizing)",
@@ -2230,11 +2259,11 @@
       "Private AI Infrastructure Sizing Calculator · Cisco & NVIDIA Datacenter Platforms"
     ],
     "configPaneHashes": {
-      "workload": "5adef0e0648b",
+      "workload": "feb4a684e3c5",
       "platform": "abdb59984326",
       "sharding": "63ad9c40cd17",
       "network": "1a4f321d2ae7",
-      "facility": "eafde82aa008",
+      "facility": "19dce92d4eb8",
       "storage": "40efa98cf306",
       "rag": "f7cab449b282",
       "stack": "d19b1333536c",
@@ -2244,7 +2273,8 @@
       "mlops": "5067b6453522",
       "mig": "b5d8b480f2ee",
       "sla": "d74c63b6e907",
-      "cost": "ab3e1eeb43da"
+      "cost": "ab3e1eeb43da",
+      "planning": "daf058d6a5b7"
     }
   }
 }

@@ -6,7 +6,7 @@ import {
 
 import { PLATFORM_SYSTEMS, PLATFORM_VENDORS } from './data/platforms';
 import { USE_CASE_PRESETS } from './data/presets';
-import { DEFAULT_CONFIG, applyPresetConfig } from './state/config';
+import { DEFAULT_CONFIG, applyPresetConfig, withPlatform } from './state/config';
 import { computeScenario } from './utils/scenario';
 import { buildBomText } from './utils/bomText';
 import { scenarioMetrics } from './utils/compare';
@@ -15,6 +15,7 @@ import { GlossaryPage } from './components/GlossaryPage';
 import { AppHeader } from './components/AppHeader';
 import { NavRail } from './components/NavRail';
 import { ResultsPane } from './components/ResultsPane';
+import { GuidedSetup } from './components/GuidedSetup';
 import { WorkloadTab } from './components/tabs/WorkloadTab';
 import { PlatformTab } from './components/tabs/PlatformTab';
 import { ShardingTab } from './components/tabs/ShardingTab';
@@ -54,6 +55,7 @@ export default function App() {
   const [copiedBOM, setCopiedBOM] = useState(false);
   // Scenario A for side-by-side comparison: a frozen copy of a configuration and its metrics.
   const [pinned, setPinned] = useState(null);
+  const [guidedOpen, setGuidedOpen] = useState(false);
 
   const scenario = useMemo(() => computeScenario(config), [config]);
 
@@ -96,10 +98,10 @@ export default function App() {
   // LLM-D decode pool, and fall back to the vendor's default fabric if the current one isn't offered.
   const handleVendorChange = (vendorId) => {
     setConfig(c => {
-      const next = { ...c, selectedVendor: vendorId };
+      let next = { ...c, selectedVendor: vendorId };
       const vendorPlatforms = PLATFORM_SYSTEMS.filter(p => p.vendor === vendorId);
       if (vendorPlatforms.length > 0) {
-        next.selectedPlatformId = vendorPlatforms[0].id;
+        next = withPlatform(next, vendorPlatforms[0].id, PLATFORM_SYSTEMS);
         const secondaryCandidate = vendorPlatforms.find(p => p.id.includes('h200')) || vendorPlatforms[Math.min(1, vendorPlatforms.length - 1)];
         next.secondaryPlatformId = secondaryCandidate.id;
       }
@@ -166,6 +168,8 @@ export default function App() {
     handleVendorChange, copiedBOM, technicalNavTabs, economicsNavTabs,
   };
   ctx.config = config;
+  ctx.openGuidedSetup = () => setGuidedOpen(true);
+  ctx.setSelectedPlatformId = (id) => setConfig(c => withPlatform(c, id, PLATFORM_SYSTEMS));
   ctx.pinned = pinned;
   ctx.currentMetrics = currentMetrics;
   ctx.currentLabel = currentLabel;
@@ -197,6 +201,19 @@ export default function App() {
     <div className="h-screen w-screen flex flex-col bg-zinc-950 text-zinc-100 antialiased overflow-hidden select-none-text">
       {/* Top Banner / Header (Compact, Fixed at top) */}
       <AppHeader ctx={ctx} />
+
+      {guidedOpen && (
+        <GuidedSetup
+          current={config}
+          onClose={() => setGuidedOpen(false)}
+          onApply={(next) => {
+            setConfig(next);
+            setSelectedPresetId('');
+            setActiveInputTab('workload');
+            setGuidedOpen(false);
+          }}
+        />
+      )}
 
       {/* Main 3-Pane Layout Area (Fills Viewport Height) */}
       <div className="flex-1 flex overflow-hidden">

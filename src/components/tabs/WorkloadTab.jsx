@@ -283,10 +283,10 @@ export function WorkloadTab({ ctx }) {
               <SliderField
                 label="Workload Profile (Prompt vs. Output Split):"
                 valueLabel={`${(promptTokenRatio * 100).toFixed(0)}% / ${((1 - promptTokenRatio) * 100).toFixed(0)}%`}
-                min="0.1" max="0.9" step="0.05"
+                min="0.1" max="0.99" step="0.01"
                 value={promptTokenRatio}
                 onChange={(e) => setPromptTokenRatio(Number(e.target.value))}
-                marks={['10% (Agentic / Code & Reasoning)', '50% (Chat)', '90% (RAG & Docs)']}
+                marks={['10% (Agentic / Code & Reasoning)', '50% (Chat)', '99% (Long documents)']}
                 helper={
                   <InfoHelper
                     title="Workload Profile (Prompt vs. Output Split)"

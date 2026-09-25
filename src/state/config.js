@@ -168,6 +168,21 @@ const PRESET_FALLBACKS = {
   canaryTrafficPct: DEFAULT_CANARY_TRAFFIC_PCT,
 };
 
+/**
+ * Selects a platform. When its GPU differs from the current one, the GPU's catalog price and
+ * cloud rate replace the old ones (a price typed for a different GPU no longer applies).
+ */
+export function withPlatform(current, platformId, platforms) {
+  const next = { ...current, selectedPlatformId: platformId };
+  const from = platforms.find(p => p.id === current.selectedPlatformId);
+  const to = platforms.find(p => p.id === platformId);
+  if (to && from?.gpuId !== to.gpuId && GPU_PRICING[to.gpuId]) {
+    next.gpuUnitPriceUsd = GPU_PRICING[to.gpuId].estimatedUnitPriceUsd;
+    next.cloudRateUsdPerHr = GPU_PRICING[to.gpuId].estimatedCloudRateUsdPerHr;
+  }
+  return next;
+}
+
 /** Returns the config that results from applying a preset on top of the current config. */
 export function applyPresetConfig(current, presetConfig) {
   const next = { ...current };

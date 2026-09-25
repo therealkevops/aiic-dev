@@ -1,10 +1,10 @@
 import React from 'react';
-import { Server, Wand2 } from 'lucide-react';
+import { Compass, Server, Wand2 } from 'lucide-react';
 import { USE_CASE_PRESETS } from '../data/presets';
 
 export function AppHeader({ ctx }) {
   const {
-    activePreset, applyPreset, facility, llmdDisaggregationMode, memory, platform,
+    activePreset, applyPreset, facility, llmdDisaggregationMode, memory, platform, openGuidedSetup,
     results, secondaryPlatform, selectedPresetId, servingArchitecture,
   } = ctx;
   return (
@@ -31,8 +31,16 @@ export function AppHeader({ ctx }) {
         </div>
       </div>
 
-      {/* Use-Case Preset Dropdown */}
+      {/* Guided setup + use-case preset dropdown */}
       <div className="flex items-center gap-1.5 shrink-0">
+        <button
+          type="button"
+          data-testid="guided-setup"
+          onClick={openGuidedSetup}
+          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-sky-700 bg-sky-950/40 hover:bg-sky-900/50 text-xs text-sky-200 cursor-pointer"
+        >
+          <Compass className="w-3.5 h-3.5" /> Guided setup
+        </button>
         <Wand2 className="w-3.5 h-3.5 text-sky-400 hidden sm:block" />
         <select
           data-testid="preset-select"

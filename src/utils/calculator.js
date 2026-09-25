@@ -36,6 +36,15 @@ const DEFAULT_SWITCH_POWER_KW = 3.5;
 
 // ─── Helper ───────────────────────────────────────────────────────────────────
 /**
+ * Human-readable name of the fabric carrying disaggregated-serving KV transfers.
+ * Only name Cisco Nexus when the platform is actually a Cisco one.
+ */
+export function kvFabricName(networkProtocol, platform) {
+  if (networkProtocol === 'infiniband') return 'InfiniBand';
+  return platform?.vendor === 'cisco' ? 'Cisco Nexus RoCEv2' : 'RoCEv2';
+}
+
+/**
  * Returns the hidden dimension (num_heads × head_dim) for activation memory sizing.
  * Falls back to a reasonable estimate if numHeads is not specified on the model.
  */
@@ -759,6 +768,7 @@ export function calculateInfra(config) {
 
   // LLM-D Disaggregated Serving architectural advisory
   if (isLlmd) {
+    const kvFabricLabel = kvFabricName(networkProtocol, prefillPlatform);
     if (prefillIsOOM) {
       warnings.push(`Out of Memory on Prefill Pool: Needs ${llmdData.prefill.totalUsedGb.toFixed(1)} GB per ${prefillGpu.name} (usable: ${llmdData.prefill.usableGb.toFixed(1)} GB). Increase Prefill nodes or select higher VRAM GPUs.`);
     }
@@ -767,9 +777,9 @@ export function calculateInfra(config) {
     }
     if (!prefillIsOOM && !decodeIsOOM) {
       if (isHeterogeneousLlmd) {
-        warnings.push(`Heterogeneous LLM-D Active: Sized with ${prefillNodes}x ${prefillPlatform.shortName} (${prefillGpu.name} Prefill) + ${decodeNodes}x ${decodePlatform.shortName} (${decodeGpu.name} Decode). Prompt KV-cache (${llmdData.kvTransfer.promptKvChunkGb} GB) streams over Cisco Nexus RoCEv2 in ~${llmdData.kvTransfer.kvTransferLatencyMs} ms with zero decode jitter.`);
+        warnings.push(`Heterogeneous LLM-D Active: Sized with ${prefillNodes}x ${prefillPlatform.shortName} (${prefillGpu.name} Prefill) + ${decodeNodes}x ${decodePlatform.shortName} (${decodeGpu.name} Decode). Prompt KV-cache (${llmdData.kvTransfer.promptKvChunkGb} GB) streams over the ${kvFabricLabel} fabric in ~${llmdData.kvTransfer.kvTransferLatencyMs} ms with zero decode jitter.`);
       } else {
-        warnings.push(`Homogeneous LLM-D Active: Partitioned into ${prefillNodes} Prefill node(s) (TP=${prefillTp}) and ${decodeNodes} Decode node(s) (TP=${decodeTp}). The Cisco Nexus RoCEv2 fabric transfers KV-cache chunks in ~${llmdData.kvTransfer.kvTransferLatencyMs} ms.`);
+        warnings.push(`Homogeneous LLM-D Active: Partitioned into ${prefillNodes} Prefill node(s) (TP=${prefillTp}) and ${decodeNodes} Decode node(s) (TP=${decodeTp}). The ${kvFabricLabel} fabric transfers KV-cache chunks in ~${llmdData.kvTransfer.kvTransferLatencyMs} ms.`);
       }
     }
   }
@@ -1066,8 +1076,8 @@ export function calculateInfra(config) {
 
     const prefillNote = isLlmd
       ? (isHeterogeneousLlmd
-          ? `Heterogeneous Prefill: Processed on ${prefillNodes}x ${prefillPlatform.shortName} (${prefillGpus}x ${prefillGpu.name} @ ${gpuTflops.toLocaleString()} TFLOPs) + ~${llmdData?.kvTransfer?.kvTransferLatencyMs}ms Cisco RoCEv2 transfer`
-          : `Disaggregated Prefill: Processed on ${prefillNodes} Prefill node(s) (${prefillGpus}x ${prefillGpu.name}) + ~${llmdData?.kvTransfer?.kvTransferLatencyMs}ms RoCEv2 transfer`)
+          ? `Heterogeneous Prefill: Processed on ${prefillNodes}x ${prefillPlatform.shortName} (${prefillGpus}x ${prefillGpu.name} @ ${gpuTflops.toLocaleString()} TFLOPs) + ~${llmdData?.kvTransfer?.kvTransferLatencyMs}ms ${kvFabricName(networkProtocol, prefillPlatform)} transfer`
+          : `Disaggregated Prefill: Processed on ${prefillNodes} Prefill node(s) (${prefillGpus}x ${prefillGpu.name}) + ~${llmdData?.kvTransfer?.kvTransferLatencyMs}ms ${kvFabricName(networkProtocol, prefillPlatform)} transfer`)
       : (totalCachedPromptTokens > 0
           ? `Prefill: ${promptTokens.toLocaleString()} prompt tokens with ${totalCachedPromptTokens.toLocaleString()} tokens cached (${((totalCachedPromptTokens / promptTokens) * 100).toFixed(0)}% cached) computing ${uncachedPromptTokens.toLocaleString()} uncached tokens @ ${gpuTflops.toLocaleString()} TFLOPs`
           : `Calculated on ${promptTokens.toLocaleString()} prompt tokens using ${gpuTflops.toLocaleString()} TFLOPs (${precision.name}) at ${(mfuPrefill * 100).toFixed(0)}% MFU`);

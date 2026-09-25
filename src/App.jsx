@@ -42,7 +42,7 @@ import { GUARDRAIL_MODELS, DEFAULT_GUARDRAIL_MODEL_ID } from './data/guardrails'
 import { INGRESS_TIERS, DEFAULT_INGRESS_TIER_ID, DEFAULT_EGRESS_USD_PER_GB } from './data/ingress';
 import { HA_DR_TIERS, DEFAULT_HA_DR_TIER_ID } from './data/hadr';
 import { MLOPS_STRATEGIES, DEFAULT_MLOPS_STRATEGY_ID, DEFAULT_CANARY_TRAFFIC_PCT } from './data/mlops';
-import { calculateInfra, calculateStorage, calculateCost, calculateMigConsolidation, applyMigThroughputScaling, calculateSla, calculateRag, calculateGuardrails, calculateIngress, calculateHaDr, calculateTrainingRedundancy, calculateMlops, recommendSharding } from './utils/calculator';
+import { calculateInfra, calculateStorage, calculateCost, calculateMigConsolidation, applyMigThroughputScaling, calculateSla, calculateRag, calculateGuardrails, calculateIngress, calculateHaDr, calculateTrainingRedundancy, calculateMlops, recommendSharding, kvFabricName } from './utils/calculator';
 import { InfoHelper } from './components/InfoHelper';
 import { TopologyDiagram } from './components/TopologyDiagram';
 import { GlossaryPage } from './components/GlossaryPage';
@@ -2133,13 +2133,13 @@ ${workloadType === 'inference' && throughput ? `
                     title="LLM-D Disaggregated"
                     titleColor="text-sky-400"
                     badge={<Tag tone="accent">Next-Gen</Tag>}
-                    desc="Decouples Prefill nodes from Decode nodes. Streams KV caches over Cisco RoCEv2."
+                    desc={`Decouples Prefill nodes from Decode nodes. Streams KV caches over ${kvFabricName(selectedProtocolId, platform)}.`}
                   />
                 </div>
                 <InfoHelper
                   title="What is LLM-D (Disaggregated Prefill & Decode)?"
                   text="Prefill and Decode have fundamentally opposing hardware bottlenecks: Prefill is compute-bound (Tensor Core TFLOPs), while Decode is memory-bandwidth bound (HBM TB/s). In traditional colocated serving, an incoming 32k prompt stalls ongoing token generation for all active users (causing severe latency spikes)."
-                  whyItMatters="LLM-D separates the cluster into dedicated Prefill Workers (e.g. B200 / H200 nodes) and Decode Workers. Once the prompt is processed, the KV cache chunk is transferred via RDMA over Cisco Nexus lossless RoCEv2 fabric to decode workers, eliminating jitter and maximizing overall GPU utilization."
+                  whyItMatters="LLM-D separates the cluster into dedicated Prefill Workers (e.g. B200 / H200 nodes) and Decode Workers. Once the prompt is processed, the KV cache chunk is transferred via RDMA over the lossless GPU fabric (RoCEv2 or InfiniBand) to decode workers, eliminating jitter and maximizing overall GPU utilization."
                 />
               </div>
 
@@ -2281,7 +2281,7 @@ ${workloadType === 'inference' && throughput ? `
                         <Row k="Network handoff latency" v={`~${results.bom.kvTransfer.kvTransferLatencyMs} ms`} tone="good" />
                       </Rows>
                       <p className="text-[11px] text-zinc-400 leading-relaxed pt-1">
-                        Once Prefill finishes processing the prompt, the generated KV tensor chunk streams across the Cisco Nexus 9000 lossless RoCEv2 fabric into the Decode worker's VRAM in ~{results.bom.kvTransfer.kvTransferLatencyMs}ms. The Prefill GPU immediately frees all activation memory to accept the next prompt.
+                        Once Prefill finishes processing the prompt, the generated KV tensor chunk streams across the lossless {kvFabricName(selectedProtocolId, platform)} fabric into the Decode worker's VRAM in ~{results.bom.kvTransfer.kvTransferLatencyMs}ms. The Prefill GPU immediately frees all activation memory to accept the next prompt.
                       </p>
                     </div>
                   )}

@@ -2006,6 +2006,18 @@ const CORE_CONTENT = {
           A 405B model checkpoint is ~5.7TB. If the storage tier sustains only 20 GB/s of writes, 1,024 GPUs sit idle for ~285 seconds per checkpoint; at $3.50/GPU-hour that is ~$280 of idle compute each time, or ~$6,700 a day at hourly checkpoints. Meeting a 180-second budget needs ~32 GB/s. Asynchronous checkpointing (copy to host memory, then write in the background) shortens the stall further but still needs the write bandwidth to finish before the next checkpoint.
         </DecisionCallout>
 
+        <h3 className="text-sm font-semibold text-zinc-100 mt-6 mb-2">Time to Train, Failures &amp; Goodput</h3>
+        <p>
+          Checkpoints exist because large jobs fail. The calculator estimates training time from the compute a run needs (about 6 × parameters × tokens FLOPs for full training, 4 × for LoRA, counting active parameters for MoE) divided by the cluster&apos;s sustained throughput (peak × MFU, 40% by default). It then applies a failure model: each GPU fails on average once every 50,000 hours (the rate Meta reported for Llama 3 pretraining), so a 16,384-GPU job is interrupted about every 3 hours.
+        </p>
+        <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4 font-mono text-xs text-sky-300">
+          Checkpoint_Interval ≈ √(2 × Checkpoint_Write_Time × Job_MTBF)  (Young/Daly)<br />
+          Goodput = 1 − Write_Time / Interval − (Interval / 2 + Restart_Time) / Job_MTBF
+        </div>
+        <p>
+          Each failure loses, on average, half an interval of work plus the restart time. Goodput turns compute days into wall-clock days, and the calculator recommends enough hot-spare nodes to cover failed nodes waiting for repair (48 hours by default) at 97.5% confidence. Faster checkpoint storage shortens the write time, which permits more frequent checkpoints and raises goodput. This is why the storage sizing above matters for large clusters.
+        </p>
+
         <h3 className="text-sm font-semibold text-zinc-100 mt-6 mb-2">2. Inference KV Cache NVMe Offloading Mechanics</h3>
         <p>
           In massive long-context reasoning models (32k to 128k context) or multi-tenant agent platforms, GPU HBM is often overwhelmed by inactive session KV caches. 
@@ -2038,7 +2050,7 @@ const CORE_CONTENT = {
   },
   'chap-8-silicon': {
     title: 'Silicon & Accelerator Architecture Guide',
-    subtitle: 'H100, H200, B200, L40S, and MI300X physical memory, bandwidth, and compute trade-offs.',
+    subtitle: 'H100, H200, B200, GB200 NVL72, L40S, and MI300X physical memory, bandwidth, and compute trade-offs, plus benchmark calibration.',
     introduction: 'Selecting the right accelerator for an enterprise AI deployment is often reduced to a single metric: peak TFLOPs. However, in production generative AI, compute throughput is only half the story. Large language models operate in two distinct physical regimes: the compute-bound prefill phase (matrix-matrix multiplication) and the memory-bandwidth-bound decode phase (matrix-vector multiplication). An accelerator with astronomical FLOPS but inadequate memory bandwidth will starve its Tensor Cores during token generation, delivering dismal tokens-per-second per dollar. Understanding the architectural differences between NVIDIA Hopper, Blackwell, Ada Lovelace, and AMD Instinct silicon is critical to preventing costly hardware mismatches.',
     content: (
       <div className="space-y-6 text-[15px] text-zinc-300 leading-relaxed">
@@ -2057,7 +2069,7 @@ const CORE_CONTENT = {
           Decode_Tok_Per_Sec_Single_Stream ≤ (HBM_Bandwidth_TBps × TP) / Model_Weight_Memory_TB
         </div>
         <p className="text-sm text-zinc-400">
-          This is an upper bound (e.g. H200: 4.8 TB/s ÷ ~72GB ≈ 66 tokens/s for a 70B FP8 model at TP=1). The calculator applies ~75% bandwidth efficiency and adds KV reads, which grow with context length and batch size.
+          This is an upper bound (e.g. H200: 4.8 TB/s ÷ ~72GB ≈ 66 tokens/s for a 70B FP8 model at TP=1). The calculator applies ~75% bandwidth efficiency to weight reads and adds KV reads at ~45% efficiency (paged attention kernels reach a lower share of peak bandwidth than streaming weights). KV reads grow with context length and batch size, and at large batches they dominate each step.
         </p>
 
         <h3 className="text-sm font-semibold text-zinc-100 mt-6 mb-2">Accelerator Comparison Matrix</h3>
@@ -2105,6 +2117,22 @@ const CORE_CONTENT = {
                 <td className="p-3 text-zinc-400">1,800 GB/s NVLink 5</td>
                 <td className="p-3 text-zinc-400">~1,100W</td>
                 <td className="p-3 text-zinc-400">Reasoning inference, trillion-parameter MoE serving (~1.5x B200 FP4)</td>
+              </tr>
+              <tr>
+                <td className="p-3 font-semibold text-zinc-200">NVIDIA GB200 NVL72</td>
+                <td className="p-3 text-zinc-300">186 GB HBM3e per GPU</td>
+                <td className="p-3 text-zinc-300">8.00 TB/s</td>
+                <td className="p-3 text-zinc-400">1,800 GB/s NVLink 5 across all 72 GPUs in the rack</td>
+                <td className="p-3 text-zinc-400">~120 kW per rack (liquid)</td>
+                <td className="p-3 text-zinc-400">Wide expert parallelism and trillion-parameter MoE serving inside one NVLink domain</td>
+              </tr>
+              <tr>
+                <td className="p-3 font-semibold text-zinc-200">NVIDIA GB300 NVL72</td>
+                <td className="p-3 text-zinc-300">288 GB HBM3e per GPU</td>
+                <td className="p-3 text-zinc-300">8.00 TB/s</td>
+                <td className="p-3 text-zinc-400">1,800 GB/s NVLink 5 across all 72 GPUs in the rack</td>
+                <td className="p-3 text-zinc-400">~135 kW per rack (liquid)</td>
+                <td className="p-3 text-zinc-400">Long-context reasoning at rack scale (~1.5x GB200 FP4)</td>
               </tr>
               <tr>
                 <td className="p-3 font-semibold text-zinc-200">NVIDIA RTX PRO 6000 Blackwell Server</td>
@@ -2165,6 +2193,40 @@ const CORE_CONTENT = {
             </tbody>
           </table>
         </div>
+
+        <DecisionCallout title="Rack-Scale NVLink (GB200 / GB300 NVL72)">
+          An NVL72 rack joins 72 GPUs in one NVLink domain, so the calculator treats the rack as a single 72-GPU chassis. Tensor parallelism still stays at 8 GPUs or fewer, because all-reduce cost grows with TP, but expert-parallel all-to-all traffic stays on NVLink for as long as the whole replica fits in the rack, instead of crossing the InfiniBand or Ethernet NICs. The rack is bought whole, so capex, power and space are charged for all 72 GPUs even when the workload needs fewer; the calculator warns when most of a rack would sit idle. Scale-out networking uses 8 NIC rails per rack, not one per GPU.
+        </DecisionCallout>
+
+        <h3 className="text-sm font-semibold text-zinc-100 mt-6 mb-2">Calibration Against Published Benchmarks</h3>
+        <p className="text-sm">
+          The performance model is analytical, so its efficiency factors are checked against measured results. The reference is NVIDIA&apos;s published TensorRT-LLM throughput table (
+          <a className="text-sky-400 hover:underline" href="https://github.com/NVIDIA/TensorRT-LLM/blob/main/docs/source/developer-guide/perf-overview.md" target="_blank" rel="noreferrer">TensorRT-LLM Performance Overview</a>
+          ): output tokens per second per GPU at maximum load, on DGX H100, DGX H200, DGX B200 and GB200 NVL72. The test suite reproduces each run by filling the GPUs with the largest batch that fits and charging each request its prefill plus its share of decode steps. Three factors were fitted to Llama 3.3 70B and gpt-oss: KV-cache reads at 45% of HBM bandwidth, MoE expert layers at 40% of dense MFU, and FP4 GEMMs at 75% of the FP4 peak.
+        </p>
+        <div className="overflow-x-auto rounded-lg border border-zinc-800">
+          <table className="w-full text-xs text-left border-collapse">
+            <thead className="bg-zinc-900 text-zinc-400 uppercase text-[11px] tracking-wide">
+              <tr>
+                <th className="p-3">Model &amp; GPUs</th>
+                <th className="p-3">ISL / OSL</th>
+                <th className="p-3">Published tok/s/GPU</th>
+                <th className="p-3">Calculator</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-zinc-800/70 font-mono">
+              <tr><td className="p-3 font-sans text-zinc-200">Llama 3.3 70B FP8, 2× H200</td><td className="p-3">1000 / 1000</td><td className="p-3">2,587</td><td className="p-3">2,644 (+2%)</td></tr>
+              <tr><td className="p-3 font-sans text-zinc-200">Llama 3.3 70B FP8, 2× H200</td><td className="p-3">1024 / 8192</td><td className="p-3">2,009</td><td className="p-3">1,894 (−6%)</td></tr>
+              <tr><td className="p-3 font-sans text-zinc-200">Llama 3.3 70B FP8, 2× H100</td><td className="p-3">8192 / 1024</td><td className="p-3">398</td><td className="p-3">339 (−15%)</td></tr>
+              <tr><td className="p-3 font-sans text-zinc-200">Llama 3.3 70B NVFP4, 1× B200</td><td className="p-3">1000 / 1000</td><td className="p-3">6,920</td><td className="p-3">7,388 (+7%)</td></tr>
+              <tr><td className="p-3 font-sans text-zinc-200">Llama 3.3 70B NVFP4, 1× GB200</td><td className="p-3">1000 / 1000</td><td className="p-3">7,769</td><td className="p-3">7,725 (−1%)</td></tr>
+              <tr><td className="p-3 font-sans text-zinc-200">gpt-oss-120b, 1× H200</td><td className="p-3">8192 / 1024</td><td className="p-3">1,828</td><td className="p-3">1,775 (−3%)</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p className="text-sm text-zinc-400">
+          Across all 20 fitted points the typical error is ~16% (dense Llama: within 16% everywhere). Ten held-out points for Qwen3-235B, DeepSeek R1 and Llama 4 Maverick, which were not used for fitting, come in at ~18% typical error. Known gaps: very small-active MoE models at huge batches on Blackwell are over-predicted by up to ~1.7x (real servers cap the batch and pay per-step scheduling costs), and Llama 4&apos;s chunked attention is under-predicted at long prompts. Treat throughput figures as planning estimates within roughly ±25%, and benchmark your own engine configuration before committing to a purchase.
+        </p>
 
         <DecisionCallout title="Speculative Decoding: Trading Spare Compute for Speed">
           Because decode leaves the Tensor Cores mostly idle at small batch sizes, a small drafter can propose k tokens and the target model can check all of them in one pass that reads the weights once. If each proposal is accepted with probability α, a pass yields (1 − α^(k+1)) / (1 − α) tokens on average -- about 2.3 at α = 0.6 and k = 4. The calculator charges the verify pass for its k + 1 positions, the k drafter steps and a per-step overhead, which gives roughly 1.8x faster decode at low batch with α = 0.6. As batch size grows, decode becomes compute-bound, the extra verification work stops paying for itself, and the calculator (like serving engines) stops applying it.

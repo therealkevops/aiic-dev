@@ -174,7 +174,7 @@ export function ResultsPane({ ctx }) {
               <div className="text-2xl font-semibold font-mono text-emerald-400">
                 {throughput.tpotMs}<span className="text-xs text-zinc-500 ml-1 font-sans">ms</span>
               </div>
-              <div className="text-[11px] text-zinc-500 mt-0.5">~{throughput.tokensPerSecPerGpu} tok/s/stream · ~{throughput.batchThroughputTps?.toLocaleString()} tok/s cluster ({isLlmd ? memory.llmd.decode.instances : dp} replicas × ~{Math.ceil(concurrency / (isLlmd ? memory.llmd.decode.instances : dp))} streams)</div>
+              <div className="text-[11px] text-zinc-500 mt-0.5">~{Math.round(1000 / throughput.tpotMs).toLocaleString()} tok/s/stream · ~{throughput.tokensPerSecPerGpu.toLocaleString()} tok/s/GPU · ~{throughput.batchThroughputTps?.toLocaleString()} tok/s cluster ({isLlmd ? memory.llmd.decode.instances : dp} replicas × ~{Math.ceil(concurrency / (isLlmd ? memory.llmd.decode.instances : dp))} streams)</div>
               <div className="text-[11px] text-zinc-400 leading-relaxed mt-2.5 pt-2.5 border-t border-zinc-800/70">
                 {throughput.decodeNote || throughput.note}. Reads weights every step across {gpu.memBandwidthTbps} TB/s HBM.
               </div>

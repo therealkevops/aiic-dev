@@ -9,8 +9,15 @@ export const CONFIG = {
   B_act: 2,                     // BF16 activation bytes (G2)
   maxBatchedTokens: 8192,       // Default max batched tokens per step (C1)
   runtimeOverheadPerGpu: 0,     // Absorbed into 10% reserve via gpuMemUtil = 0.90 (S3)
-  bwEfficiency: 0.75,           // Memory bandwidth efficiency (C2)
+  bwEfficiency: 0.75,           // Memory bandwidth efficiency for weight reads (C2)
+  // Calibrated against NVIDIA's published TensorRT-LLM max-throughput results (see
+  // tests/calibration.test.js): paged decode attention reaches a lower share of HBM bandwidth
+  // than weight streaming, MoE expert GEMMs run well below dense MFU, and FP4 GEMMs do not
+  // reach the full FP4 Tensor Core peak.
+  kvBwEfficiency: 0.45,         // Bandwidth efficiency of decode attention reading the KV cache
   mfuDecode: 0.4,               // Model FLOPs Utilization during decode (C2)
+  moeMfuFactor: 0.4,            // MFU multiplier on MoE linear layers (grouped expert GEMMs, routing)
+  fp4ComputeEfficiency: 0.75,   // Fraction of the FP4 Tensor Core peak reachable (block scaling overhead)
   allreduceLatency: 15e-6,      // Intra-node All-Reduce communication latency per layer in seconds (C2)
   switchPorts: 64,              // Standard 64-port leaf switch (C3)
   oversubscription: 1,          // 1:1 non-blocking leaf-spine fabric (C3)
@@ -28,11 +35,11 @@ export const CONFIG = {
   rackRU: 40,                   // Standard usable RU per rack (M2)
   rackKW: 28,                   // Default rack power limit in kW (M2)
   overlapKvTransfer: true,      // Disaggregated serving: overlap KV transfer with computation (M3)
-  a2aLatency: 30e-6,
+  a2aLatency: 30e-6,            // Per-MoE-layer dispatch or combine latency across nodes (wide EP), seconds -- approximate
   specNumTokens: 4,             // speculative decoding: draft tokens proposed per verification step
   specAcceptanceRate: 0.6,      // speculative decoding: probability each draft token is accepted
   specVerifyOverhead: 1.25,     // speculative decoding: verify-step cost multiplier (rejection sampling, ragged batching, scheduling)
-  specVerifyMfu: 0.25,          // speculative decoding: MFU of the (k+1)-token verify pass (small, irregular GEMMs)            // Per-MoE-layer dispatch or combine latency across nodes (wide EP), seconds -- approximate
+  specVerifyMfu: 0.25,          // speculative decoding: MFU of the (k+1)-token verify pass (small, irregular GEMMs)
 };
 
 const VRAM_USABLE_FACTOR = CONFIG.gpuMemUtil;
@@ -116,7 +123,7 @@ export function resolveSpeculative(servingConfig, model, workloadType) {
 export function peakDenseFlops(gpu, precision) {
   const fp16 = (gpu.fp16Tflops || 989) * 1e12;
   if (precision.id === 'fp8') return (gpu.fp8Tflops || (gpu.fp16Tflops ? gpu.fp16Tflops * 2 : 1979)) * 1e12;
-  if ((precision.id === 'nvfp4' || precision.id === 'mxfp4') && gpu.fp4Tflops) return gpu.fp4Tflops * 1e12;
+  if ((precision.id === 'nvfp4' || precision.id === 'mxfp4') && gpu.fp4Tflops) return gpu.fp4Tflops * 1e12 * CONFIG.fp4ComputeEfficiency;
   return fp16;
 }
 
@@ -1190,7 +1197,8 @@ export function calculateInfra(config) {
     const fwdFlopsPerToken = 2 * effectiveParamsForThroughput * 1e9;
     const attnDim = (model.isMla) ? 576 : hiddenDim;
     const attnFlopsPerToken = 2 * layers * attnDim * contextLength;
-    const totalFlopsPerToken = fwdFlopsPerToken + attnFlopsPerToken;
+    // MoE expert GEMMs run below dense MFU; attention does not, so only the linear part is scaled.
+    const totalFlopsPerToken = fwdFlopsPerToken / (isMoe ? CONFIG.moeMfuFactor : 1) + attnFlopsPerToken;
     const totalPromptFlops = totalFlopsPerToken * uncachedPromptTokens;
 
     // Compute rate uses ONLY replica tensor-parallel GPUs (C4)
@@ -1233,9 +1241,11 @@ export function calculateInfra(config) {
     const weightBytesRead = decodeWeightBytes(model, customParams, precision, epNodes * (config.ep || CONFIG.ep || 1), C_rep);
     const kvBytesRead = bytesPerTokenSeq * S_avg * C_rep / epNodes;
 
-    const t_mem  = (weightBytesRead + kvBytesRead) / (decodeTpCount * BW_mem * CONFIG.bwEfficiency);
+    const t_mem  = weightBytesRead / (decodeTpCount * BW_mem * CONFIG.bwEfficiency)
+      + kvBytesRead / (decodeTpCount * BW_mem * CONFIG.kvBwEfficiency);
     const pActiveParams = (isMoe && model.activeParams ? model.activeParams : totalParams) * 1e9;
-    const t_comp = (2 * pActiveParams * C_rep) / (decodeTpCount * epNodes * decodePeakDenseFlops * CONFIG.mfuDecode);
+    const mfuDecode = CONFIG.mfuDecode * (isMoe ? CONFIG.moeMfuFactor : 1);
+    const t_comp = (2 * pActiveParams * C_rep) / (decodeTpCount * epNodes * decodePeakDenseFlops * mfuDecode);
     // Wide EP all-to-all: every token's hidden state goes to its k experts and back, mostly to
     // other chassis (FP8 dispatch + BF16 combine = 3 bytes/element), over the GPUs' NICs.
     const moeLayers = model.moeLayers || layers;

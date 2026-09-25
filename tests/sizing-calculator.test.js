@@ -824,7 +824,7 @@ describe('5. Inference Latency & Throughput Engine', () => {
 });
 
 describe('6. Disaggregated Serving (LLM-D) & Cisco RoCEv2 Transfer', () => {
-  it('correctly partitions Prefill pool (0 KV) and Decode pool (KV capacity bound)', () => {
+  it('correctly partitions Prefill pool (transient KV) and Decode pool (KV capacity bound) into instances', () => {
     const llama70b = getModel('llama3-70b');
     const h100 = getGpu('h100-sxm');
     const platform = getPlatform('cisco-c885a-h100');
@@ -853,8 +853,14 @@ describe('6. Disaggregated Serving (LLM-D) & Cisco RoCEv2 Transfer', () => {
     const llmd = res.memory.llmd;
     assert.ok(llmd !== null);
     assert.equal(llmd.isDisaggregated, true);
-    // Prefill pool holds transient KV budget: kvBytesPerToken × maxBatchedTokens (0.168 GB per GPU)
-    assert.equal(Math.round(llmd.prefill.kvGb * 1000) / 1000, 0.168); // updated: M3
+    // Each pool is made of independent instances at the smallest TP that leaves 25% of memory
+    // free: 70B FP8 (~73 GB) on 80 GB H100s -> TP=2, so the 8-GPU prefill node runs 4 instances.
+    assert.equal(llmd.prefill.tp, 2);
+    assert.equal(llmd.prefill.pp, 1);
+    assert.equal(llmd.prefill.instances, 4);
+    assert.equal(llmd.decode.instances, (2 * 8) / (llmd.decode.tp * llmd.decode.pp));
+    // Prefill instances hold a transient KV budget: kvBytesPerToken × maxBatchedTokens / TP (0.671 GB per GPU)
+    assert.equal(Math.round(llmd.prefill.kvGb * 1000) / 1000, 0.671);
     // Decode pool holds the active KV cache
     assert.ok(llmd.decode.kvGb > 0);
     // Lossless RoCEv2 transfer metrics are computed
@@ -893,11 +899,11 @@ describe('6. Disaggregated Serving (LLM-D) & Cisco RoCEv2 Transfer', () => {
     // Transient budget = 163,840 * 8192 (maxBatchedTokens) = 1,342,177,280 bytes = 1.34217728 GB
     const expectedTransientGb = (163840 * CONFIG.maxBatchedTokens) / 1e9;
     assert.equal(Math.round(llmd.prefill.transientKvGb * 1000) / 1000, Math.round(expectedTransientGb * 1000) / 1000);
-    // Per-GPU: divided by (min(TP=8, H_kv=8) * PP=1) = 8 -> ~0.168 GB
-    assert.equal(Math.round(llmd.prefill.kvGb * 1000) / 1000, Math.round((expectedTransientGb / 8) * 1000) / 1000);
+    // Per-GPU: divided by (min(TP=2, H_kv=8) * PP=1) = 2 -> ~0.671 GB
+    assert.equal(Math.round(llmd.prefill.kvGb * 1000) / 1000, Math.round((expectedTransientGb / 2) * 1000) / 1000);
 
-    // KV transfer over parallel NICs (min(TP=8, nicsPerNode=8) = 8 NICs)
-    assert.equal(llmd.kvTransfer.parallelNics, 8);
+    // KV transfer uses the prefill instance's own NICs (min(TP=2, nicsPerNode=8) = 2 NICs)
+    assert.equal(llmd.kvTransfer.parallelNics, 2);
     // Overlapped transfer adds only 1 / layers of full transfer
     const layers = llama70b.layers; // 80
     assert.equal(llmd.kvTransfer.isOverlapped, true);

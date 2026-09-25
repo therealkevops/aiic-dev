@@ -1,12 +1,13 @@
 import React from 'react';
 import { Activity, Layers, Network, Server, Workflow, Zap } from 'lucide-react';
 import { InfoHelper } from '../InfoHelper';
-import { Card, ChoiceCard, Field, Row, Rows, Tag } from '../ui';
+import { Card, ChoiceCard, Field, Row, Rows, Tag, ToggleRow } from '../ui';
 import { GPU_CATALOG } from '../../data/hardware';
 import { kvFabricName } from '../../utils/calculator';
 
 export function ServingStackTab({ ctx }) {
   const {
+    llmdAutoSize, setLlmdAutoSize, llmdSizing, memory,
     specMethod, setSpecMethod, specDraftParamsB, setSpecDraftParamsB, specNumTokens, setSpecNumTokens,
     specAcceptanceRate, setSpecAcceptanceRate, throughput, workloadType,
     availablePlatforms, decodeNodes, effectiveConcurrency, enableChunkedPrefill, enablePrefixCaching, enableSpeculativeDecoding,
@@ -122,60 +123,52 @@ export function ServingStackTab({ ctx }) {
               </div>
             </div>
 
-            {/* Dual Node Allocation: Prefill Nodes & Decode Nodes */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
-              <div className="bg-zinc-900/70 p-3 rounded-lg border border-zinc-800/80 space-y-2">
-                <div className="flex justify-between items-center text-xs">
-                  <span className="font-semibold text-sky-400 flex items-center gap-1.5">
-                    <Zap className="w-3.5 h-3.5" />
-                    Prefill Workers
-                  </span>
-                  <span className="font-mono font-semibold text-sky-400">
-                    {prefillNodes} Node{prefillNodes > 1 ? 's' : ''} ({prefillNodes * platform.gpusPerChassis}x GPUs)
-                  </span>
-                </div>
-                <input
-                  type="range" min="1" max="4" step="1" value={prefillNodes}
-                  onChange={(e) => setPrefillNodes(Number(e.target.value))}
-                  className="w-full accent-sky-500 bg-zinc-800 h-1.5 rounded-lg cursor-pointer"
-                />
-                <div className="flex justify-between items-center text-[10.5px] text-zinc-400">
-                  <span>Platform: {platform.shortName}</span>
-                  <span className="text-sky-300 font-mono">0 KV Retained</span>
-                </div>
+            {/* Pool sizing: automatic from the workload, or manual node counts */}
+            <ToggleRow
+              label="Size pools automatically"
+              description="Decode: fewest nodes that hold every stream's KV cache. Prefill: enough instances for the prompt arrival rate at the target utilization."
+              checked={llmdAutoSize}
+              onChange={(v) => {
+                if (!v && memory.llmd) { setPrefillNodes(memory.llmd.prefill.nodes); setDecodeNodes(memory.llmd.decode.nodes); }
+                setLlmdAutoSize(v);
+              }}
+            />
+            {memory.llmd && (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
+                {[
+                  { key: 'prefill', label: 'Prefill Workers', icon: Zap, tone: 'text-sky-400', accent: 'accent-sky-500', pool: memory.llmd.prefill, set: setPrefillNodes, value: prefillNodes, note: 'Transient KV only' },
+                  { key: 'decode', label: 'Decode Workers', icon: Activity, tone: 'text-emerald-400', accent: 'accent-emerald-500', pool: memory.llmd.decode, set: setDecodeNodes, value: decodeNodes, note: `KV for ${effectiveConcurrency.toLocaleString()} streams` },
+                ].map(({ key, label, icon: Icon, tone, accent, pool, set, value, note }) => (
+                  <div key={key} className="bg-zinc-900/70 p-3 rounded-lg border border-zinc-800/80 space-y-2">
+                    <div className="flex justify-between items-center text-xs">
+                      <span className={`font-semibold ${tone} flex items-center gap-1.5`}>
+                        <Icon className="w-3.5 h-3.5" />
+                        {label}
+                      </span>
+                      <span className={`font-mono font-semibold ${tone}`}>
+                        {pool.nodes} node{pool.nodes > 1 ? 's' : ''} ({pool.gpus} GPUs)
+                      </span>
+                    </div>
+                    {!llmdAutoSize && (
+                      <input
+                        type="range" min="1" max={key === 'prefill' ? 32 : 64} step="1" value={value}
+                        onChange={(e) => set(Number(e.target.value))}
+                        className={`w-full ${accent} bg-zinc-800 h-1.5 rounded-lg cursor-pointer`}
+                      />
+                    )}
+                    <div className="flex justify-between items-center text-[10.5px] text-zinc-400">
+                      <span>{pool.instances} instance{pool.instances > 1 ? 's' : ''} × TP={pool.tp}{pool.pp > 1 ? ` PP=${pool.pp}` : ''} on {pool.gpu.name.replace(/^NVIDIA |^AMD /, '')}</span>
+                      <span className={pool.isOOM ? 'text-amber-400 font-mono' : 'text-zinc-400 font-mono'}>{pool.isOOM ? 'Out of memory' : note}</span>
+                    </div>
+                  </div>
+                ))}
               </div>
-
-              <div className="bg-zinc-900/70 p-3 rounded-lg border border-zinc-800/80 space-y-2">
-                <div className="flex justify-between items-center text-xs">
-                  <span className="font-semibold text-emerald-400 flex items-center gap-1.5">
-                    <Activity className="w-3.5 h-3.5" />
-                    Decode Workers
-                  </span>
-                  <span className="font-mono font-semibold text-emerald-400">
-                    {decodeNodes} Node{decodeNodes > 1 ? 's' : ''} ({decodeNodes * (llmdDisaggregationMode === 'heterogeneous' ? secondaryPlatform.gpusPerChassis : platform.gpusPerChassis)}x GPUs)
-                  </span>
-                </div>
-                <input
-                  type="range" min="1" max="8" step="1" value={decodeNodes}
-                  onChange={(e) => setDecodeNodes(Number(e.target.value))}
-                  className="w-full accent-emerald-500 bg-zinc-800 h-1.5 rounded-lg cursor-pointer"
-                />
-                <div className="flex justify-between items-center text-[10.5px] text-zinc-400">
-                  <span>Platform: {llmdDisaggregationMode === 'heterogeneous' ? secondaryPlatform.shortName : platform.shortName}</span>
-                  <span className="text-emerald-300 font-mono">KV Bound ({effectiveConcurrency} streams)</span>
-                </div>
+            )}
+            {llmdAutoSize && llmdSizing && (
+              <div className="px-3 py-2 bg-zinc-900/50 border border-zinc-800/70 rounded-lg text-[11px] text-zinc-400 leading-relaxed">
+                Requests arrive at ~{llmdSizing.requestsPerSec.toFixed(2)}/s and each prompt takes ~{llmdSizing.prefillSecPerPrompt.toFixed(2)} s to prefill on one instance, so {llmdSizing.prefillInstancesNeeded} prefill instance{llmdSizing.prefillInstancesNeeded > 1 ? 's are' : ' is'} needed at the target utilization. Prefill : decode nodes = {llmdSizing.prefillNodes} : {llmdSizing.decodeNodes}.
               </div>
-            </div>
-
-            {/* Disaggregation Ratio & Guidance */}
-            <div className="flex items-center justify-between px-3 py-2 bg-zinc-900/50 border border-zinc-800/70 rounded-lg text-[11px]">
-              <div className="text-zinc-300">
-                Prefill-to-Decode Ratio: <strong className="font-mono">{prefillNodes}P : {decodeNodes}D</strong> (1:{(decodeNodes / prefillNodes).toFixed(1)})
-              </div>
-              <span className="text-amber-400 font-medium">
-                {decodeNodes >= prefillNodes * 2 ? 'High-throughput sizing' : 'Recommend 1:2–1:4 for long context'}
-              </span>
-            </div>
+            )}
 
             {/* Heterogeneous Secondary Compute Platform Selector */}
             {llmdDisaggregationMode === 'heterogeneous' && (

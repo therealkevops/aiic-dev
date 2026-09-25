@@ -165,3 +165,19 @@ test('traffic mode solves concurrency with Little\'s law and scales with load', 
   // Token economics uses the known request rate.
   assert.ok(Math.abs(light.tokenEconomics.requestsPerMonth - 1 * 3600 * 730 * base.dutyCyclePct / 100) < 1);
 });
+
+test('LLM-D auto-sizing fits the decode pool and scales prefill with traffic', () => {
+  const base = applyPresetConfig(DEFAULT_CONFIG, USE_CASE_PRESETS.find(p => p.id === 'neo-llmd-disaggregated').config);
+  const s = computeScenario(base);
+  assert.equal(s.memory.llmd.decode.isOOM, false);
+  assert.equal(s.memory.llmd.prefill.isOOM, false);
+  // One fewer decode node would not fit.
+  const smaller = computeScenario({ ...base, llmdAutoSize: false, prefillNodes: s.llmdSizing.prefillNodes, decodeNodes: s.llmdSizing.decodeNodes - 1 });
+  assert.equal(smaller.memory.llmd.decode.isOOM, true);
+  const busy = computeScenario({ ...base, sizingInputMode: 'traffic', trafficInputType: 'rps', peakRequestsPerSec: s.llmdSizing.requestsPerSec * 4 });
+  assert.ok(busy.llmdSizing.prefillNodes > s.llmdSizing.prefillNodes);
+  // Manual mode keeps the entered node counts.
+  const manual = computeScenario({ ...base, llmdAutoSize: false, prefillNodes: 3, decodeNodes: 5 });
+  assert.equal(manual.memory.llmd.prefill.nodes, 3);
+  assert.equal(manual.memory.llmd.decode.nodes, 5);
+});

@@ -582,10 +582,29 @@ export function calculateInfra(config) {
   const prefillGpus = isLlmd ? prefillNodes * prefillGpusPerChassis : 0;
   const decodeGpus  = isLlmd ? decodeNodes * decodeGpusPerChassis : 0;
 
-  const prefillTp = isLlmd ? Math.min(8, prefillGpus) : tp;
-  const prefillPp = isLlmd ? Math.max(1, Math.ceil(prefillGpus / 8)) : pp;
-  const decodeTp  = isLlmd ? Math.min(8, decodeGpus) : tp;
-  const decodePp  = isLlmd ? Math.max(1, Math.ceil(decodeGpus / 8)) : pp;
+  // Each LLM-D pool is made of independent instances. An instance uses the smallest TP whose
+  // GPUs hold the weights with at least 25% of usable memory left for KV cache and activations
+  // (pipeline stages only if even a full chassis can't); extra nodes add instances, not stages.
+  const llmdWeightGb = (() => {
+    const isQ = precision.isQuantized != null ? precision.isQuantized : (precision.bytesPerParam < 2.0);
+    const headParams = isQ ? 2 * vocab * hiddenDim : 0;
+    return ((totalParams * 1e9 - headParams) * precision.bytesPerParam + headParams * 2) / 1e9;
+  })();
+  const llmdInstanceShape = (poolGpu, perChassis) => {
+    const usable = poolGpu.vramGb * usableMemoryFactor(memoryHeadroomPct) * 0.75;
+    for (const t of [1, 2, 4, 8].filter(v => v <= perChassis)) {
+      if (llmdWeightGb / t <= usable) return { tp: t, pp: 1 };
+    }
+    const t = Math.min(8, perChassis);
+    return { tp: t, pp: Math.max(1, Math.ceil(llmdWeightGb / (t * usable))) };
+  };
+  const prefillShape = isLlmd ? llmdInstanceShape(prefillGpu, prefillGpusPerChassis) : { tp, pp };
+  const decodeShape  = isLlmd ? llmdInstanceShape(decodeGpu, decodeGpusPerChassis) : { tp, pp };
+  const prefillTp = prefillShape.tp;
+  const prefillPp = prefillShape.pp;
+  const decodeTp  = decodeShape.tp;
+  const decodePp  = decodeShape.pp;
+  const prefillInstances = isLlmd ? Math.max(1, Math.floor(prefillGpus / (prefillTp * prefillPp))) : 0;
 
   // S7 (scale): `concurrency` is the TOTAL concurrent streams the whole deployment must
   // serve; Data Parallelism (`dp`, or the decode pool's implied replica count under LLM-D)
@@ -593,7 +612,7 @@ export function calculateInfra(config) {
   // KV cache / decode activations for its own share of the load, not the cluster total —
   // otherwise adding replicas (the mechanism for scaling to hundreds of GPUs) would never
   // relieve per-GPU memory pressure.
-  const replicaDp = isLlmd ? Math.max(1, Math.floor(decodeGpus / (decodeTp || 1))) : Math.max(1, dp || 1);
+  const replicaDp = isLlmd ? Math.max(1, Math.floor(decodeGpus / (decodeTp * decodePp))) : Math.max(1, dp || 1);
   const concurrencyPerReplica = Math.max(1, Math.ceil(concurrency / replicaDp));
   const maxNumSeqs = concurrencyPerReplica;
 
@@ -772,6 +791,7 @@ export function calculateInfra(config) {
         gpus: prefillGpus,
         tp: prefillTp,
         pp: prefillPp,
+        instances: prefillInstances,
         weightsGb: prefillWeightsGb,
         actGb: prefillActGb,
         kvGb: prefillKvGb,
@@ -789,6 +809,7 @@ export function calculateInfra(config) {
         gpus: decodeGpus,
         tp: decodeTp,
         pp: decodePp,
+        instances: replicaDp,
         weightsGb: decodeWeightsGb,
         actGb: decodeActGb,
         kvGb: decodeKvGb,
@@ -1183,7 +1204,7 @@ export function calculateInfra(config) {
 
     const promptTokensPerSecPerReplica = Math.round(promptTokens / ttftSec);
     const promptTokensPerSecPerGpu = Math.round(promptTokensPerSecPerReplica / prefillTpCount);
-    const clusterBatchPromptTps = isLlmd ? promptTokensPerSecPerReplica : Math.round(promptTokensPerSecPerReplica * dp);
+    const clusterBatchPromptTps = isLlmd ? Math.round(promptTokensPerSecPerReplica * prefillInstances) : Math.round(promptTokensPerSecPerReplica * dp);
 
     // ── Phase 2: Decode (Autoregressive Token Generation) (C2) ──────────────
     const targetDecodeGpu = isLlmd ? decodeGpu : gpu;

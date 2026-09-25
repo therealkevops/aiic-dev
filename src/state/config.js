@@ -62,6 +62,7 @@ export const DEFAULT_CONFIG = {
   specAcceptanceRate: 0.6, // chance each draft token is accepted
   llmdDisaggregationMode: 'heterogeneous', // 'heterogeneous' | 'homogeneous'
   secondaryPlatformId: 'cisco-c885a-h200',
+  llmdAutoSize: true, // size LLM-D prefill/decode pools from the workload (false = manual node counts)
   prefillNodes: 1,
   decodeNodes: 2,
   selectedStorageTierId: 'vast-universal',
@@ -122,6 +123,7 @@ const PRESET_FALLBACKS = {
   memoryHeadroomPct: 5,
   expertParallelNodes: 1,
   sizingInputMode: 'concurrency',
+  llmdAutoSize: true,
   specMethod: 'draft-model',
   specDraftParamsB: 1,
   specNumTokens: 4,

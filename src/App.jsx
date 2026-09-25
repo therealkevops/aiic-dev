@@ -125,7 +125,12 @@ export default function App() {
   const technicalNavTabs = [
     { id: 'workload', label: 'Workload', icon: Activity, meta: model.name },
     { id: 'platform', label: 'Platform', icon: Building2, meta: platform.shortName },
-    { id: 'sharding', label: 'Sharding', icon: Layers, meta: `TP=${tp} · PP=${pp} · DP=${dp}${results.epNodes > 1 ? ` · EP×${results.epNodes}` : ''}` },
+    {
+      id: 'sharding', label: 'Sharding', icon: Layers,
+      meta: results.memory.llmd
+        ? `P ${results.memory.llmd.prefill.instances}×TP${results.memory.llmd.prefill.tp} · D ${results.memory.llmd.decode.instances}×TP${results.memory.llmd.decode.tp}`
+        : `TP=${tp} · PP=${pp} · DP=${dp}${results.epNodes > 1 ? ` · EP×${results.epNodes}` : ''}`,
+    },
     { id: 'network', label: 'Network Fabric', icon: Network, meta: protocol.name },
     { id: 'facility', label: 'Facility & Power', icon: Zap, meta: `${pue.toFixed(2)} PUE` },
     { id: 'storage', label: 'Storage', icon: HardDrive, meta: storageTier.vendor },

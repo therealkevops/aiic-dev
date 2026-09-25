@@ -362,6 +362,7 @@ function computeScenarioCore(config) {
   const warnings = [...(results.warnings || []), ...advisories];
 
   return {
+    llmdSizing: null,
     tokenEconomics,
     workloadShape,
     warnings,
@@ -471,7 +472,47 @@ function tpCandidatesFor(scenario, fromTp) {
  * gives the rest to KV cache -- so for KV-heavy workloads a larger TP can need fewer GPUs in
  * total. Try each in-chassis TP and keep the layout with the fewest GPUs (ties: smaller TP).
  */
-function computeMemorySized(config) {
+/**
+ * LLM-D pool sizing. Decode: the fewest nodes whose instances hold every stream's KV cache.
+ * Prefill: enough instances to process the prompt arrival rate at the target utilization --
+ * each prefill instance handles about one prompt per TTFT, and requests arrive at the traffic
+ * rate (traffic mode) or concurrency ÷ service time (Little's law, concurrency mode).
+ */
+function applyLlmdAutoSize(config) {
+  if (config.workloadType !== 'inference' || config.servingArchitecture !== 'llmd' || config.llmdAutoSize === false) {
+    return { config, llmdSizing: null };
+  }
+  const withNodes = (prefillNodes, decodeNodes) => computeScenarioCore({ ...config, prefillNodes, decodeNodes });
+  const decodeFits = (n) => !withNodes(1, n).memory.llmd.decode.isOOM;
+  let hi = 1;
+  while (!decodeFits(hi) && hi < 4096) hi *= 2;
+  let lo = Math.max(1, Math.floor(hi / 2));
+  if (lo === hi || decodeFits(lo)) hi = lo;
+  while (hi - lo > 1) {
+    const mid = Math.floor((lo + hi) / 2);
+    if (decodeFits(mid)) hi = mid; else lo = mid;
+  }
+  const decodeNodes = hi;
+
+  const probe = withNodes(1, decodeNodes);
+  const t = probe.throughput;
+  const prefillSec = Math.max(1e-6, t.ttftSec - (t.kvTransferLatencyMs || 0) / 1000);
+  const rho = Math.min(0.95, Math.max(0.05, Number(config.targetUtilization) || 0.7));
+  const serviceSec = serviceTimeSec(probe);
+  const requestsPerSec = config._trafficRps || (serviceSec > 0 ? probe.effectiveConcurrency / serviceSec : 0);
+  const instancesNeeded = Math.max(1, Math.ceil((requestsPerSec * prefillSec) / rho));
+  const shape = probe.memory.llmd.prefill;
+  const perChassis = probe.platform.gpusPerChassis || 8;
+  const prefillNodes = Math.max(1, Math.ceil((instancesNeeded * shape.tp * shape.pp) / perChassis));
+  return {
+    config: { ...config, prefillNodes, decodeNodes },
+    llmdSizing: { prefillNodes, decodeNodes, prefillInstancesNeeded: instancesNeeded, requestsPerSec, prefillSecPerPrompt: prefillSec },
+  };
+}
+
+function computeMemorySized(configIn) {
+  const { config, llmdSizing } = applyLlmdAutoSize(configIn);
+  if (llmdSizing) return { ...computeScenarioCore(config), llmdSizing };
   const minimal = computeScenarioCore(config);
   const applies = config.workloadType === 'inference' && config.isAutoSharding && config.isAutoDp
     && config.servingArchitecture !== 'llmd' && minimal.pp === 1 && !minimal.autoRecommendation.error

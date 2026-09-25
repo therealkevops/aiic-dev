@@ -5,7 +5,7 @@ import { Banner, Card, Disclosure, Kpi, KpiRow, Meter, Row, Rows, SectionLabel, 
 
 export function ResultsPane({ ctx }) {
   const {
-    warnings,
+    warnings, tokenEconomics,
     bom, concurrency, contextLength, copiedBOM, cost, dp,
     embeddingGpu, facility, gpu, guardGpu, guardModel, guardrails,
     haDr, haDrTier, handleCopyBOM, ingress, ingressTier, isLlmd,
@@ -350,6 +350,9 @@ export function ResultsPane({ ctx }) {
               <Row k="Annual opex" v={`$${Math.round(cost.annualOpexUsd).toLocaleString()}/yr`} mono={false} />
               <Row k={`${cost.tcoYears}-year TCO`} v={`$${Math.round(cost.tcoUsd).toLocaleString()}`} tone="accent" />
               <Row k="Effective cost" v={`$${cost.effectiveUsdPerGpuHour.toFixed(2)}/GPU-hr`} tone="accent" />
+              {tokenEconomics.eligible && (
+                <Row k={`Per 1M output tokens (${tokenEconomics.dutyCyclePct.toFixed(0)}% utilization)`} v={`$${tokenEconomics.costPer1MOutputTokensUsd.toFixed(2)} serving · $${tokenEconomics.fullyLoadedCostPer1MOutputTokensUsd.toFixed(2)} fully loaded`} />
+              )}
               <Row
                 k={`vs. ${cost.tcoYears}-yr cloud rental`}
                 v={cost.buildVsBuySavingsUsd >= 0 ? `Owning saves $${Math.round(cost.buildVsBuySavingsUsd).toLocaleString()}` : `Cloud saves $${Math.round(-cost.buildVsBuySavingsUsd).toLocaleString()}`}

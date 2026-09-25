@@ -73,6 +73,9 @@ export const DEFAULT_CONFIG = {
   enableNvidiaAiEnterprise: false,
   supportPctPerYear: DEFAULT_SUPPORT_PCT_PER_YEAR,
   tcoYears: DEFAULT_TCO_YEARS,
+  dutyCyclePct: 50, // share of hours the cluster runs at its sized load (monthly average)
+  apiInputUsdPer1M: 0.6, // comparison API price per 1M input tokens (illustrative, editable)
+  apiOutputUsdPer1M: 0.8, // comparison API price per 1M output tokens (illustrative, editable)
   enableMig: false,
   selectedMigProfileId: null, // null = auto-select smallest fitting profile
   targetUtilization: 0.7, // rho: target replica utilization (0-1)

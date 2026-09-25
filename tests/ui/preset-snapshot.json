@@ -149,7 +149,7 @@
       "mlops": "4de425f53b4e",
       "mig": "b5d8b480f2ee",
       "sla": "f8c2c669676e",
-      "cost": "dc16a1402a48"
+      "cost": "12c91c550903"
     }
   },
   "ent-coding-copilot": {
@@ -300,7 +300,7 @@
       "mlops": "13b495698e8f",
       "mig": "b5d8b480f2ee",
       "sla": "30c5b2788a70",
-      "cost": "0e5594ffae9c"
+      "cost": "28797e772b3f"
     }
   },
   "ent-customer-support": {
@@ -443,7 +443,7 @@
       "mlops": "6be903c1a150",
       "mig": "b5d8b480f2ee",
       "sla": "838bd75ae19e",
-      "cost": "9299830bb1a1"
+      "cost": "c1d48a5734b8"
     }
   },
   "ent-document-analysis": {
@@ -599,7 +599,7 @@
       "mlops": "fab697d9e10b",
       "mig": "b5d8b480f2ee",
       "sla": "405b2588401e",
-      "cost": "1f442422e9a6"
+      "cost": "5b2eae3187f1"
     }
   },
   "ent-lora-finetune": {
@@ -988,7 +988,7 @@
       "mlops": "5067b6453522",
       "mig": "b5d8b480f2ee",
       "sla": "eb1ec5ac7114",
-      "cost": "54f8d3fa482a"
+      "cost": "05a6ec85c15e"
     }
   },
   "ent-agent-tool-use": {
@@ -1141,7 +1141,7 @@
       "mlops": "fab697d9e10b",
       "mig": "b5d8b480f2ee",
       "sla": "dda6c0c96691",
-      "cost": "7a500b5c44f8"
+      "cost": "f01e423aecdd"
     }
   },
   "ent-agent-swe": {
@@ -1294,7 +1294,7 @@
       "mlops": "a9d707057224",
       "mig": "b5d8b480f2ee",
       "sla": "7b4f5cde622c",
-      "cost": "95fa10ea08c8"
+      "cost": "2e7edf66d7e7"
     }
   },
   "ent-agent-deep-research": {
@@ -1450,7 +1450,7 @@
       "mlops": "fab697d9e10b",
       "mig": "b5d8b480f2ee",
       "sla": "3fdff28f23d0",
-      "cost": "517b26e66cc4"
+      "cost": "e00cb9a8d6ad"
     }
   },
   "ent-agent-multi-orchestration": {
@@ -1596,7 +1596,7 @@
       "mlops": "d216b591e505",
       "mig": "b5d8b480f2ee",
       "sla": "0f8e59c8a84b",
-      "cost": "127b4f2414fd"
+      "cost": "577d14b15afb"
     }
   },
   "ent-agent-sql-analysis": {
@@ -1739,7 +1739,7 @@
       "mlops": "5067b6453522",
       "mig": "b5d8b480f2ee",
       "sla": "2b928fae7663",
-      "cost": "c3e57059e7d0"
+      "cost": "256858fe5423"
     }
   },
   "neo-frontier-pretrain": {
@@ -2033,7 +2033,7 @@
       "mlops": "32dcdaa1e779",
       "mig": "b5d8b480f2ee",
       "sla": "42b52acf0ffa",
-      "cost": "99dc7db4704d"
+      "cost": "ffa5bfcc41a2"
     }
   },
   "neo-llmd-disaggregated": {
@@ -2193,7 +2193,7 @@
       "mlops": "5067b6453522",
       "mig": "b5d8b480f2ee",
       "sla": "d74c63b6e907",
-      "cost": "7113dad526fc"
+      "cost": "e7cedf41bf03"
     }
   }
 }

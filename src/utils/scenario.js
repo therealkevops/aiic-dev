@@ -16,7 +16,7 @@ import { MLOPS_STRATEGIES } from '../data/mlops.js';
 import {
   calculateInfra, calculateStorage, calculateCost, calculateMigConsolidation, applyMigThroughputScaling,
   calculateSla, calculateRag, calculateGuardrails, calculateIngress, calculateHaDr,
-  calculateTrainingRedundancy, calculateMlops, recommendSharding,
+  calculateTrainingRedundancy, calculateMlops, recommendSharding, calculateTokenEconomics,
 } from './calculator.js';
 
 /**
@@ -319,6 +319,21 @@ function computeScenarioCore(config) {
     trainingRedundancyItPowerKw: trainingRedundancy.eligible ? trainingRedundancy.spareItPowerKw : 0,
   });
 
+  // ── 11. Unit economics vs. a per-token API (inference) ───────────────────────
+  // With a request-length mix, the average request is shorter than the longest one.
+  const meanScale = workloadShape.avgSequenceTokens ? workloadShape.avgSequenceTokens / workloadShape.sequenceTokens : 1;
+  const tokenEconomics = c.workloadType === 'inference'
+    ? calculateTokenEconomics({
+        cost,
+        throughput,
+        promptTokensPerRequest: workloadShape.promptTokens * meanScale,
+        outputTokensPerRequest: (workloadShape.visibleOutputTokens + workloadShape.thinkingTokens) * meanScale,
+        dutyCyclePct: c.dutyCyclePct,
+        apiInputUsdPer1M: c.apiInputUsdPer1M,
+        apiOutputUsdPer1M: c.apiOutputUsdPer1M,
+      })
+    : { eligible: false };
+
   // ── 11. Advisories beyond the engine's own warnings ─────────────────────────
   const advisories = [];
   if (model.license?.commercial === 'non-commercial') {
@@ -336,6 +351,7 @@ function computeScenarioCore(config) {
   const warnings = [...(results.warnings || []), ...advisories];
 
   return {
+    tokenEconomics,
     workloadShape,
     warnings,
     vendor, availablePlatforms, platform, gpu, availableProtocols, secondaryPlatform, secondaryGpu,

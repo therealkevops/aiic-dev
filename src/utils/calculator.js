@@ -1556,6 +1556,14 @@ export function calculateCost(config) {
   const annualSupportCostUsd = totalCapexUsd * (supportPctPerYear / 100);
   const annualOpexUsd = annualPowerCostUsd + annualLicensingCostUsd + annualSupportCostUsd + ingressAnnualOpexUsd;
 
+  // The model-serving cluster alone (GPUs, their fabric, power, support, licensing), without
+  // storage and add-on pools -- the part a per-token API would replace.
+  const servingCapexUsd = computeCapexUsd + networkHardwareCapexUsd;
+  const servingAnnualPowerCostUsd = useColo
+    ? baseItPowerKw * coloUsdPerKwPerMonth * 12
+    : baseFacilityPowerKw * hoursPerYear * powerUsdPerKwh;
+  const servingAnnualOpexUsd = servingAnnualPowerCostUsd + annualLicensingCostUsd + servingCapexUsd * (supportPctPerYear / 100);
+
   const tcoUsd = totalCapexUsd + (annualOpexUsd * tcoYears);
   const totalGpuHours = infraResults.totalGpus * hoursPerYear * tcoYears;
   const effectiveUsdPerGpuHour = totalGpuHours > 0 ? tcoUsd / totalGpuHours : 0;
@@ -1587,6 +1595,8 @@ export function calculateCost(config) {
     annualLicensingCostUsd,
     annualSupportCostUsd,
     annualOpexUsd,
+    servingCapexUsd,
+    servingAnnualOpexUsd,
     tcoYears,
     tcoUsd,
     effectiveUsdPerGpuHour,
@@ -2335,5 +2345,64 @@ export function calculateMlops(config) {
     validationGpuCount,
     mlopsComputeCapexUsd,
     mlopsItPowerKw,
+  };
+}
+
+/**
+ * Unit economics of a sized inference deployment versus a per-token API.
+ * The cluster is sized for its peak concurrency; `dutyCyclePct` is the share of hours it
+ * actually runs at that load, averaged over the month. Hardware is amortized straight-line
+ * over the TCO period. Reasoning tokens count as output tokens, as API providers bill them.
+ */
+export function calculateTokenEconomics({
+  cost,                        // calculateCost() output
+  throughput,                  // calculateInfra() throughput (inference only)
+  promptTokensPerRequest,
+  outputTokensPerRequest,      // visible answer + reasoning tokens
+  dutyCyclePct = 50,
+  apiInputUsdPer1M = 0,
+  apiOutputUsdPer1M = 0,
+}) {
+  if (!throughput || !cost || !(throughput.batchThroughputTps > 0) || !(outputTokensPerRequest > 0)) {
+    return { eligible: false };
+  }
+  const hoursPerMonth = 730;
+  // Fully loaded: everything in Cost & TCO. Serving only: the GPU cluster an API would replace
+  // (RAG, guardrails, storage, HA/DR etc. are usually still needed with an API).
+  const fullyLoadedMonthlyCostUsd = cost.totalCapexUsd / (cost.tcoYears * 12) + cost.annualOpexUsd / 12;
+  const monthlyCostUsd = (cost.servingCapexUsd ?? cost.totalCapexUsd) / (cost.tcoYears * 12)
+    + (cost.servingAnnualOpexUsd ?? cost.annualOpexUsd) / 12;
+  const requestsPerSecAtPeak = throughput.batchThroughputTps / outputTokensPerRequest;
+  const duty = Math.min(1, Math.max(0.01, dutyCyclePct / 100));
+  const requestsPerMonthAtFull = requestsPerSecAtPeak * 3600 * hoursPerMonth;
+  const requestsPerMonth = requestsPerMonthAtFull * duty;
+  const outputTokensPerMonth = requestsPerMonth * outputTokensPerRequest;
+  const inputTokensPerMonth = requestsPerMonth * promptTokensPerRequest;
+  const totalTokensPerMonth = outputTokensPerMonth + inputTokensPerMonth;
+
+  const apiCostPerRequestUsd = (promptTokensPerRequest * apiInputUsdPer1M + outputTokensPerRequest * apiOutputUsdPer1M) / 1e6;
+  const apiMonthlyCostUsd = apiCostPerRequestUsd * requestsPerMonth;
+  // Utilization at which owning costs the same as paying the API for the same requests.
+  const crossoverDutyPct = apiCostPerRequestUsd > 0
+    ? (monthlyCostUsd / (apiCostPerRequestUsd * requestsPerMonthAtFull)) * 100
+    : null;
+
+  return {
+    eligible: true,
+    dutyCyclePct: duty * 100,
+    monthlyCostUsd,
+    fullyLoadedMonthlyCostUsd,
+    fullyLoadedCostPer1MOutputTokensUsd: (fullyLoadedMonthlyCostUsd / outputTokensPerMonth) * 1e6,
+    requestsPerMonth,
+    inputTokensPerMonth,
+    outputTokensPerMonth,
+    costPerRequestUsd: monthlyCostUsd / requestsPerMonth,
+    costPer1MOutputTokensUsd: (monthlyCostUsd / outputTokensPerMonth) * 1e6,
+    costPer1MTotalTokensUsd: (monthlyCostUsd / totalTokensPerMonth) * 1e6,
+    apiCostPerRequestUsd,
+    apiMonthlyCostUsd,
+    monthlySavingsVsApiUsd: apiMonthlyCostUsd - monthlyCostUsd,
+    crossoverDutyPct,
+    crossoverReachable: crossoverDutyPct != null && crossoverDutyPct <= 100,
   };
 }

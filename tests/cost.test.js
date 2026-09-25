@@ -7,7 +7,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { calculateInfra, calculateStorage, calculateCost } from '../src/utils/calculator.js';
+import { calculateInfra, calculateStorage, calculateCost, calculateTokenEconomics } from '../src/utils/calculator.js';
 import { MODEL_PRESETS, PRECISION_OPTIONS } from '../src/data/models.js';
 import { GPU_CATALOG } from '../src/data/hardware.js';
 import { PLATFORM_SYSTEMS } from '../src/data/platforms.js';
@@ -283,4 +283,21 @@ describe('5. Build-vs-Buy Cloud Comparison', () => {
     });
     assert.ok(cost.breakEvenMonths > 0);
   });
+});
+
+
+it('token economics: cost per token falls with utilization; crossover is consistent', () => {
+  const cost = { totalCapexUsd: 360000, annualOpexUsd: 60000, servingCapexUsd: 240000, servingAnnualOpexUsd: 36000, tcoYears: 3 };
+  const throughput = { batchThroughputTps: 1000 };
+  const args = { cost, throughput, promptTokensPerRequest: 2000, outputTokensPerRequest: 500, apiInputUsdPer1M: 0.6, apiOutputUsdPer1M: 8 };
+  const half = calculateTokenEconomics({ ...args, dutyCyclePct: 50 });
+  const full = calculateTokenEconomics({ ...args, dutyCyclePct: 100 });
+  assert.ok(Math.abs(half.costPer1MOutputTokensUsd - 2 * full.costPer1MOutputTokensUsd) < 1e-9);
+  // Serving-only monthly cost: 240k / 36 months + 36k / 12
+  assert.ok(Math.abs(half.monthlyCostUsd - (240000 / 36 + 3000)) < 1e-6);
+  // At the crossover utilization (reachable at these prices), owning and the API cost the same.
+  assert.ok(half.crossoverReachable);
+  const atCross = calculateTokenEconomics({ ...args, dutyCyclePct: half.crossoverDutyPct });
+  assert.ok(Math.abs(atCross.monthlySavingsVsApiUsd) < 1e-6 * atCross.monthlyCostUsd);
+  assert.equal(calculateTokenEconomics({ ...args, throughput: null }).eligible, false);
 });

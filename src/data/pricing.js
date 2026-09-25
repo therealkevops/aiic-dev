@@ -15,6 +15,11 @@ export const GPU_PRICING = {
   "h100-nvl":       { estimatedUnitPriceUsd: 30000, estimatedCloudRateUsdPerHr: 3.25 },
   "l40s-pcie":      { estimatedUnitPriceUsd: 8500,  estimatedCloudRateUsdPerHr: 1.20 },
   "a100-sxm-80gb":  { estimatedUnitPriceUsd: 9000,  estimatedCloudRateUsdPerHr: 1.50 },
+  "b300-sxm":       { estimatedUnitPriceUsd: 50000, estimatedCloudRateUsdPerHr: 9.00 },
+  "rtx-pro-6000":   { estimatedUnitPriceUsd: 10000, estimatedCloudRateUsdPerHr: 1.80 },
+  "mi300x":         { estimatedUnitPriceUsd: 15000, estimatedCloudRateUsdPerHr: 2.50 },
+  "mi325x":         { estimatedUnitPriceUsd: 20000, estimatedCloudRateUsdPerHr: 3.00 },
+  "mi355x":         { estimatedUnitPriceUsd: 30000, estimatedCloudRateUsdPerHr: 5.00 },
 };
 
 export const DEFAULT_GPU_PRICING = { estimatedUnitPriceUsd: 30000, estimatedCloudRateUsdPerHr: 3.00 };

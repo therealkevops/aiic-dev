@@ -10,6 +10,7 @@ export const GUARDRAIL_MODELS = [
     name: "Llama Guard 3 1B",
     vendor: "Meta (open, Llama 3.2 1B based)",
     paramsBillion: 1,
+    license: { name: 'Llama 3.2 Community License', commercial: 'conditional' },
     notes: "On-device/edge-oriented -- the lowest latency and compute cost in the Llama Guard family.",
   },
   {
@@ -17,6 +18,7 @@ export const GUARDRAIL_MODELS = [
     name: "Llama Guard 3 8B",
     vendor: "Meta (open, Llama 3.1 8B based)",
     paramsBillion: 8,
+    license: { name: 'Llama 3.1 Community License', commercial: 'conditional' },
     notes: "14-category MLCommons hazard taxonomy plus a tool/code-interpreter-abuse category; the most widely deployed open guard model.",
   },
   {
@@ -24,6 +26,7 @@ export const GUARDRAIL_MODELS = [
     name: "ShieldGemma 2B",
     vendor: "Google (open, Gemma 2 based)",
     paramsBillion: 2,
+    license: { name: 'Gemma Terms of Use', commercial: 'conditional' },
     notes: "Tuned for low-latency online classification across 4 harm categories (sexual content, dangerous content, hate, harassment).",
   },
   {
@@ -31,6 +34,7 @@ export const GUARDRAIL_MODELS = [
     name: "ShieldGemma 9B",
     vendor: "Google (open, Gemma 2 based)",
     paramsBillion: 9,
+    license: { name: 'Gemma Terms of Use', commercial: 'conditional' },
     notes: "Higher-accuracy variant of ShieldGemma for offline/batch moderation where latency matters less.",
   },
   {
@@ -38,6 +42,7 @@ export const GUARDRAIL_MODELS = [
     name: "Granite Guardian 3.1 2B",
     vendor: "IBM (open)",
     paramsBillion: 2,
+    license: { name: 'Apache 2.0', commercial: 'open' },
     notes: "Compact risk/jailbreak detector tuned on the IBM AI Risk Atlas taxonomy.",
   },
   {
@@ -45,6 +50,7 @@ export const GUARDRAIL_MODELS = [
     name: "Granite Guardian 3.1 8B",
     vendor: "IBM (open)",
     paramsBillion: 8,
+    license: { name: 'Apache 2.0', commercial: 'open' },
     notes: "Higher-accuracy risk/jailbreak detection; strong published recall on jailbreak benchmarks (e.g. ToxicChat).",
   },
 ];

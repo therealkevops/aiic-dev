@@ -28,13 +28,83 @@ export const CONFIG = {
   rackRU: 40,                   // Standard usable RU per rack (M2)
   rackKW: 28,                   // Default rack power limit in kW (M2)
   overlapKvTransfer: true,      // Disaggregated serving: overlap KV transfer with computation (M3)
+  a2aLatency: 30e-6,            // Per-MoE-layer dispatch or combine latency across nodes (wide EP), seconds -- approximate
 };
 
 const VRAM_USABLE_FACTOR = CONFIG.gpuMemUtil;
+/** Fraction of physical GPU memory the sizing may fill: the runtime reserve minus any extra headroom. */
+function usableMemoryFactor(memoryHeadroomPct = 0) {
+  return VRAM_USABLE_FACTOR * (1 - Math.min(50, Math.max(0, memoryHeadroomPct)) / 100);
+}
 const RACK_USABLE_RU = CONFIG.rackRU;
 const DEFAULT_SWITCH_POWER_KW = 3.5;
 
 // ─── Helper ───────────────────────────────────────────────────────────────────
+/**
+ * KV-cache bytes stored per token of one sequence, averaged over a sequence of `contextLength`
+ * tokens.
+ *  - MLA models (DeepSeek, Kimi K2) cache one compressed latent per layer: L × (512 + 64).
+ *  - GQA/MHA models cache K and V per KV head: 2 × L × H_kv × D_head.
+ *  - Hybrid-attention models (Gemma 3, gpt-oss, Llama 4) have `localLayers` layers that only
+ *    attend within a `localWindow`-token window, so those layers never hold more than the
+ *    window. Averaged over the sequence they count as min(1, window / context) of a layer.
+ */
+export function kvBytesPerToken(model, kvBytesPerElement, contextLength) {
+  const layers = model.layers || 32;
+  const localLayers = Math.min(layers, model.localLayers || 0);
+  const window = model.localWindow || 0;
+  const ctx = Math.max(1, contextLength || 1);
+  const effectiveLayers = localLayers > 0 && window > 0
+    ? (layers - localLayers) + localLayers * Math.min(1, window / ctx)
+    : layers;
+  if (model.isMla) return effectiveLayers * (512 + 64) * kvBytesPerElement;
+  const kvHeads = model.kvHeads || 8;
+  const headDim = model.headDim || 128;
+  return 2 * effectiveLayers * kvHeads * headDim * kvBytesPerElement;
+}
+
+/**
+ * Splits total weight memory into the routed-expert part and everything else (attention,
+ * shared experts, dense layers, embeddings), in proportion to the model's parameter split.
+ * Dense models are all "non-expert".
+ */
+export function splitExpertWeightsGb(model, weightTotalGb) {
+  if (!model.isMoe || !model.P_routedExperts || !model.params) return { routedGb: 0, nonExpertGb: weightTotalGb };
+  const routedGb = weightTotalGb * Math.min(1, model.P_routedExperts / model.params);
+  return { routedGb, nonExpertGb: weightTotalGb - routedGb };
+}
+
+/**
+ * Per-GPU weight memory for a replica: non-expert weights split by TP (and PP), routed experts
+ * additionally spread over `epNodes` chassis under wide expert parallelism.
+ */
+function perGpuWeightGbFor(model, weightTotalGb, tp, pp, epNodes = 1) {
+  const { routedGb, nonExpertGb } = splitExpertWeightsGb(model, weightTotalGb);
+  return nonExpertGb / (tp * pp) + routedGb / (tp * pp * Math.max(1, epNodes));
+}
+
+/**
+ * Peak dense tensor throughput (FLOP/s) a GPU delivers for a given weight precision.
+ * FP8 uses FP8 Tensor Cores; NVFP4/MXFP4 use native FP4 units where the GPU has them
+ * (Blackwell, MI355X) and otherwise fall back to 16-bit math on dequantized weights, the
+ * same as weight-only INT4 (AWQ/GPTQ), which always computes in FP16/BF16.
+ */
+export function peakDenseFlops(gpu, precision) {
+  const fp16 = (gpu.fp16Tflops || 989) * 1e12;
+  if (precision.id === 'fp8') return (gpu.fp8Tflops || (gpu.fp16Tflops ? gpu.fp16Tflops * 2 : 1979)) * 1e12;
+  if ((precision.id === 'nvfp4' || precision.id === 'mxfp4') && gpu.fp4Tflops) return gpu.fp4Tflops * 1e12;
+  return fp16;
+}
+
+/**
+ * Human-readable name of the fabric carrying disaggregated-serving KV transfers.
+ * Only name Cisco Nexus when the platform is actually a Cisco one.
+ */
+export function kvFabricName(networkProtocol, platform) {
+  if (networkProtocol === 'infiniband') return 'InfiniBand';
+  return platform?.vendor === 'cisco' ? 'Cisco Nexus RoCEv2' : 'RoCEv2';
+}
+
 /**
  * Returns the hidden dimension (num_heads × head_dim) for activation memory sizing.
  * Falls back to a reasonable estimate if numHeads is not specified on the model.
@@ -122,8 +192,21 @@ export function recommendSharding(params) {
     gpu,
     platform,
     trainingType,
-    zeroStage
+    zeroStage,
+    // Extra % of usable memory to keep free (on top of the 10% runtime reserve), so a design
+    // isn't sized to the last gigabyte.
+    memoryHeadroomPct = 0,
+    // Latency-driven sizing: use at least this TP (within the chassis) even if a smaller TP fits.
+    minTp = 1,
+    // Wide expert parallelism (MoE inference): spread each replica's routed experts across this
+    // many chassis, with TP = the chassis size inside each one.
+    expertParallelNodes = 1,
+    // Mean tokens per stream when requests vary in length (null = every stream at contextLength).
+    // contextLength stays the per-request maximum (single-stream fit, max-model-len).
+    avgContextLength = null,
   } = params;
+  const meanSeqTokens = avgContextLength ? Math.min(contextLength, Math.max(1, avgContextLength)) : contextLength;
+  const epNodes = (workloadType === 'inference' && model.isMoe) ? Math.max(1, Math.floor(expertParallelNodes) || 1) : 1;
 
   const totalParams    = model.id === "custom" ? (Number(customParams) || 32) : model.params;
   const layers         = model.layers  || 32;
@@ -156,12 +239,7 @@ export function recommendSharding(params) {
       kvBytesPerElement = 0.5;
     }
 
-    let bytesPerTokenSeq;
-    if (model.id === "deepseek-r1-671b" || model.isMla) {
-      bytesPerTokenSeq = layers * (512 + 64) * kvBytesPerElement;
-    } else {
-      bytesPerTokenSeq = 2 * layers * kvHeads * headDim * kvBytesPerElement;
-    }
+    const bytesPerTokenSeq = kvBytesPerToken(model, kvBytesPerElement, contextLength);
 
     const promptTokens = Math.round(contextLength * promptTokenRatio);
     // M4: Split prefixCacheRatio into globalPrefixTokens (stored 1x) and sessionReuseRatio (stored per stream)
@@ -220,7 +298,7 @@ export function recommendSharding(params) {
   }
 
   // Safe usable VRAM per GPU (shared constant — same buffer used in OOM check)
-  const usableGpuVramGb     = gpu.vramGb * VRAM_USABLE_FACTOR;
+  const usableGpuVramGb     = gpu.vramGb * usableMemoryFactor(memoryHeadroomPct);
   const singleNodeCapacityGb = gpusPerChassis * usableGpuVramGb;
 
   // Helper: S5 TP must divide H_q. If it doesn't, step down to the next divisor.
@@ -279,6 +357,32 @@ export function recommendSharding(params) {
     }
   }
 
+  // Latency-driven override: a larger TP than memory alone requires (single-chassis only).
+  if (!error && recommendedPp === 1 && minTp > recommendedTp) {
+    const forcedTp = getValidTp(Math.min(minTp, gpusPerChassis), numHeads);
+    if (forcedTp > recommendedTp) {
+      rationale = `Workload base (~${totalReplicaMemoryGb.toFixed(1)} GB) would fit at TP=${recommendedTp}, but TP=${forcedTp} is used: splitting each replica across ${forcedTp} GPUs over NVLink needs fewer GPUs in total (the weights are stored once per replica) or is needed to meet the latency target. PP=1.`;
+      recommendedTp = forcedTp;
+    }
+  }
+
+  // Wide EP: the replica spans epNodes chassis at full in-chassis TP, with no pipeline stages.
+  if (epNodes > 1) {
+    const epTp = getValidTp(gpusPerChassis, numHeads);
+    const { routedGb, nonExpertGb } = splitExpertWeightsGb(model, totalReplicaMemoryGb);
+    const perGpuGb = nonExpertGb / epTp + routedGb / (epTp * epNodes);
+    recommendedTp = epTp;
+    recommendedPp = 1;
+    fitsInOneNode = false;
+    if (perGpuGb > usableGpuVramGb) {
+      error = "Model does not fit; increase GPU memory or quantise";
+      rationale = `Even spread across ${epNodes} chassis with expert parallelism, each GPU would need ~${perGpuGb.toFixed(0)} GB. Add chassis to the expert-parallel group, quantise, or pick higher-memory GPUs.`;
+    } else {
+      error = null;
+      rationale = `Wide expert parallelism: each replica spans ${epNodes} chassis (${epTp * epNodes} GPUs). Attention and shared weights use TP=${epTp} inside each chassis; the ${model.routedExperts || ''} routed experts are spread across all ${epTp * epNodes} GPUs, so no pipeline stages are needed.`;
+    }
+  }
+
   // S5: Set DP = ceil(requiredKvForC / kvCapacityPerReplica). Concurrency scales DP, not TP.
   let recommendedDp = 1;
   if (workloadType === "inference") {
@@ -287,17 +391,13 @@ export function recommendSharding(params) {
     if (kvPrecision === "fp8") kvBytesPerElement = 1.0;
     else if (kvPrecision === "int4") kvBytesPerElement = 0.5;
 
-    if (model.id === "deepseek-r1-671b" || model.isMla) {
-      bytesPerTokenSeq = layers * (512 + 64) * kvBytesPerElement;
-    } else {
-      bytesPerTokenSeq = 2 * layers * kvHeads * headDim * kvBytesPerElement;
-    }
+    bytesPerTokenSeq = kvBytesPerToken(model, kvBytesPerElement, contextLength);
 
     const promptTokens = Math.round(contextLength * promptTokenRatio);
     const effectiveGlobalPrefixTokens = globalPrefixTokens != null
       ? Math.min(promptTokens, Math.max(0, globalPrefixTokens))
       : Math.round(promptTokens * prefixCacheRatio);
-    const privateTokensPerStream = contextLength - effectiveGlobalPrefixTokens;
+    const privateTokensPerStream = Math.max(1, meanSeqTokens - effectiveGlobalPrefixTokens);
     const effectiveTotalTokens = concurrency > 1
       ? (privateTokensPerStream * concurrency) + (effectiveGlobalPrefixTokens * 1)
       : contextLength;
@@ -312,16 +412,16 @@ export function recommendSharding(params) {
     const weightGb = ((totalParams * 1e9 - headParamsCount) * precision.bytesPerParam + unquantizedHeadBytes) / 1e9;
 
     const ppImbalanceFactor = recommendedPp > 1 ? CONFIG.ppImbalance : 1.0;
-    const perGpuWeightGb = (weightGb / (recommendedTp * recommendedPp)) * ppImbalanceFactor;
+    const perGpuWeightGb = perGpuWeightGbFor(model, weightGb, recommendedTp, recommendedPp, epNodes) * ppImbalanceFactor;
     const perGpuActGb = (mActBytes / 1e9) / (recommendedTp * recommendedPp);
     const perGpuAvailForKvGb = Math.max(0, usableGpuVramGb - perGpuWeightGb - perGpuActGb);
 
     let kvCapacityPerReplica = 0;
-    if (model.id === "deepseek-r1-671b" || model.isMla) {
-      kvCapacityPerReplica = perGpuAvailForKvGb * recommendedPp;
+    if (model.isMla) {
+      kvCapacityPerReplica = perGpuAvailForKvGb * recommendedPp * epNodes;
     } else {
       const tpEff = Math.min(recommendedTp, kvHeads);
-      kvCapacityPerReplica = perGpuAvailForKvGb * (tpEff * recommendedPp);
+      kvCapacityPerReplica = perGpuAvailForKvGb * (tpEff * recommendedPp) * epNodes;
     }
 
     // Each replica actually serves a WHOLE number of streams (ceil(concurrency / dp)), not
@@ -347,6 +447,7 @@ export function recommendSharding(params) {
     tp: recommendedTp,
     pp: recommendedPp,
     dp: recommendedDp,
+    epNodes,
     fitsInOneNode,
     totalReplicaMemoryGb,
     singleNodeCapacityGb,
@@ -383,7 +484,11 @@ export function calculateInfra(config) {
                                // topologies use a fixed uplink design regardless of this setting.
     pue = 1.35,      // facility PUE factor (default 1.35)
     servingConfig = null, // { servingEngine, orchestrator, servingArchitecture, enableChunkedPrefill, enablePrefixCaching }
+    memoryHeadroomPct = 0, // extra % of usable memory kept free (see recommendSharding)
+    expertParallelNodes = 1, // wide expert parallelism span in chassis (MoE, colocated inference)
+    avgContextLength = null, // mean tokens per stream for a mixed request-length workload (see recommendSharding)
   } = config;
+  const meanSeqTokens = avgContextLength ? Math.min(contextLength, Math.max(1, avgContextLength)) : contextLength;
 
   const totalParams = model.id === "custom" ? (Number(customParams) || 32) : model.params;
   const layers      = model.layers  || 32;
@@ -455,7 +560,9 @@ export function calculateInfra(config) {
   const concurrencyPerReplica = Math.max(1, Math.ceil(concurrency / replicaDp));
   const maxNumSeqs = concurrencyPerReplica;
 
-  const modelParallelSize = tp * pp;
+  // Wide EP (MoE, colocated inference only): a replica spans epNodes chassis of tp GPUs each.
+  const epNodes = (workloadType === 'inference' && model.isMoe && !isLlmd) ? Math.max(1, Math.floor(expertParallelNodes) || 1) : 1;
+  const modelParallelSize = tp * pp * epNodes;
   const totalGpus         = isLlmd ? (prefillGpus + decodeGpus) : (modelParallelSize * dp);
   const nodes             = isLlmd ? (prefillNodes + decodeNodes) : Math.max(1, Math.ceil(totalGpus / gpusPerChassis));
   const gpusAllocated     = isLlmd ? totalGpus : (nodes * gpusPerChassis);
@@ -485,23 +592,17 @@ export function calculateInfra(config) {
       kvBytesPerElement = 0.5;
     }
 
-    if (model.id === "deepseek-r1-671b" || model.isMla) {
-      bytesPerTokenSeq = layers * (512 + 64) * kvBytesPerElement;
-    } else {
-      bytesPerTokenSeq = 2 * layers * kvHeads * headDim * kvBytesPerElement;
-    }
+    bytesPerTokenSeq = kvBytesPerToken(model, kvBytesPerElement, contextLength);
 
     // Baseline unoptimized KV cache (standard FP16 with 0% prefix caching)
-    const baselineBytesPerTokenSeq = (model.id === "deepseek-r1-671b" || model.isMla)
-      ? layers * (512 + 64) * 2.0
-      : 2 * layers * kvHeads * headDim * 2.0;
-    baselineKvGb = (baselineBytesPerTokenSeq * contextLength * concurrencyPerReplica) / 1e9;
+    const baselineBytesPerTokenSeq = kvBytesPerToken(model, 2.0, contextLength);
+    baselineKvGb = (baselineBytesPerTokenSeq * meanSeqTokens * concurrencyPerReplica) / 1e9;
 
     // Prefix Caching: Shared prompt tokens stored ONCE in VRAM across streams;
     // unique tokens stored per stream (session reuse tokens are stored per stream).
     // Both counted per replica: prefix caching is a per-instance radix tree, not shared
     // cluster-wide across independent DP replicas.
-    const privateTokensPerStream = contextLength - effectiveGlobalPrefixTokens;
+    const privateTokensPerStream = Math.max(1, meanSeqTokens - effectiveGlobalPrefixTokens);
     const effectiveTotalTokens = concurrencyPerReplica > 1
       ? (privateTokensPerStream * concurrencyPerReplica) + (effectiveGlobalPrefixTokens * 1)
       : contextLength;
@@ -573,7 +674,7 @@ export function calculateInfra(config) {
     const prefillTransientKvTotalBytes = bytesPerTokenSeq * CONFIG.maxBatchedTokens;
     const prefillTransientKvTotalGb = prefillTransientKvTotalBytes / 1e9;
     let prefillKvGb = 0;
-    if (model.id === "deepseek-r1-671b" || model.isMla) {
+    if (model.isMla) {
       prefillKvGb = prefillTransientKvTotalGb / prefillPp;
     } else {
       const prefillTpEff = Math.min(prefillTp, kvHeads);
@@ -581,7 +682,7 @@ export function calculateInfra(config) {
     }
 
     const prefillTotalUsedGb = prefillWeightsGb + prefillActGb + prefillKvGb;
-    const prefillUsableGb = prefillGpu.vramGb * CONFIG.gpuMemUtil;
+    const prefillUsableGb = prefillGpu.vramGb * usableMemoryFactor(memoryHeadroomPct);
     prefillIsOOM = prefillTotalUsedGb > prefillUsableGb;
     const prefillHeadroomGb = prefillUsableGb - prefillTotalUsedGb;
     const prefillUtilization = Math.min(100, Math.round((prefillTotalUsedGb / prefillGpu.vramGb) * 100));
@@ -590,7 +691,7 @@ export function calculateInfra(config) {
     const decodePpImbalance = decodePp > 1 ? CONFIG.ppImbalance : 1.0;
     const decodeWeightsGb = (weightMemoryTotalGb / (decodeTp * decodePp)) * decodePpImbalance;
     let decodeKvGb = 0;
-    if (model.id === "deepseek-r1-671b" || model.isMla) {
+    if (model.isMla) {
       decodeKvGb = kvCacheTotalGb / decodePp;
     } else {
       const decodeTpEff = Math.min(decodeTp, kvHeads);
@@ -600,7 +701,7 @@ export function calculateInfra(config) {
     const decodeActBytes = (decodeTokensPerStep * (hiddenDim + 2 * intermediate) * CONFIG.B_act * 1.2) + (maxNumSeqs * vocab * 4);
     const decodeActGb = (decodeActBytes / 1e9 / decodeTp) + (CONFIG.runtimeOverheadPerGpu / 1e9);
     const decodeTotalUsedGb = decodeWeightsGb + decodeKvGb + decodeActGb;
-    const decodeUsableGb = decodeGpu.vramGb * CONFIG.gpuMemUtil;
+    const decodeUsableGb = decodeGpu.vramGb * usableMemoryFactor(memoryHeadroomPct);
     decodeIsOOM = decodeTotalUsedGb > decodeUsableGb;
     const decodeHeadroomGb = decodeUsableGb - decodeTotalUsedGb;
     const decodeUtilization = Math.min(100, Math.round((decodeTotalUsedGb / decodeGpu.vramGb) * 100));
@@ -608,11 +709,7 @@ export function calculateInfra(config) {
     // 3. Lossless RoCEv2 KV Cache Network Transfer (M3)
     let transferBytesPerTokenSeq;
     const kvTransferBytes = kvPrecision === "fp8" ? 1.0 : (kvPrecision === "int4" ? 0.5 : 2.0);
-    if (model.id === "deepseek-r1-671b" || model.isMla) {
-      transferBytesPerTokenSeq = layers * (512 + 64) * kvTransferBytes;
-    } else {
-      transferBytesPerTokenSeq = 2 * layers * kvHeads * headDim * kvTransferBytes;
-    }
+    transferBytesPerTokenSeq = kvBytesPerToken(model, kvTransferBytes, promptTokens);
     const promptKvBytes = transferBytesPerTokenSeq * promptTokens;
     const promptKvChunkGb = Number((promptKvBytes / 1e9).toFixed(2));
     const nicsPerNode = prefillPlatform?.nicsPerNode || prefillPlatform?.gpusPerChassis || prefillGpu?.gpusPerChassis || 8;
@@ -676,12 +773,13 @@ export function calculateInfra(config) {
     };
   } else if (workloadType === "inference") {
     const ppImbalanceFactor = pp > 1 ? CONFIG.ppImbalance : 1.0;
-    perGpuWeightsGb = (weightMemoryTotalGb / (tp * pp)) * ppImbalanceFactor;
-    if (model.id === "deepseek-r1-671b" || model.isMla) {
-      perGpuKvOrOptGb = kvCacheTotalGb / pp;
+    perGpuWeightsGb = perGpuWeightGbFor(model, weightMemoryTotalGb, tp, pp, epNodes) * ppImbalanceFactor;
+    // Under wide EP each chassis runs attention for its own share of the replica's streams.
+    if (model.isMla) {
+      perGpuKvOrOptGb = kvCacheTotalGb / (pp * epNodes);
     } else {
       const tpEff = Math.min(tp, kvHeads);
-      perGpuKvOrOptGb = kvCacheTotalGb / (tpEff * pp);
+      perGpuKvOrOptGb = kvCacheTotalGb / (tpEff * pp * epNodes);
     }
     perGpuActGb     = (mActGb / (tp * pp)) + (CONFIG.runtimeOverheadPerGpu / 1e9);
   } else {
@@ -720,10 +818,14 @@ export function calculateInfra(config) {
   const perGpuTotalUsedGb = isLlmd ? llmdData.decode.totalUsedGb : (perGpuWeightsGb + perGpuKvOrOptGb + perGpuGradGb + perGpuActGb);
   const gpuCapacityGb     = isLlmd ? decodeGpu.vramGb : gpu.vramGb;
   // FIX: Apply same VRAM_USABLE_FACTOR buffer here as in recommendSharding() for consistency
-  const usableGpuCapacityGb      = gpuCapacityGb * VRAM_USABLE_FACTOR;
+  const usableFactor             = usableMemoryFactor(memoryHeadroomPct);
+  const usableGpuCapacityGb      = gpuCapacityGb * usableFactor;
   const memoryUtilizationPercent = Math.min(100, Math.round((perGpuTotalUsedGb / gpuCapacityGb) * 100));
   const isOOM     = isLlmd ? (prefillIsOOM || decodeIsOOM) : (perGpuTotalUsedGb > usableGpuCapacityGb);
-  const headroomGb = usableGpuCapacityGb - perGpuTotalUsedGb;
+  // Free memory is reported against the runtime limit (90% of physical), so the headroom margin
+  // the sizing deliberately left shows up as free space rather than being hidden.
+  const physicalUsableGb = gpuCapacityGb * VRAM_USABLE_FACTOR;
+  const headroomGb = physicalUsableGb - perGpuTotalUsedGb;
 
   // ── 3. Validation Warnings & Architecture Checks ───────────────────────────
   const warnings        = [];
@@ -757,8 +859,18 @@ export function calculateInfra(config) {
     warnings.push(`ZeRO-${zeroStage} is incompatible with Pipeline Parallelism (PP=${pp} > 1). ZeRO gradient and parameter partitioning require synchronous Data Parallel groups without pipeline stage boundaries. Use ZeRO-1 with PP, or reduce PP to 1.`);
   }
 
+  if (epNodes > 1 && oversubscriptionRatio > 1) {
+    warnings.push(`Wide expert parallelism sends all-to-all traffic across chassis at every MoE layer, but the fabric is ${oversubscriptionRatio}:1 oversubscribed. Expect higher per-token latency than modeled; use a non-blocking (1:1) fabric for expert-parallel groups.`);
+  }
+
+  // TensorRT-LLM is NVIDIA-only; AMD Instinct serving runs vLLM or SGLang on ROCm.
+  if (servingConfig?.servingEngine === 'trt-llm' && (gpu.vendor === 'AMD' || servingConfig?.secondaryGpu?.vendor === 'AMD')) {
+    warnings.push('TensorRT-LLM runs only on NVIDIA GPUs. For AMD Instinct, use vLLM or SGLang on ROCm; the sizing is otherwise unchanged.');
+  }
+
   // LLM-D Disaggregated Serving architectural advisory
   if (isLlmd) {
+    const kvFabricLabel = kvFabricName(networkProtocol, prefillPlatform);
     if (prefillIsOOM) {
       warnings.push(`Out of Memory on Prefill Pool: Needs ${llmdData.prefill.totalUsedGb.toFixed(1)} GB per ${prefillGpu.name} (usable: ${llmdData.prefill.usableGb.toFixed(1)} GB). Increase Prefill nodes or select higher VRAM GPUs.`);
     }
@@ -767,19 +879,24 @@ export function calculateInfra(config) {
     }
     if (!prefillIsOOM && !decodeIsOOM) {
       if (isHeterogeneousLlmd) {
-        warnings.push(`Heterogeneous LLM-D Active: Sized with ${prefillNodes}x ${prefillPlatform.shortName} (${prefillGpu.name} Prefill) + ${decodeNodes}x ${decodePlatform.shortName} (${decodeGpu.name} Decode). Prompt KV-cache (${llmdData.kvTransfer.promptKvChunkGb} GB) streams over Cisco Nexus RoCEv2 in ~${llmdData.kvTransfer.kvTransferLatencyMs} ms with zero decode jitter.`);
+        warnings.push(`Heterogeneous LLM-D Active: Sized with ${prefillNodes}x ${prefillPlatform.shortName} (${prefillGpu.name} Prefill) + ${decodeNodes}x ${decodePlatform.shortName} (${decodeGpu.name} Decode). Prompt KV-cache (${llmdData.kvTransfer.promptKvChunkGb} GB) streams over the ${kvFabricLabel} fabric in ~${llmdData.kvTransfer.kvTransferLatencyMs} ms with zero decode jitter.`);
       } else {
-        warnings.push(`Homogeneous LLM-D Active: Partitioned into ${prefillNodes} Prefill node(s) (TP=${prefillTp}) and ${decodeNodes} Decode node(s) (TP=${decodeTp}). The Cisco Nexus RoCEv2 fabric transfers KV-cache chunks in ~${llmdData.kvTransfer.kvTransferLatencyMs} ms.`);
+        warnings.push(`Homogeneous LLM-D Active: Partitioned into ${prefillNodes} Prefill node(s) (TP=${prefillTp}) and ${decodeNodes} Decode node(s) (TP=${decodeTp}). The ${kvFabricLabel} fabric transfers KV-cache chunks in ~${llmdData.kvTransfer.kvTransferLatencyMs} ms.`);
       }
     }
   }
 
+  // Near-limit notice: fits, but with almost nothing spare for longer-than-planned prompts.
+  if (!isOOM && !isLlmd && workloadType === 'inference' && headroomGb < 0.03 * physicalUsableGb) {
+    warnings.push(`Tight fit: only ${headroomGb.toFixed(1)} GB of ${physicalUsableGb.toFixed(0)} GB usable per GPU is left. Longer prompts or a traffic spike will cause preemptions; raise the memory headroom margin, add a replica, or use more TP.`);
+  }
+
   if (isOOM && !isLlmd) {
     const deficitGb = (perGpuTotalUsedGb - usableGpuCapacityGb).toFixed(1);
-    warnings.push(`Out of Memory! Each GPU needs ${perGpuTotalUsedGb.toFixed(1)} GB, exceeding ${gpu.name}'s usable ${usableGpuCapacityGb.toFixed(0)} GB limit (${gpuCapacityGb} GB × ${VRAM_USABLE_FACTOR}) by ${deficitGb} GB.`);
+    warnings.push(`Out of Memory! Each GPU needs ${perGpuTotalUsedGb.toFixed(1)} GB, exceeding ${gpu.name}'s usable ${usableGpuCapacityGb.toFixed(0)} GB limit (${gpuCapacityGb} GB × ${usableFactor.toFixed(3)}${memoryHeadroomPct > 0 ? `, incl. ${memoryHeadroomPct}% headroom` : ''}) by ${deficitGb} GB.`);
 
     if (workloadType === "inference") {
-      recommendations.push("Increase Tensor Parallelism (TP), switch to FP8/INT4 quantization, increase Pipeline Parallelism (PP), or select higher VRAM GPUs (e.g. H200 141GB or B200 192GB).");
+      recommendations.push("Increase Tensor Parallelism (TP), switch to FP8/INT4 quantization, increase Pipeline Parallelism (PP), or select higher VRAM GPUs (e.g. H200 141GB, B200 180GB or B300 288GB).");
     } else {
       recommendations.push("Enable ZeRO-3 / FSDP, switch to LoRA/QLoRA, or scale to more GPU nodes to shard optimizer states.");
     }
@@ -988,10 +1105,7 @@ export function calculateInfra(config) {
     const prefillTpCount = isLlmd ? prefillTp : tp;
 
     // Dense peak table without sparsity; INT4 uses FP16 compute (C4)
-    let prefillPeakDenseFlops = (targetPrefillGpu.fp16Tflops || 989) * 1e12;
-    if (precision.id === "fp8") {
-      prefillPeakDenseFlops = (targetPrefillGpu.fp8Tflops || (targetPrefillGpu.fp16Tflops ? targetPrefillGpu.fp16Tflops * 2 : 1979)) * 1e12;
-    }
+    const prefillPeakDenseFlops = peakDenseFlops(targetPrefillGpu, precision);
     const gpuTflops = prefillPeakDenseFlops / 1e12;
 
     // Dynamic MFU by prompt length (C4)
@@ -1003,7 +1117,7 @@ export function calculateInfra(config) {
     const mfuPrefill = uncachedPromptTokens < 512 ? 0.25 : (uncachedPromptTokens < 2048 ? 0.4 : 0.5);
 
     const fwdFlopsPerToken = 2 * effectiveParamsForThroughput * 1e9;
-    const attnDim = (model.id === "deepseek-r1-671b" || model.isMla) ? 576 : hiddenDim;
+    const attnDim = (model.isMla) ? 576 : hiddenDim;
     const attnFlopsPerToken = 2 * layers * attnDim * contextLength;
     const totalFlopsPerToken = fwdFlopsPerToken + attnFlopsPerToken;
     const totalPromptFlops = totalFlopsPerToken * uncachedPromptTokens;
@@ -1015,7 +1129,9 @@ export function calculateInfra(config) {
     // All-Reduce bandwidth & latency (C4)
     const isB200 = targetPrefillGpu.id?.includes("b200") || targetPrefillGpu.name?.includes("B200");
     const isNonNvlink = targetPrefillGpu.interconnectType === "pcie" || platform?.interconnectType === "pcie";
-    const interconnectBwUni = isNonNvlink ? CONFIG.pcieBw : (isB200 ? 900e9 : CONFIG.nvlinkBwUni);
+    const interconnectBwUni = isNonNvlink
+      ? CONFIG.pcieBw
+      : (targetPrefillGpu.linkBwUniGBs ? targetPrefillGpu.linkBwUniGBs * 1e9 : (isB200 ? 900e9 : CONFIG.nvlinkBwUni));
 
     const t_allreduce = prefillTpCount > 1
       ? layers * 2 * (2 * (prefillTpCount - 1) / prefillTpCount) * uncachedPromptTokens * hiddenDim * CONFIG.B_act / interconnectBwUni
@@ -1036,21 +1152,27 @@ export function calculateInfra(config) {
     const decodeTpCount = isLlmd ? decodeTp : tp;
     const decodeDp = replicaDp;
     const C_rep = concurrencyPerReplica;
-    const S_avg = model.avgContextLength || contextLength;
+    const S_avg = meanSeqTokens;
 
     const BW_mem = (targetDecodeGpu.memBandwidthTbps || 4.8) * 1e12; // bytes/s
-    let decodePeakDenseFlops = (targetDecodeGpu.fp16Tflops || 989) * 1e12;
-    if (precision.id === "fp8") {
-      decodePeakDenseFlops = (targetDecodeGpu.fp8Tflops || (targetDecodeGpu.fp16Tflops ? targetDecodeGpu.fp16Tflops * 2 : 1979)) * 1e12;
-    }
+    const decodePeakDenseFlops = peakDenseFlops(targetDecodeGpu, precision);
 
-    const weightBytesRead = decodeWeightBytes(model, customParams, precision, config.ep || CONFIG.ep || 1, C_rep);
-    const kvBytesRead = bytesPerTokenSeq * S_avg * C_rep;
+    // Weight bytes each TP group reads per step: routed experts are spread over epNodes chassis,
+    // and each chassis only reads the experts it hosts that the step's tokens touch.
+    const weightBytesRead = decodeWeightBytes(model, customParams, precision, epNodes * (config.ep || CONFIG.ep || 1), C_rep);
+    const kvBytesRead = bytesPerTokenSeq * S_avg * C_rep / epNodes;
 
     const t_mem  = (weightBytesRead + kvBytesRead) / (decodeTpCount * BW_mem * CONFIG.bwEfficiency);
     const pActiveParams = (isMoe && model.activeParams ? model.activeParams : totalParams) * 1e9;
-    const t_comp = (2 * pActiveParams * C_rep) / (decodeTpCount * decodePeakDenseFlops * CONFIG.mfuDecode);
-    const t_comm = decodeTpCount > 1 ? 2 * layers * CONFIG.allreduceLatency : 0;
+    const t_comp = (2 * pActiveParams * C_rep) / (decodeTpCount * epNodes * decodePeakDenseFlops * CONFIG.mfuDecode);
+    // Wide EP all-to-all: every token's hidden state goes to its k experts and back, mostly to
+    // other chassis (FP8 dispatch + BF16 combine = 3 bytes/element), over the GPUs' NICs.
+    const moeLayers = model.moeLayers || layers;
+    const t_a2a = epNodes > 1
+      ? (C_rep * moeLayers * (model.activeExperts || 8) * hiddenDim * 3 * (1 - 1 / epNodes)) / (tp * epNodes * (nicSpeedGbps * 1e9 * 0.9 / 8))
+        + moeLayers * 2 * CONFIG.a2aLatency
+      : 0;
+    const t_comm = (decodeTpCount > 1 ? 2 * layers * CONFIG.allreduceLatency : 0) + t_a2a;
     const t_step = Math.max(t_mem, t_comp) + t_comm;
     const tpotMs = Number((t_step * 1000).toFixed(2));
     const replicaThroughput = C_rep / t_step;
@@ -1066,8 +1188,8 @@ export function calculateInfra(config) {
 
     const prefillNote = isLlmd
       ? (isHeterogeneousLlmd
-          ? `Heterogeneous Prefill: Processed on ${prefillNodes}x ${prefillPlatform.shortName} (${prefillGpus}x ${prefillGpu.name} @ ${gpuTflops.toLocaleString()} TFLOPs) + ~${llmdData?.kvTransfer?.kvTransferLatencyMs}ms Cisco RoCEv2 transfer`
-          : `Disaggregated Prefill: Processed on ${prefillNodes} Prefill node(s) (${prefillGpus}x ${prefillGpu.name}) + ~${llmdData?.kvTransfer?.kvTransferLatencyMs}ms RoCEv2 transfer`)
+          ? `Heterogeneous Prefill: Processed on ${prefillNodes}x ${prefillPlatform.shortName} (${prefillGpus}x ${prefillGpu.name} @ ${gpuTflops.toLocaleString()} TFLOPs) + ~${llmdData?.kvTransfer?.kvTransferLatencyMs}ms ${kvFabricName(networkProtocol, prefillPlatform)} transfer`
+          : `Disaggregated Prefill: Processed on ${prefillNodes} Prefill node(s) (${prefillGpus}x ${prefillGpu.name}) + ~${llmdData?.kvTransfer?.kvTransferLatencyMs}ms ${kvFabricName(networkProtocol, prefillPlatform)} transfer`)
       : (totalCachedPromptTokens > 0
           ? `Prefill: ${promptTokens.toLocaleString()} prompt tokens with ${totalCachedPromptTokens.toLocaleString()} tokens cached (${((totalCachedPromptTokens / promptTokens) * 100).toFixed(0)}% cached) computing ${uncachedPromptTokens.toLocaleString()} uncached tokens @ ${gpuTflops.toLocaleString()} TFLOPs`
           : `Calculated on ${promptTokens.toLocaleString()} prompt tokens using ${gpuTflops.toLocaleString()} TFLOPs (${precision.name}) at ${(mfuPrefill * 100).toFixed(0)}% MFU`);
@@ -1077,6 +1199,7 @@ export function calculateInfra(config) {
       t_mem,
       t_comp,
       t_comm,
+      t_a2a,
       t_step,
       tpotMs,
       replicaThroughput:      Math.round(replicaThroughput),
@@ -1113,6 +1236,7 @@ export function calculateInfra(config) {
     isMoe,
     modelParallelSize,
     totalGpus,
+    epNodes,
     gpusAllocated,
     nodes,
     // Memory
@@ -1212,6 +1336,7 @@ export function calculateStorage(config) {
     modelRepoTargetLoadTimeSec = 120,
     corpusSizeGb = 0,
     enableKvOffload = false,
+    kvOffloadActiveFraction = 1, // share of sessions whose KV stays in GPU memory; the rest wait offloaded
     durabilityScheme = null, // one entry from DURABILITY_SCHEMES; null = RF 1.0 (no redundancy modeled -- not recommended)
   } = config;
 
@@ -1258,7 +1383,13 @@ export function calculateStorage(config) {
       // Size the offload tier at 2x the modeled in-VRAM KV footprint to give room for
       // paging beyond what fits on-GPU, and require enough throughput to page at the
       // cluster's aggregate decode token rate.
-      kvOffloadCapacityTb = ((memory.kvCacheTotalGb || 0) * 2) / 1000;
+      // kvCacheTotalGb is per replica; the offload tier serves the whole cluster. It holds every
+      // session's KV (resident ones included, so they can be evicted) plus the same again as
+      // paging room -- 2x the cluster's GPU-resident KV when every session is active.
+      const replicas = Math.max(1, Math.round((totalGpus || 1) / (infraResults.modelParallelSize || 1)));
+      const clusterResidentKvGb = (memory.kvCacheTotalGb || 0) * replicas;
+      const activeFraction = Math.min(1, Math.max(0.01, kvOffloadActiveFraction));
+      kvOffloadCapacityTb = (clusterResidentKvGb * (1 / activeFraction + 1)) / 1000;
       const clusterGenTokPerSec = throughput?.batchThroughputTps || throughput?.tokensPerSecPerReplica || 0;
       // bytesPerTokenSeq (K+V bytes for one token, one full sequence's worth of layers/heads)
       // is exported directly from calculateInfra -- use it as-is rather than reverse-deriving
@@ -1428,6 +1559,14 @@ export function calculateCost(config) {
   const annualSupportCostUsd = totalCapexUsd * (supportPctPerYear / 100);
   const annualOpexUsd = annualPowerCostUsd + annualLicensingCostUsd + annualSupportCostUsd + ingressAnnualOpexUsd;
 
+  // The model-serving cluster alone (GPUs, their fabric, power, support, licensing), without
+  // storage and add-on pools -- the part a per-token API would replace.
+  const servingCapexUsd = computeCapexUsd + networkHardwareCapexUsd;
+  const servingAnnualPowerCostUsd = useColo
+    ? baseItPowerKw * coloUsdPerKwPerMonth * 12
+    : baseFacilityPowerKw * hoursPerYear * powerUsdPerKwh;
+  const servingAnnualOpexUsd = servingAnnualPowerCostUsd + annualLicensingCostUsd + servingCapexUsd * (supportPctPerYear / 100);
+
   const tcoUsd = totalCapexUsd + (annualOpexUsd * tcoYears);
   const totalGpuHours = infraResults.totalGpus * hoursPerYear * tcoYears;
   const effectiveUsdPerGpuHour = totalGpuHours > 0 ? tcoUsd / totalGpuHours : 0;
@@ -1459,6 +1598,8 @@ export function calculateCost(config) {
     annualLicensingCostUsd,
     annualSupportCostUsd,
     annualOpexUsd,
+    servingCapexUsd,
+    servingAnnualOpexUsd,
     tcoYears,
     tcoUsd,
     effectiveUsdPerGpuHour,
@@ -2207,5 +2348,64 @@ export function calculateMlops(config) {
     validationGpuCount,
     mlopsComputeCapexUsd,
     mlopsItPowerKw,
+  };
+}
+
+/**
+ * Unit economics of a sized inference deployment versus a per-token API.
+ * The cluster is sized for its peak concurrency; `dutyCyclePct` is the share of hours it
+ * actually runs at that load, averaged over the month. Hardware is amortized straight-line
+ * over the TCO period. Reasoning tokens count as output tokens, as API providers bill them.
+ */
+export function calculateTokenEconomics({
+  cost,                        // calculateCost() output
+  throughput,                  // calculateInfra() throughput (inference only)
+  promptTokensPerRequest,
+  outputTokensPerRequest,      // visible answer + reasoning tokens
+  dutyCyclePct = 50,
+  apiInputUsdPer1M = 0,
+  apiOutputUsdPer1M = 0,
+}) {
+  if (!throughput || !cost || !(throughput.batchThroughputTps > 0) || !(outputTokensPerRequest > 0)) {
+    return { eligible: false };
+  }
+  const hoursPerMonth = 730;
+  // Fully loaded: everything in Cost & TCO. Serving only: the GPU cluster an API would replace
+  // (RAG, guardrails, storage, HA/DR etc. are usually still needed with an API).
+  const fullyLoadedMonthlyCostUsd = cost.totalCapexUsd / (cost.tcoYears * 12) + cost.annualOpexUsd / 12;
+  const monthlyCostUsd = (cost.servingCapexUsd ?? cost.totalCapexUsd) / (cost.tcoYears * 12)
+    + (cost.servingAnnualOpexUsd ?? cost.annualOpexUsd) / 12;
+  const requestsPerSecAtPeak = throughput.batchThroughputTps / outputTokensPerRequest;
+  const duty = Math.min(1, Math.max(0.01, dutyCyclePct / 100));
+  const requestsPerMonthAtFull = requestsPerSecAtPeak * 3600 * hoursPerMonth;
+  const requestsPerMonth = requestsPerMonthAtFull * duty;
+  const outputTokensPerMonth = requestsPerMonth * outputTokensPerRequest;
+  const inputTokensPerMonth = requestsPerMonth * promptTokensPerRequest;
+  const totalTokensPerMonth = outputTokensPerMonth + inputTokensPerMonth;
+
+  const apiCostPerRequestUsd = (promptTokensPerRequest * apiInputUsdPer1M + outputTokensPerRequest * apiOutputUsdPer1M) / 1e6;
+  const apiMonthlyCostUsd = apiCostPerRequestUsd * requestsPerMonth;
+  // Utilization at which owning costs the same as paying the API for the same requests.
+  const crossoverDutyPct = apiCostPerRequestUsd > 0
+    ? (monthlyCostUsd / (apiCostPerRequestUsd * requestsPerMonthAtFull)) * 100
+    : null;
+
+  return {
+    eligible: true,
+    dutyCyclePct: duty * 100,
+    monthlyCostUsd,
+    fullyLoadedMonthlyCostUsd,
+    fullyLoadedCostPer1MOutputTokensUsd: (fullyLoadedMonthlyCostUsd / outputTokensPerMonth) * 1e6,
+    requestsPerMonth,
+    inputTokensPerMonth,
+    outputTokensPerMonth,
+    costPerRequestUsd: monthlyCostUsd / requestsPerMonth,
+    costPer1MOutputTokensUsd: (monthlyCostUsd / outputTokensPerMonth) * 1e6,
+    costPer1MTotalTokensUsd: (monthlyCostUsd / totalTokensPerMonth) * 1e6,
+    apiCostPerRequestUsd,
+    apiMonthlyCostUsd,
+    monthlySavingsVsApiUsd: apiMonthlyCostUsd - monthlyCostUsd,
+    crossoverDutyPct,
+    crossoverReachable: crossoverDutyPct != null && crossoverDutyPct <= 100,
   };
 }

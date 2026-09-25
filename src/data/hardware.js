@@ -28,6 +28,7 @@ export const GPU_CATALOG = [
     fp16Tflops: 2250,
     fp8Tflops: 4500,
     int4Tflops: 9000,
+    fp4Tflops: 9000, // native FP4 (NVFP4/MXFP4) Tensor Cores
     interconnect: "NVLink 5 (1,800 GB/s)",
     interconnectType: "nvlink",
     formFactor: "SXM6 (8 GPUs per Chassis)",
@@ -36,6 +37,107 @@ export const GPU_CATALOG = [
     chassisHeightRu: 8,
     costTier: "$$$$$",
     notes: "Next-gen flagship with 8.0 TB/s memory bandwidth for MoE models & frontier pretraining."
+  },
+  {
+    id: "b300-sxm",
+    name: "NVIDIA Blackwell Ultra B300 (288GB)",
+    vendor: "NVIDIA",
+    vramGb: 288,
+    memBandwidthTbps: 8.0,
+    // Peak Dense Tensor Core TFLOPs (non-sparse)
+    fp16Tflops: 2250,
+    fp8Tflops: 4500,
+    int4Tflops: 4500, // INT8/INT4 de-emphasized on Blackwell Ultra; weight-only INT4 runs at FP8/FP16 rates
+    fp4Tflops: 13500, // native FP4 (NVFP4/MXFP4)
+    interconnect: "NVLink 5 (1,800 GB/s)",
+    interconnectType: "nvlink",
+    linkBwUniGBs: 900,
+    formFactor: "SXM (8 GPUs per HGX baseboard)",
+    gpusPerChassis: 8,
+    chassisTdpKw: 14.5,
+    chassisHeightRu: 10,
+    costTier: "$$$$$",
+    notes: "Blackwell Ultra: 288GB HBM3e per GPU and ~1.5x B200 dense FP4. Built for reasoning-model inference and trillion-parameter MoE serving."
+  },
+  {
+    id: "rtx-pro-6000",
+    name: "NVIDIA RTX PRO 6000 Blackwell Server (96GB PCIe)",
+    vendor: "NVIDIA",
+    vramGb: 96,
+    memBandwidthTbps: 1.6,
+    // Peak Dense Tensor Core TFLOPs (non-sparse, approximate)
+    fp16Tflops: 500,
+    fp8Tflops: 1000,
+    int4Tflops: 2000,
+    fp4Tflops: 2000,
+    interconnect: "PCIe Gen5 x16 (64 GB/s each way), no NVLink",
+    interconnectType: "pcie",
+    formFactor: "PCIe Dual-Slot (up to 8 per chassis)",
+    gpusPerChassis: 8,
+    chassisTdpKw: 6.5,
+    chassisHeightRu: 4,
+    costTier: "$$",
+    notes: "Air-cooled Blackwell PCIe card with 96GB GDDR7 and native FP4. The L40S successor for enterprise inference where each model fits on one card."
+  },
+  {
+    id: "mi300x",
+    name: "AMD Instinct MI300X (192GB)",
+    vendor: "AMD",
+    vramGb: 192,
+    memBandwidthTbps: 5.3,
+    // Peak Dense Matrix TFLOPs (non-sparse)
+    fp16Tflops: 1307,
+    fp8Tflops: 2615,
+    int4Tflops: 2615, // no native INT4/FP4; weight-only 4-bit runs at FP8/FP16 rates
+    interconnect: "Infinity Fabric (896 GB/s aggregate, 7 links)",
+    interconnectType: "infinity-fabric",
+    linkBwUniGBs: 448,
+    formFactor: "OAM (8 GPUs per UBB baseboard)",
+    gpusPerChassis: 8,
+    chassisTdpKw: 10.5,
+    chassisHeightRu: 8,
+    costTier: "$$$",
+    notes: "192GB HBM3 fits a 70B FP16 model on one GPU. Served with vLLM or SGLang on ROCm; TensorRT-LLM is NVIDIA-only."
+  },
+  {
+    id: "mi325x",
+    name: "AMD Instinct MI325X (256GB)",
+    vendor: "AMD",
+    vramGb: 256,
+    memBandwidthTbps: 6.0,
+    fp16Tflops: 1307,
+    fp8Tflops: 2615,
+    int4Tflops: 2615,
+    interconnect: "Infinity Fabric (896 GB/s aggregate, 7 links)",
+    interconnectType: "infinity-fabric",
+    linkBwUniGBs: 448,
+    formFactor: "OAM (8 GPUs per UBB baseboard)",
+    gpusPerChassis: 8,
+    chassisTdpKw: 12.5,
+    chassisHeightRu: 8,
+    costTier: "$$$$",
+    notes: "MI300X compute with 256GB HBM3e and 6 TB/s: more KV capacity per GPU for long-context and high-concurrency serving."
+  },
+  {
+    id: "mi355x",
+    name: "AMD Instinct MI355X (288GB)",
+    vendor: "AMD",
+    vramGb: 288,
+    memBandwidthTbps: 8.0,
+    // Peak Dense Matrix TFLOPs (non-sparse, approximate)
+    fp16Tflops: 2500,
+    fp8Tflops: 5000,
+    int4Tflops: 5000,
+    fp4Tflops: 10000, // native FP4/FP6 (MXFP4)
+    interconnect: "Infinity Fabric (~1,075 GB/s aggregate)",
+    interconnectType: "infinity-fabric",
+    linkBwUniGBs: 538,
+    formFactor: "OAM (8 GPUs per UBB baseboard, liquid-cooled)",
+    gpusPerChassis: 8,
+    chassisTdpKw: 14.5,
+    chassisHeightRu: 8,
+    costTier: "$$$$",
+    notes: "CDNA 4 with native FP4/FP6 and 288GB HBM3e; ~1.4kW per GPU, typically liquid-cooled."
   },
   {
     id: "h100-sxm",

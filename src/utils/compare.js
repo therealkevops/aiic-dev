@@ -20,6 +20,7 @@ export function scenarioMetrics(config, s) {
     { group: 'Footprint', label: 'Nodes', value: s.results.nodes, format: (v) => v.toLocaleString(), better: 'lower' },
     { group: 'Footprint', label: 'Racks', value: s.facility.totalRacks, format: (v) => v.toLocaleString(), better: 'lower' },
     { group: 'Footprint', label: 'IT power', value: s.facility.totalItPowerKw, format: (v) => `${v.toFixed(1)} kW`, better: 'lower' },
+    ...(s.energy ? [{ group: 'Footprint', label: 'Energy per year', value: s.energy.annualMwh, format: (v) => `${Math.round(v).toLocaleString()} MWh`, better: 'lower' }] : []),
     { group: 'Footprint', label: 'Memory used per GPU', value: s.memory.perGpuTotalUsedGb, format: (v) => `${v.toFixed(1)} GB`, better: null },
     { group: 'Footprint', label: 'Fits in memory', value: s.memory.isOOM ? 'No (OOM)' : 'Yes', better: null },
   ];

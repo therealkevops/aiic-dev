@@ -1938,8 +1938,14 @@ const CORE_CONTENT = {
           The calculator sizes one GPU-facing NIC port per GPU on 64-port leaf switches. At 1:1 (non-blocking) each leaf splits its ports evenly between GPUs and spine uplinks; small clusters fit on a single leaf tier with no spine at all. The <strong>oversubscription ratio</strong> in the Network Fabric section lets you trade bisection bandwidth for fewer spine switches (2:1 halves the uplinks). That is usually fine for inference, where data-parallel replicas barely talk to each other, but it slows training collectives that span leaves.
         </p>
         <p>
-          Facilities sizing bin-packs server chassis into 42U racks with 40U usable (the rest goes to top-of-rack switching, patch panels and cable management) and a per-rack power limit (default 28 kW), whichever binds first. Total facility power is IT load × PUE (default 1.35), which adds cooling and power-distribution overhead.
+          Facilities sizing bin-packs server chassis into 42U racks with 40U usable (the rest goes to top-of-rack switching, patch panels and cable management) and a per-rack power limit, whichever binds first. The Facility &amp; Power tab sets the cooling type and that limit: air cooling defaults to 28 kW per rack and PUE 1.35, liquid cooling to 80 kW and PUE 1.15, and both stay editable. Rack-scale systems (GB200/GB300 NVL72) come as their own liquid-cooled rack; the calculator warns if they are paired with air cooling, or if a single server draws more than a rack can supply. Total facility power is IT load × PUE (default 1.35), which adds cooling and power-distribution overhead.
         </p>
+        <DecisionCallout title="Working Back From a Power Budget">
+          Many sites have a fixed power allocation rather than a fixed workload. Turn on <em>Size against a facility power budget</em> and enter the kW available: the calculator re-sizes the whole design (GPUs, network, storage and every enabled add-on, at PUE) and searches for the largest demand -- concurrent streams, peak-hour users, requests per second, or training replicas -- that fits. For training it also shows the time to train at that size.
+        </DecisionCallout>
+        <DecisionCallout title="Energy and Carbon per Token">
+          Annual energy is facility power × 8,760 hours; emissions are energy × your grid&apos;s carbon intensity (the US average is about 0.37 kg CO₂/kWh per EPA eGRID 2022; use your utility&apos;s figure). Energy per 1M output tokens is shown at full load and at your utilization: a cluster at 50% utilization uses about twice the energy per token, because it draws power around the clock. All figures use nameplate power, so they are upper bounds.
+        </DecisionCallout>
       </div>
     )
   },
@@ -2297,6 +2303,19 @@ const CORE_CONTENT = {
           Where <span className="font-mono text-sky-400">Monthly_Tokens_Generated = Cluster_Tok_Per_Sec × 3,600 × 730 × Duty_Cycle</span>, using the cluster throughput from the calculator&apos;s inference performance profile and the utilization you set. The break-even utilization is where owning and the API cost the same for the same requests; above 100% the API is cheaper at any load.
         </p>
 
+        <h3 className="text-sm font-semibold text-zinc-100 mt-6 mb-2">5. Rent vs. Buy</h3>
+        <p>
+          The Planning tab compares owning with three ways of renting the same GPUs over the TCO horizon: reserved capacity (a committed-use discount off the on-demand rate, 35% by default), on-demand around the clock, and, for inference, on-demand scaled to your utilization (assuming perfect autoscaling). Storage and add-on pools are charged at their owned cost on every line, so only the GPU servers differ.
+        </p>
+        <h3 className="text-sm font-semibold text-zinc-100 mt-6 mb-2">6. Sensitivity: What Moves the Cost</h3>
+        <p>
+          Each uncertain input (GPU price, electricity or colocation rate, PUE, support, network adder, context length, demand and, for cost per token, utilization) is moved down and up by a stated swing while everything else is held, and the whole design is re-sized. The tornado chart ranks inputs by how far they move TCO or cost per 1M tokens, which shows where a firmer quote or a better traffic estimate matters most. Because sizing moves in whole servers, some changes have no effect until they cross a server boundary.
+        </p>
+        <h3 className="text-sm font-semibold text-zinc-100 mt-6 mb-2">7. Growth Over Time</h3>
+        <p>
+          With <em>Plan capacity year by year</em> on, each year of the TCO horizon is sized for that year&apos;s demand (growing at the rate you set). A year&apos;s capex is the increase in the whole design over the previous year&apos;s, at that year&apos;s GPU price; a refresh year buys the whole design again. The plan is compared with buying the final year&apos;s capacity on day one: phasing avoids paying early for capacity that sits idle, and gains further if GPU prices fall.
+        </p>
+
         <DecisionCallout title="The Public Cloud Break-Even Crossover">
           Per-token APIs win for light or bursty traffic: you pay nothing while idle, whereas owned hardware costs the same whether it is busy or not. As sustained utilization rises, the fixed cost is spread over more tokens and on-prem cost per token falls roughly in proportion to the duty cycle, so there is a crossover point. Where it lands depends on your model size, throughput, hardware prices and the API price you would otherwise pay, and API prices for open models have fallen quickly -- so enter current prices rather than relying on rules of thumb. On-prem also brings data control and no per-token markup (raw egress bandwidth still costs money; see the Ingress &amp; Edge tab).
         </DecisionCallout>
@@ -2567,6 +2586,12 @@ export function GlossaryPage({ onBack }) {
                     Whether you are sizing a private departmental assistant or an entire multi-megawatt neo-cloud facility,
                     this guide explains the mechanical trade-offs between model parameter scale, context memory retention, sharding strategies,
                     and disaster recovery across 15 production use-case blueprints.
+                  </p>
+                  <p className="text-sm text-zinc-400 leading-relaxed mt-3">
+                    New to the calculator? <strong className="text-zinc-200">Guided setup</strong> in the header asks five plain questions
+                    (what it will do, how many people use it, how long the documents are, whether it must be air-gapped, and the vendor and budget),
+                    sizes every platform from that vendor with latency targets on, and recommends the lowest-cost design that meets them.
+                    Every setting stays editable afterwards.
                   </p>
                 </div>
 

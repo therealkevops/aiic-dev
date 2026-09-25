@@ -29,6 +29,12 @@ Built for infrastructure architects and systems engineers designing clusters for
   - **Decode (Time Per Output Token - TPOT)**: Models HBM memory bandwidth saturation ($t_{\text{mem}}$), active parameter FLOPs ($t_{\text{comp}}$), and All-Reduce communication ($t_{\text{comm}}$).
   - **Calibrated** against NVIDIA's published TensorRT-LLM max-load throughput (H100 / H200 / B200 / GB200): ~16% typical error on the fitted points, ~18% on held-out MoE models.
 
+- **Planning & Facilities**:
+  - Guided setup: five plain questions produce a starting design, sized on every platform from a vendor with latency targets.
+  - Air or liquid cooling, rack power limits, and working back from a facility power budget to the largest workload that fits.
+  - Energy and carbon per year and per 1M output tokens.
+  - Sensitivity (tornado) of TCO and cost per token, rent vs buy (reserved, on-demand, scaled to use), and year-by-year growth plans with phased purchases and hardware refresh.
+
 - **Training Time & Reliability**:
   - Time to train from 6ND (4ND for LoRA) FLOPs and MFU; GPU failure rate, Young/Daly checkpoint interval, goodput, wall-clock days and a recommended hot-spare node count.
 

@@ -6,6 +6,7 @@ import { MODEL_PRESETS, PRECISION_OPTIONS } from '../../data/models';
 
 export function WorkloadTab({ ctx }) {
   const {
+    trainingTokensB, setTrainingTokensB, trainingMfuPct, setTrainingMfuPct,
     sizingInputMode, setSizingInputMode, trafficInputType, setTrafficInputType, peakActiveUsers, setPeakActiveUsers,
     requestsPerUserPerHour, setRequestsPerUserPerHour, peakRequestsPerSec, setPeakRequestsPerSec, traffic,
     concurrency, contextLength, customKvHeads, customLayers, customNumHeads, customParams,
@@ -371,6 +372,20 @@ export function WorkloadTab({ ctx }) {
                 />
               }
             />
+
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Training tokens (billions)">
+                <input type="number" min="0.001" step="1" value={trainingTokensB}
+                  onChange={(e) => setTrainingTokensB(Math.max(0.001, Number(e.target.value) || 0.001))}
+                  className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-2 py-1.5 text-xs text-white font-mono focus:outline-none focus:border-sky-500" />
+              </Field>
+              <Field label={`Sustained MFU: ${trainingMfuPct}%`}>
+                <input type="range" min="10" max="60" step="1" value={trainingMfuPct}
+                  onChange={(e) => setTrainingMfuPct(Number(e.target.value))}
+                  className="w-full accent-sky-500 bg-zinc-800 h-1.5 rounded-lg cursor-pointer" />
+              </Field>
+            </div>
+            <div className="text-[10.5px] text-zinc-500">Tokens = dataset tokens × epochs. MFU: 35-45% is typical for well-tuned large dense runs, lower for small models, LoRA and MoE.</div>
 
             <Field label="Training Strategy">
               <select

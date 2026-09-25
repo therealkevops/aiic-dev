@@ -181,3 +181,25 @@ test('LLM-D auto-sizing fits the decode pool and scales prefill with traffic', (
   assert.equal(manual.memory.llmd.prefill.nodes, 3);
   assert.equal(manual.memory.llmd.decode.nodes, 5);
 });
+
+import { calculateTrainingTime } from '../src/utils/calculator.js';
+
+test('training time: 6ND compute, Young/Daly checkpointing and failure-driven goodput', () => {
+  const pre = applyPresetConfig(DEFAULT_CONFIG, USE_CASE_PRESETS.find(p => p.id === 'neo-frontier-pretrain').config);
+  const t = computeScenario(pre).trainingTime;
+  // 405B x 15T tokens x 6 = 3.6e25 FLOPs, in line with Meta's reported ~3.8e25 for Llama 3.1 405B.
+  assert.ok(Math.abs(t.totalFlops - 6 * 405e9 * 15000e9) / t.totalFlops < 1e-9);
+  assert.ok(t.usingOptimalInterval);
+  assert.ok(Math.abs(t.optimalIntervalMin / 60 - Math.sqrt(2 * (pre.checkpointTargetWriteTimeSec / 3600) * t.jobMtbfHours)) < 1e-9);
+  assert.ok(t.goodputPct > 80 && t.goodputPct < 100);
+  assert.ok(t.wallClockDays > t.computeDays);
+  // Slower checkpoints and more GPUs both cost goodput.
+  const slow = computeScenario({ ...pre, checkpointTargetWriteTimeSec: 900 }).trainingTime;
+  assert.ok(slow.goodputPct < t.goodputPct);
+  // LoRA costs 4ND, not 6ND.
+  const lora = computeScenario(applyPresetConfig(DEFAULT_CONFIG, USE_CASE_PRESETS.find(p => p.id === 'ent-lora-finetune').config)).trainingTime;
+  assert.ok(Math.abs(lora.flopsPerToken - 4 * 70.6e9) < 1);
+  // Tiny clusters need no standing spares; large ones do.
+  assert.equal(lora.recommendedSpareNodes, 0);
+  assert.ok(t.recommendedSpareNodes >= 1);
+});

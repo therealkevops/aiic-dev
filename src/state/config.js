@@ -35,7 +35,13 @@ export const DEFAULT_CONFIG = {
   microBatchSize: 2, // training micro-batch
   pue: 1.35,
   trainingType: 'pretrain_sft', // 'pretrain_sft' | 'lora'
-  zeroStage: 3, // 0, 1, 2, 3
+  zeroStage: 3,
+  trainingTokensB: 10, // training tokens (billions): dataset tokens x epochs
+  trainingMfuPct: 40, // Model FLOPs Utilization the run sustains
+  gpuMtbfHours: 50000, // mean GPU-hours between job-interrupting failures (per GPU)
+  checkpointIntervalMin: 0, // 0 = optimal (Young/Daly) interval
+  restartMin: 20, // detect + replace + reload time after a failure
+  nodeRepairHours: 48, // time a failed node is out of service // 0, 1, 2, 3
   selectedVendor: 'cisco', // 'cisco' | 'nvidia'
   selectedPlatformId: 'cisco-c885a-h200',
   isAutoSharding: true,
@@ -122,6 +128,12 @@ const PRESET_FALLBACKS = {
   oversubscriptionRatio: 1,
   memoryHeadroomPct: 5,
   expertParallelNodes: 1,
+  trainingTokensB: 10,
+  trainingMfuPct: 40,
+  gpuMtbfHours: 50000,
+  checkpointIntervalMin: 0,
+  restartMin: 20,
+  nodeRepairHours: 48,
   sizingInputMode: 'concurrency',
   llmdAutoSize: true,
   specMethod: 'draft-model',

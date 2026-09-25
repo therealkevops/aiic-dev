@@ -16,7 +16,7 @@ import { MLOPS_STRATEGIES } from '../data/mlops.js';
 import {
   calculateInfra, calculateStorage, calculateCost, calculateMigConsolidation, applyMigThroughputScaling,
   calculateSla, calculateRag, calculateGuardrails, calculateIngress, calculateHaDr,
-  calculateTrainingRedundancy, calculateMlops, recommendSharding, calculateTokenEconomics,
+  calculateTrainingRedundancy, calculateMlops, recommendSharding, calculateTokenEconomics, calculateTrainingTime,
 } from './calculator.js';
 
 /**
@@ -345,6 +345,26 @@ function computeScenarioCore(config) {
       })
     : { eligible: false };
 
+  // ── Training duration, failures and goodput ─────────────────────────────────
+  const trainingTime = c.workloadType === 'training'
+    ? calculateTrainingTime({
+        infraResults: results,
+        gpu,
+        precision,
+        model,
+        trainingType: c.trainingType,
+        trainingTokensB: c.trainingTokensB,
+        mfuPct: c.trainingMfuPct,
+        gpuMtbfHours: c.gpuMtbfHours,
+        checkpointWriteSec: c.checkpointTargetWriteTimeSec,
+        checkpointIntervalMin: c.checkpointIntervalMin,
+        restartMin: c.restartMin,
+        nodeRepairHours: c.nodeRepairHours,
+        pue: c.pue,
+        effectiveUsdPerGpuHour: cost.effectiveUsdPerGpuHour,
+      })
+    : { eligible: false };
+
   // ── 11. Advisories beyond the engine's own warnings ─────────────────────────
   const advisories = [];
   if (model.license?.commercial === 'non-commercial') {
@@ -362,6 +382,7 @@ function computeScenarioCore(config) {
   const warnings = [...(results.warnings || []), ...advisories];
 
   return {
+    trainingTime,
     llmdSizing: null,
     tokenEconomics,
     workloadShape,

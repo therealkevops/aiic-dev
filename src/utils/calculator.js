@@ -2371,6 +2371,102 @@ export function calculateTrainingRedundancy(config) {
   };
 }
 
+// ─── Training Time, Failures & Goodput ─────────────────────────────────────────────────────────
+/**
+ * How long a training job takes on the sized cluster, and how much of that time is lost to
+ * hardware failures and checkpointing.
+ *  - Compute: 6·N·D FLOPs for full training (forward + backward incl. weight gradients), 4·N·D
+ *    for LoRA (frozen weights need no weight-gradient matmuls); N = active parameters.
+ *  - Failures: with a per-GPU MTBF, the job as a whole fails every MTBF / GPUs hours. Each
+ *    failure loses the work since the last checkpoint (half an interval on average) plus the
+ *    restart time. Checkpoints stall the job for their write time.
+ *  - Interval: Young/Daly optimum sqrt(2 · write time · job MTBF) unless one is given.
+ *  - Spares: the fewest nodes that cover every node out for repair at once, 97.5% of the time (Poisson).
+ * Default MTBF (~50,000 GPU-hours) follows Meta's report of 419 unplanned interruptions in 54
+ * days on 16,384 H100s for Llama 3 405B training.
+ */
+export function calculateTrainingTime(config) {
+  const {
+    infraResults,
+    gpu,
+    precision,
+    model,
+    trainingType = 'pretrain_sft',
+    trainingTokensB = 10,
+    mfuPct = 40,
+    gpuMtbfHours = 50000,
+    checkpointWriteSec = 60,
+    checkpointIntervalMin = 0, // 0 = Young/Daly optimum
+    restartMin = 20,
+    nodeRepairHours = 48,
+    pue = 1.35,
+    effectiveUsdPerGpuHour = 0,
+  } = config;
+  if (infraResults.workloadType !== 'training') return { eligible: false };
+
+  const gpus = infraResults.totalGpus;
+  const gpusPerNode = infraResults.nodes > 0 ? infraResults.gpusAllocated / infraResults.nodes : 8;
+  const activeParams = (model.isMoe && model.activeParams ? model.activeParams : infraResults.totalParams) * 1e9;
+  const flopsPerToken = (trainingType === 'lora' ? 4 : 6) * activeParams;
+  const totalFlops = flopsPerToken * trainingTokensB * 1e9;
+  // Training runs in BF16 unless an FP8 training precision is chosen.
+  const peak = precision.id === 'fp8' ? peakDenseFlops(gpu, precision) : (gpu.fp16Tflops || 989) * 1e12;
+  const mfu = Math.min(0.9, Math.max(0.05, mfuPct / 100));
+  const clusterFlops = gpus * peak * mfu;
+  const computeHours = totalFlops / clusterFlops / 3600;
+
+  const jobMtbfHours = Math.max(1e-6, gpuMtbfHours / gpus);
+  const writeHours = Math.max(0, checkpointWriteSec) / 3600;
+  const optimalIntervalHours = Math.sqrt(2 * writeHours * jobMtbfHours);
+  const intervalHours = checkpointIntervalMin > 0 ? checkpointIntervalMin / 60 : optimalIntervalHours;
+  const restartHours = Math.max(0, restartMin) / 60;
+  const checkpointOverhead = writeHours / (intervalHours + writeHours);
+  const failureLoss = (intervalHours / 2 + restartHours) / jobMtbfHours;
+  const goodput = Math.max(0.01, 1 - checkpointOverhead - failureLoss);
+  const wallClockHours = computeHours / goodput;
+  const expectedFailures = wallClockHours / jobMtbfHours;
+
+  // Spare nodes: failures arrive at nodes x gpusPerNode / MTBF per hour; each keeps a node out
+  // for the repair time. Cover the Poisson mean + 2 sigma of nodes out at once.
+  const nodeFailuresPerHour = gpus / gpuMtbfHours;
+  const meanNodesOut = nodeFailuresPerHour * Math.max(0, nodeRepairHours);
+  // Smallest spare count n with P(more than n nodes out at once) < 2.5% (Poisson).
+  let recommendedSpareNodes = 0;
+  if (meanNodesOut > 0) {
+    let term = Math.exp(-meanNodesOut);
+    let cdf = term;
+    while (1 - cdf >= 0.025 && recommendedSpareNodes < 10000) {
+      recommendedSpareNodes++;
+      term *= meanNodesOut / recommendedSpareNodes;
+      cdf += term;
+    }
+  }
+  const recommendedSparePct = infraResults.nodes > 0 ? (recommendedSpareNodes / infraResults.nodes) * 100 : 0;
+
+  const itKw = infraResults.facility.totalItPowerKw;
+  return {
+    eligible: true,
+    totalFlops,
+    flopsPerToken,
+    clusterPflops: clusterFlops / 1e15,
+    computeDays: computeHours / 24,
+    wallClockDays: wallClockHours / 24,
+    goodputPct: goodput * 100,
+    checkpointOverheadPct: checkpointOverhead * 100,
+    failureLossPct: failureLoss * 100,
+    jobMtbfHours,
+    checkpointIntervalMin: intervalHours * 60,
+    optimalIntervalMin: optimalIntervalHours * 60,
+    usingOptimalInterval: !(checkpointIntervalMin > 0),
+    expectedFailures,
+    recommendedSpareNodes,
+    recommendedSparePct,
+    gpusPerNode,
+    energyMwh: (itKw * pue * wallClockHours) / 1000,
+    computeCostUsd: effectiveUsdPerGpuHour * gpus * wallClockHours,
+  };
+}
+
 // ─── MLOps Lifecycle: Canary / Shadow / Blue-Green Validation Pool ─────────────────────────────
 /**
  * Sizes the standing compute pool a safe model-rollout strategy needs alongside the primary

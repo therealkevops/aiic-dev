@@ -6,30 +6,15 @@ import {
   HardDrive, Zap, DollarSign, AlertTriangle, Terminal, ShieldCheck
 } from 'lucide-react';
 import { COMPLIANCE_FRAMEWORKS, CONTROL_DOMAINS, STATUS, evaluateControlDomains } from '../data/security';
+import { Banner, Tag, Rows, Row, SectionLabel } from './ui';
 
-function Badge({ children, variant = 'sky' }) {
-  const styles = {
-    sky: 'bg-sky-950/60 text-sky-400 border-sky-800/60',
-    zinc: 'bg-zinc-800/70 text-zinc-300 border-zinc-700/60',
-    emerald: 'bg-emerald-950/60 text-emerald-400 border-emerald-800/60',
-    amber: 'bg-amber-950/60 text-amber-400 border-amber-800/60',
-    purple: 'bg-purple-950/60 text-purple-400 border-purple-800/60',
-  };
-  return (
-    <span className={`inline-flex items-center px-2 py-0.5 rounded text-[11px] font-mono border ${styles[variant] || styles.sky}`}>
-      {children}
-    </span>
-  );
-}
-
+// A decision/trade-off callout is just an info Banner with a fixed title -- same visual
+// language as every other banner in the app, instead of a second bespoke "callout" style.
 function DecisionCallout({ title = 'Architectural Decision', children }) {
   return (
-    <div className="my-6 flex gap-3.5 items-start bg-sky-950/20 border-l-[3px] border-sky-500 py-4 px-5 text-[14px] rounded-r-lg">
-      <div className="space-y-1">
-        <span className="text-sky-400 font-semibold text-xs tracking-wider uppercase block">{title}</span>
-        <div className="text-zinc-200 leading-relaxed text-[13.5px]">{children}</div>
-      </div>
-    </div>
+    <Banner tone="info" icon={Info} title={title}>
+      {children}
+    </Banner>
   );
 }
 
@@ -1792,7 +1777,7 @@ const CORE_CONTENT = {
         <DecisionCallout title="Unquantized Embedding & LM Head Overhead">
           Production inference engines (vLLM, TensorRT-LLM) retain the token embedding table and final language model projection head (<span className="font-mono">lm_head</span>) at full 16-bit precision (BF16 = 2 bytes) even when weights are quantized. This prevents catastrophic logit collapse, adding <span className="font-mono">2 × vocab × hidden × 2 bytes</span> of unquantized memory to every model.
         </DecisionCallout>
-        <h3 className="text-xl font-bold text-white mt-8 mb-3">Mixture of Experts (MoE) Memory Residency</h3>
+        <h3 className="text-sm font-semibold text-zinc-100 mt-6 mb-2">Mixture of Experts (MoE) Memory Residency</h3>
         <p>
           In MoE models like DeepSeek-V3 or Mixtral, only a small subset of parameter "experts" are active during the generation of any single token. For example, DeepSeek R1 has 671B total parameters, but only routes 37B active parameters per token.
         </p>
@@ -1845,15 +1830,15 @@ const CORE_CONTENT = {
         </p>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs font-mono my-4">
           <div className="p-3.5 bg-zinc-900 border border-zinc-800 rounded-lg">
-            <span className="text-sky-400 font-bold block mb-1">Tensor Parallel (TP)</span>
+            <span className="text-sky-400 font-semibold block mb-1">Tensor Parallel (TP)</span>
             Shards matrix GEMMs within a layer. All-Reduce after EVERY layer. Must remain on NVLink (TP ≤ 8).
           </div>
           <div className="p-3.5 bg-zinc-900 border border-zinc-800 rounded-lg">
-            <span className="text-amber-400 font-bold block mb-1">Pipeline Parallel (PP)</span>
+            <span className="text-amber-400 font-semibold block mb-1">Pipeline Parallel (PP)</span>
             Partitions layers across chassis (L / PP). Bridges over network fabric. Introduces bubble idle time.
           </div>
           <div className="p-3.5 bg-zinc-900 border border-zinc-800 rounded-lg">
-            <span className="text-emerald-400 font-bold block mb-1">Data Parallel (DP)</span>
+            <span className="text-emerald-400 font-semibold block mb-1">Data Parallel (DP)</span>
             Replicates model to split concurrent streams. The true lever for scaling concurrency to thousands of users.
           </div>
         </div>
@@ -1957,7 +1942,7 @@ const CORE_CONTENT = {
           to absorb intense GPU bursts.
         </p>
 
-        <h3 className="text-xl font-bold text-white mt-8 mb-3">1. Distributed Training Checkpoint Write-Time Budgets</h3>
+        <h3 className="text-sm font-semibold text-zinc-100 mt-6 mb-2">1. Distributed Training Checkpoint Write-Time Budgets</h3>
         <p>
           During frontier pretraining or full fine-tuning, every GPU periodically dumps its active state to persistent storage. 
           The checkpoint payload contains model weights plus optimizer states:
@@ -1977,7 +1962,7 @@ const CORE_CONTENT = {
           If a 1,024-GPU cluster generates a 40TB checkpoint dump and your storage tier only sustains 20 GB/s write throughput, the cluster hangs for 2,000 seconds (33.3 minutes). At an effective operating cost of $3.50/GPU-hour, each checkpoint dump burns nearly $2,000 in wasted idle compute. Sizing storage throughput to keep checkpoint stalls under 2 minutes is paramount.
         </DecisionCallout>
 
-        <h3 className="text-xl font-bold text-white mt-8 mb-3">2. Inference KV Cache NVMe Offloading Mechanics</h3>
+        <h3 className="text-sm font-semibold text-zinc-100 mt-6 mb-2">2. Inference KV Cache NVMe Offloading Mechanics</h3>
         <p>
           In massive long-context reasoning models (32k to 128k context) or multi-tenant agent platforms, GPU HBM is often overwhelmed by inactive session KV caches. 
           Inference engines support hierarchical KV offloading to local high-speed NVMe or ultra-low-latency network flash (NVMe-oF):
@@ -1990,7 +1975,7 @@ const CORE_CONTENT = {
           without dropping token emission speeds below interactive user thresholds.
         </p>
 
-        <h3 className="text-xl font-bold text-white mt-8 mb-3">3. Storage Durability Overheads: Erasure Coding vs 3x Replication</h3>
+        <h3 className="text-sm font-semibold text-zinc-100 mt-6 mb-2">3. Storage Durability Overheads: Erasure Coding vs 3x Replication</h3>
         <p>
           Storage capacity must account for fault tolerance and hardware durability. While raw physical flash drives are purchased, 
           usable storage capacity is dictated by the durability scheme:
@@ -2027,59 +2012,59 @@ const CORE_CONTENT = {
           Decode_Tok_Per_Sec_Single_Stream ≈ Accelerator_HBM_Bandwidth_TBps / Model_Weight_Memory_TB
         </div>
 
-        <h3 className="text-xl font-bold text-white mt-8 mb-3">Accelerator Comparison Matrix</h3>
-        <div className="overflow-x-auto">
-          <table className="w-full text-xs text-left border border-zinc-800 rounded-lg">
-            <thead className="bg-zinc-900 text-zinc-400 font-mono uppercase text-[11px]">
+        <h3 className="text-sm font-semibold text-zinc-100 mt-6 mb-2">Accelerator Comparison Matrix</h3>
+        <div className="overflow-x-auto rounded-lg border border-zinc-800">
+          <table className="w-full text-xs text-left border-collapse">
+            <thead className="bg-zinc-900 text-zinc-400 uppercase text-[11px] tracking-wide">
               <tr>
-                <th className="p-3 border-b border-zinc-800">Accelerator</th>
-                <th className="p-3 border-b border-zinc-800">HBM Capacity</th>
-                <th className="p-3 border-b border-zinc-800">Memory Bandwidth</th>
-                <th className="p-3 border-b border-zinc-800">Interconnect</th>
-                <th className="p-3 border-b border-zinc-800">TDP (Watts)</th>
-                <th className="p-3 border-b border-zinc-800">Ideal Role</th>
+                <th className="p-3">Accelerator</th>
+                <th className="p-3">HBM Capacity</th>
+                <th className="p-3">Memory Bandwidth</th>
+                <th className="p-3">Interconnect</th>
+                <th className="p-3">TDP</th>
+                <th className="p-3">Ideal Role</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-zinc-800 font-mono text-zinc-300">
-              <tr className="hover:bg-zinc-900/40">
-                <td className="p-3 font-semibold text-white">NVIDIA H100 SXM5</td>
-                <td className="p-3 text-sky-400">80 GB HBM3</td>
-                <td className="p-3">3.35 TB/s</td>
-                <td className="p-3">900 GB/s NVLink 4</td>
-                <td className="p-3">700W</td>
-                <td className="p-3 font-sans text-xs text-zinc-300">Enterprise training &amp; standard context inference</td>
+            <tbody className="divide-y divide-zinc-800/70">
+              <tr>
+                <td className="p-3 font-semibold text-zinc-200">NVIDIA H100 SXM5</td>
+                <td className="p-3 text-zinc-300">80 GB HBM3</td>
+                <td className="p-3 text-zinc-300">3.35 TB/s</td>
+                <td className="p-3 text-zinc-400">900 GB/s NVLink 4</td>
+                <td className="p-3 text-zinc-400">700W</td>
+                <td className="p-3 text-zinc-400">Enterprise training &amp; standard context inference</td>
               </tr>
-              <tr className="hover:bg-zinc-900/40">
-                <td className="p-3 font-semibold text-white">NVIDIA H200 SXM5</td>
-                <td className="p-3 text-emerald-400 font-bold">141 GB HBM3e</td>
-                <td className="p-3 text-emerald-400 font-bold">4.80 TB/s (+43%)</td>
-                <td className="p-3">900 GB/s NVLink 4</td>
-                <td className="p-3">700W</td>
-                <td className="p-3 font-sans text-xs text-zinc-300">Long-context 70B serving &amp; multi-stream RAG</td>
+              <tr>
+                <td className="p-3 font-semibold text-zinc-200">NVIDIA H200 SXM5</td>
+                <td className="p-3 text-zinc-300">141 GB HBM3e</td>
+                <td className="p-3 text-zinc-300">4.80 TB/s (+43%)</td>
+                <td className="p-3 text-zinc-400">900 GB/s NVLink 4</td>
+                <td className="p-3 text-zinc-400">700W</td>
+                <td className="p-3 text-zinc-400">Long-context 70B serving &amp; multi-stream RAG</td>
               </tr>
-              <tr className="hover:bg-zinc-900/40">
-                <td className="p-3 font-semibold text-white">NVIDIA B200 (Blackwell)</td>
-                <td className="p-3 text-purple-400 font-bold">192 GB HBM3e</td>
-                <td className="p-3 text-purple-400 font-bold">8.00 TB/s (+138%)</td>
-                <td className="p-3 text-purple-400">1,800 GB/s NVLink 5</td>
-                <td className="p-3 text-amber-400">1000W</td>
-                <td className="p-3 font-sans text-xs text-zinc-300">Frontier pretraining, NVFP4 inference, MoE models</td>
+              <tr>
+                <td className="p-3 font-semibold text-zinc-200">NVIDIA B200 (Blackwell)</td>
+                <td className="p-3 text-zinc-300">192 GB HBM3e</td>
+                <td className="p-3 text-zinc-300">8.00 TB/s (+138%)</td>
+                <td className="p-3 text-zinc-400">1,800 GB/s NVLink 5</td>
+                <td className="p-3 text-zinc-400">1000W</td>
+                <td className="p-3 text-zinc-400">Frontier pretraining, NVFP4 inference, MoE models</td>
               </tr>
-              <tr className="hover:bg-zinc-900/40">
-                <td className="p-3 font-semibold text-white">NVIDIA L40S (PCIe)</td>
-                <td className="p-3 text-amber-400">48 GB GDDR6</td>
-                <td className="p-3 text-red-400 font-bold">0.864 TB/s (4x lower)</td>
-                <td className="p-3 text-red-400">PCIe Gen5 (64 GB/s)</td>
-                <td className="p-3">350W</td>
-                <td className="p-3 font-sans text-xs text-zinc-300">Vector embeddings, vision encoders, 8B models</td>
+              <tr>
+                <td className="p-3 font-semibold text-zinc-200">NVIDIA L40S (PCIe)</td>
+                <td className="p-3 text-zinc-300">48 GB GDDR6</td>
+                <td className="p-3 text-amber-400">0.864 TB/s (4x lower)</td>
+                <td className="p-3 text-amber-400">PCIe Gen5 (64 GB/s)</td>
+                <td className="p-3 text-zinc-400">350W</td>
+                <td className="p-3 text-zinc-400">Vector embeddings, vision encoders, 8B models</td>
               </tr>
-              <tr className="hover:bg-zinc-900/40">
-                <td className="p-3 font-semibold text-white">AMD Instinct MI300X</td>
-                <td className="p-3 text-sky-400 font-bold">192 GB HBM3</td>
-                <td className="p-3 text-sky-400 font-bold">5.30 TB/s</td>
-                <td className="p-3">896 GB/s Infinity Fabric</td>
-                <td className="p-3">750W</td>
-                <td className="p-3 font-sans text-xs text-zinc-300">Single-node 70B FP16 &amp; dense MoE inference</td>
+              <tr>
+                <td className="p-3 font-semibold text-zinc-200">AMD Instinct MI300X</td>
+                <td className="p-3 text-zinc-300">192 GB HBM3</td>
+                <td className="p-3 text-zinc-300">5.30 TB/s</td>
+                <td className="p-3 text-zinc-400">896 GB/s Infinity Fabric</td>
+                <td className="p-3 text-zinc-400">750W</td>
+                <td className="p-3 text-zinc-400">Single-node 70B FP16 &amp; dense MoE inference</td>
               </tr>
             </tbody>
           </table>
@@ -2102,7 +2087,7 @@ const CORE_CONTENT = {
           and <strong>Ongoing Operational Expenditures (OpEx)</strong> over an enterprise hardware lifecycle (typically 3 to 5 years).
         </p>
 
-        <h3 className="text-xl font-bold text-white mt-8 mb-3">1. CapEx Breakdown &amp; Hardware Amortization</h3>
+        <h3 className="text-sm font-semibold text-zinc-100 mt-6 mb-2">1. CapEx Breakdown &amp; Hardware Amortization</h3>
         <p>
           Total initial acquisition cost aggregates three physical subsystems:
         </p>
@@ -2115,7 +2100,7 @@ const CORE_CONTENT = {
           Monthly_Amortized_CapEx = Total_CapEx / (TCO_Years × 12)
         </div>
 
-        <h3 className="text-xl font-bold text-white mt-8 mb-3">2. OpEx: Power, Cooling PUE, Colocation &amp; Software</h3>
+        <h3 className="text-sm font-semibold text-zinc-100 mt-6 mb-2">2. OpEx: Power, Cooling PUE, Colocation &amp; Software</h3>
         <p>
           Operating an AI datacenter incurs continuous facilities and operational fees:
         </p>
@@ -2129,7 +2114,7 @@ const CORE_CONTENT = {
           <li><strong>Vendor Hardware Support:</strong> Mission-critical 4-hour on-site maintenance (e.g. Cisco SMARTnet at 10–12% of hardware CapEx annually).</li>
         </ul>
 
-        <h3 className="text-xl font-bold text-white mt-8 mb-3">3. Unit Economics: Fully Loaded Cost per 1M Tokens</h3>
+        <h3 className="text-sm font-semibold text-zinc-100 mt-6 mb-2">3. Unit Economics: Fully Loaded Cost per 1M Tokens</h3>
         <p>
           To compare on-premise infrastructure against cloud APIs, total monthly cost (CapEx + OpEx) is converted into an effective <strong>cost per 1 million tokens</strong>:
         </p>
@@ -2179,7 +2164,7 @@ const CORE_CONTENT = {
           </table>
         </div>
 
-        <h3 className="text-xl font-bold text-white mt-8 mb-3">1. Frameworks Referenced</h3>
+        <h3 className="text-sm font-semibold text-zinc-100 mt-6 mb-2">1. Frameworks Referenced</h3>
         <p>
           This chapter's checklists reference six commonly-encountered frameworks by name so the mapping is concrete, not to claim
           certification against any of them:
@@ -2193,11 +2178,11 @@ const CORE_CONTENT = {
           ))}
         </div>
 
-        <h3 className="text-xl font-bold text-white mt-8 mb-3">2. Posture Levels</h3>
+        <h3 className="text-sm font-semibold text-zinc-100 mt-6 mb-2">2. Posture Levels</h3>
         <ul className="list-disc pl-5 space-y-2 text-zinc-300 text-sm">
           <li><strong className="text-emerald-400">Strong:</strong> the currently-selected configuration directly addresses this control domain.</li>
           <li><strong className="text-amber-400">Partial:</strong> a component is sized, but it doesn't fully satisfy the control on its own (e.g. a load balancer terminates TLS but doesn't enforce API-level auth).</li>
-          <li><strong className="text-rose-400">Gap:</strong> nothing in the current configuration addresses this control domain -- it would need to be added, either by enabling an existing tab (MIG, Guardrails, Ingress, HA/DR, MLOps) or by a layer outside this calculator entirely.</li>
+          <li><strong className="text-red-400">Gap:</strong> nothing in the current configuration addresses this control domain -- it would need to be added, either by enabling an existing tab (MIG, Guardrails, Ingress, HA/DR, MLOps) or by a layer outside this calculator entirely.</li>
           <li><strong className="text-zinc-400">Not applicable:</strong> the control domain doesn't apply to this workload shape (e.g. tenant isolation for a single offline training job).</li>
           <li><strong className="text-zinc-500">Out of scope:</strong> this calculator does not size the control at all, regardless of configuration (encryption is the only domain in this category today).</li>
         </ul>
@@ -2211,11 +2196,11 @@ const CORE_CONTENT = {
 };
 
 const STATUS_STYLES = {
-  [STATUS.STRONG]: { label: 'Strong', className: 'bg-emerald-950/40 text-emerald-400 border-emerald-800/50' },
-  [STATUS.PARTIAL]: { label: 'Partial', className: 'bg-amber-950/40 text-amber-400 border-amber-800/50' },
-  [STATUS.GAP]: { label: 'Gap', className: 'bg-rose-950/40 text-rose-400 border-rose-800/50' },
-  [STATUS.NOT_APPLICABLE]: { label: 'N/A', className: 'bg-zinc-800/60 text-zinc-400 border-zinc-700/60' },
-  [STATUS.OUT_OF_SCOPE]: { label: 'Out of Scope', className: 'bg-zinc-800/40 text-zinc-500 border-zinc-700/50' },
+  [STATUS.STRONG]: { label: 'Strong', tone: 'good' },
+  [STATUS.PARTIAL]: { label: 'Partial', tone: 'warn' },
+  [STATUS.GAP]: { label: 'Gap', tone: 'danger' },
+  [STATUS.NOT_APPLICABLE]: { label: 'N/A', tone: 'neutral' },
+  [STATUS.OUT_OF_SCOPE]: { label: 'Out of Scope', tone: 'neutral' },
 };
 
 function ComplianceChecklist({ facts }) {
@@ -2226,12 +2211,10 @@ function ComplianceChecklist({ facts }) {
         const domain = CONTROL_DOMAINS.find(d => d.id === r.domainId);
         const style = STATUS_STYLES[r.status] || STATUS_STYLES[STATUS.GAP];
         return (
-          <div key={r.domainId} className="p-3.5 bg-zinc-900/90 border border-zinc-800 rounded-xl text-xs space-y-1.5">
+          <div key={r.domainId} className="p-3.5 bg-zinc-900 border border-zinc-800 rounded-xl text-xs space-y-1.5">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <span className="font-semibold text-zinc-200 text-sm">{domain?.name || r.domainId}</span>
-              <span className={`inline-flex items-center px-2 py-0.5 rounded text-[11px] font-mono border ${style.className}`}>
-                {style.label}
-              </span>
+              <Tag tone={style.tone} mono={false}>{style.label}</Tag>
             </div>
             <p className="text-zinc-400 leading-relaxed">{r.note}</p>
           </div>
@@ -2285,9 +2268,9 @@ export function GlossaryPage({ onBack }) {
   }, [searchQuery]);
 
   return (
-    <div className="h-screen w-screen flex flex-col bg-zinc-950 text-zinc-100 antialiased overflow-hidden selection:bg-sky-500/30">
+    <div className="h-screen w-screen flex flex-col bg-zinc-950 text-zinc-100 antialiased overflow-hidden">
       {/* Top Header */}
-      <header className="px-6 py-3.5 bg-zinc-950/90 backdrop-blur-lg border-b border-zinc-800/80 shrink-0 flex items-center justify-between z-20 sticky top-0 shadow-md shadow-black/40">
+      <header className="px-4 py-2.5 bg-zinc-900/95 border-b border-zinc-800 shrink-0 flex items-center justify-between z-10">
         <div className="flex items-center gap-4">
           <button
             type="button"
@@ -2308,9 +2291,9 @@ export function GlossaryPage({ onBack }) {
       {/* Main Hub Body */}
       <div className="flex-1 flex overflow-hidden">
         {/* Left Documentation Navigation Sidebar */}
-        <aside className="w-72 shrink-0 bg-zinc-950/70 border-r border-zinc-800/80 flex flex-col h-full overflow-hidden">
+        <aside className="w-72 shrink-0 bg-zinc-900/95 border-r border-zinc-800 flex flex-col h-full overflow-hidden">
           {/* Search Bar */}
-          <div className="p-4 border-b border-zinc-800/60">
+          <div className="p-3 border-b border-zinc-800">
             <div className="relative">
               <Search className="w-3.5 h-3.5 text-zinc-500 absolute left-3 top-1/2 -translate-y-1/2" />
               <input
@@ -2324,7 +2307,7 @@ export function GlossaryPage({ onBack }) {
           </div>
 
           {/* Navigation Links Grouped with Collapsible Headers */}
-          <nav className="flex-1 overflow-y-auto p-4 space-y-4">
+          <nav className="flex-1 overflow-y-auto p-3 space-y-3">
             {filteredGroups.map((group) => {
               const isCollapsed = Boolean(collapsedGroups[group.id]);
               return (
@@ -2332,7 +2315,7 @@ export function GlossaryPage({ onBack }) {
                   {/* Collapsible Section Header Button */}
                   <button
                     onClick={() => toggleGroup(group.id)}
-                    className="w-full flex items-center justify-between px-2 py-1 mb-1 text-[11px] font-bold text-zinc-500 hover:text-zinc-300 uppercase tracking-wider rounded transition cursor-pointer group"
+                    className="w-full flex items-center justify-between px-2 py-1 mb-1 text-[11px] font-semibold text-zinc-500 hover:text-zinc-300 uppercase tracking-wider rounded transition cursor-pointer group"
                   >
                     <span>{group.title}</span>
                     <span className="text-zinc-600 group-hover:text-zinc-400 transition-transform">
@@ -2374,7 +2357,7 @@ export function GlossaryPage({ onBack }) {
         </aside>
 
         {/* Right Active Document Pane */}
-        <main className="flex-1 overflow-y-auto p-8 lg:p-12">
+        <main className="flex-1 overflow-y-auto p-6 lg:p-8">
           <div className="max-w-4xl mx-auto">
             
             {/* Breadcrumb Navigation */}
@@ -2389,33 +2372,33 @@ export function GlossaryPage({ onBack }) {
             {/* Document Content Rendering */}
             {activeDocId === 'overview' ? (
               <div>
-                <div className="mb-10 pb-8 border-b border-zinc-800">
-                  <h1 className="text-4xl font-extrabold text-white tracking-tight mb-4">
+                <div className="mb-6 pb-4 border-b border-zinc-800">
+                  <h1 className="text-xl font-semibold text-white tracking-tight mb-3">
                     Enterprise AI Architecture &amp; Sizing Reference
                   </h1>
-                  <p className="text-base text-zinc-300 leading-relaxed mb-4">
-                    Welcome to the technical documentation hub for the AI Infrastructure Sizing Calculator. 
-                    This resource bridges the gap between high-level artificial intelligence strategy and low-level datacenter systems engineering. 
-                    Deploying generative AI inside an enterprise is fundamentally governed by physical silicon laws: High Bandwidth Memory (HBM) capacity, 
+                  <p className="text-sm text-zinc-300 leading-relaxed mb-3">
+                    Welcome to the technical documentation hub for the AI Infrastructure Sizing Calculator.
+                    This resource bridges the gap between high-level artificial intelligence strategy and low-level datacenter systems engineering.
+                    Deploying generative AI inside an enterprise is fundamentally governed by physical silicon laws: High Bandwidth Memory (HBM) capacity,
                     lossless networking bisection bandwidth, electrical power delivery, and cooling thresholds.
                   </p>
                   <p className="text-sm text-zinc-400 leading-relaxed">
-                    Whether you are sizing a private departmental assistant or an entire multi-megawatt neo-cloud facility, 
-                    this guide explains the mechanical trade-offs between model parameter scale, context memory retention, sharding strategies, 
+                    Whether you are sizing a private departmental assistant or an entire multi-megawatt neo-cloud facility,
+                    this guide explains the mechanical trade-offs between model parameter scale, context memory retention, sharding strategies,
                     and disaster recovery across 15 production use-case blueprints.
                   </p>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-12">
-                  <div 
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-6">
+                  <div
                     onClick={() => setActiveDocId('chap-1-memory')}
-                    className="p-5 bg-zinc-900/70 border border-zinc-800 hover:border-sky-500/50 rounded-xl transition cursor-pointer group"
+                    className="p-3.5 bg-zinc-900 border border-zinc-800 hover:border-zinc-700 rounded-xl transition cursor-pointer"
                   >
-                    <div className="flex items-center gap-2.5 mb-2">
-                      <Cpu className="w-5 h-5 text-sky-400" />
-                      <h3 className="font-semibold text-zinc-100 group-hover:text-sky-300 transition">Core Foundations</h3>
+                    <div className="flex items-center gap-2 mb-1.5">
+                      <Cpu className="w-4 h-4 text-sky-400" />
+                      <h3 className="text-sm font-semibold text-zinc-100">Core Foundations</h3>
                     </div>
-                    <p className="text-xs text-zinc-400 leading-relaxed mb-3">
+                    <p className="text-xs text-zinc-400 leading-relaxed mb-2">
                       Deep-dive into silicon memory sizing, KV cache attention mechanics, rail-optimized Clos networks, Erlang C queueing, storage durability math, accelerator comparisons, and TCO unit economics.
                     </p>
                     <span className="text-xs text-sky-400 font-medium flex items-center gap-1">
@@ -2423,30 +2406,30 @@ export function GlossaryPage({ onBack }) {
                     </span>
                   </div>
 
-                  <div 
+                  <div
                     onClick={() => setActiveDocId('ent-rag-assistant')}
-                    className="p-5 bg-zinc-900/70 border border-zinc-800 hover:border-sky-500/50 rounded-xl transition cursor-pointer group"
+                    className="p-3.5 bg-zinc-900 border border-zinc-800 hover:border-zinc-700 rounded-xl transition cursor-pointer"
                   >
-                    <div className="flex items-center gap-2.5 mb-2">
-                      <Briefcase className="w-5 h-5 text-emerald-400" />
-                      <h3 className="font-semibold text-zinc-100 group-hover:text-emerald-300 transition">Workload Presets Guide</h3>
+                    <div className="flex items-center gap-2 mb-1.5">
+                      <Briefcase className="w-4 h-4 text-sky-400" />
+                      <h3 className="text-sm font-semibold text-zinc-100">Workload Presets Guide</h3>
                     </div>
-                    <p className="text-xs text-zinc-400 leading-relaxed mb-3">
+                    <p className="text-xs text-zinc-400 leading-relaxed mb-2">
                       Exhaustive architectural specifications, model selection rationales, and alternative comparisons for all 15 presets.
                     </p>
-                    <span className="text-xs text-emerald-400 font-medium flex items-center gap-1">
+                    <span className="text-xs text-sky-400 font-medium flex items-center gap-1">
                       Browse Presets <ChevronRight className="w-3 h-3" />
                     </span>
                   </div>
                 </div>
 
-                <div className="space-y-4">
-                  <h3 className="text-lg font-bold text-white">How This Documentation Works</h3>
+                <div className="space-y-3">
+                  <h3 className="text-sm font-semibold text-zinc-100">How This Documentation Works</h3>
                   <p className="text-sm text-zinc-400 leading-relaxed">
-                    Use the collapsible left navigation sidebar to browse or search any specific chapter or preset blueprint. 
+                    Use the collapsible left navigation sidebar to browse or search any specific chapter or preset blueprint.
                     Each page is an independent architectural document detailing:
                   </p>
-                  <ul className="list-disc pl-5 space-y-2 text-sm text-zinc-300">
+                  <ul className="list-disc pl-5 space-y-1.5 text-sm text-zinc-300">
                     <li><strong>Explanatory Foundation:</strong> Clear systems engineering introductions framing the operational challenge before technical data.</li>
                     <li><strong>Silicon &amp; Sharding Topology:</strong> Why specific GPUs and sharding parameters (TP/PP/DP) were chosen.</li>
                     <li><strong>Context &amp; KV Cache Dynamics:</strong> How context length and prefix caching ratios govern physical memory capacity.</li>
@@ -2459,10 +2442,10 @@ export function GlossaryPage({ onBack }) {
             ) : currentDoc.type === 'core' ? (
               <div>
                 {/* Core Foundation Chapter */}
-                <div className="mb-8 pb-6 border-b border-zinc-800">
-                  <div className="flex items-center gap-3 mb-2">
-                    <currentDoc.icon className="w-7 h-7 text-sky-400" />
-                    <h1 className="text-3xl font-extrabold text-white tracking-tight">
+                <div className="mb-5 pb-4 border-b border-zinc-800">
+                  <div className="flex items-center gap-2 mb-1.5">
+                    <currentDoc.icon className="w-4 h-4 text-sky-400" />
+                    <h1 className="text-lg font-semibold text-white tracking-tight">
                       {CORE_CONTENT[activeDocId]?.title || currentDoc.title}
                     </h1>
                   </div>
@@ -2473,9 +2456,10 @@ export function GlossaryPage({ onBack }) {
 
                 {/* Explanatory Lead Introduction */}
                 {CORE_CONTENT[activeDocId]?.introduction && (
-                  <div className="bg-sky-950/20 border border-sky-800/40 rounded-xl p-5 mb-8 text-zinc-200 text-[14.5px] leading-relaxed flex items-start gap-3.5">
-                    <Info className="w-5 h-5 text-sky-400 shrink-0 mt-0.5" />
-                    <p>{CORE_CONTENT[activeDocId]?.introduction}</p>
+                  <div className="mb-5">
+                    <Banner tone="info" icon={Info}>
+                      {CORE_CONTENT[activeDocId]?.introduction}
+                    </Banner>
                   </div>
                 )}
 
@@ -2491,17 +2475,17 @@ export function GlossaryPage({ onBack }) {
                   if (!preset) return <p className="text-zinc-400">Blueprint not found.</p>;
                   return (
                     <div>
-                      <div className="mb-8 pb-6 border-b border-zinc-800">
-                        <div className="flex flex-wrap items-center gap-2 mb-2">
-                          <Badge variant="purple">{currentDoc.category.toUpperCase()}</Badge>
+                      <div className="mb-5 pb-4 border-b border-zinc-800">
+                        <div className="flex flex-wrap items-center gap-2 mb-1.5">
+                          <Tag tone="neutral" mono={false}>{currentDoc.category.toUpperCase()}</Tag>
                           <span className="text-xs font-mono text-zinc-500">preset_id: {activeDocId}</span>
                         </div>
-                        <h1 className="text-3xl font-extrabold text-white tracking-tight mb-2">{preset.title}</h1>
-                        <p className="text-sm text-sky-400 font-medium mb-4">{preset.summary}</p>
-                        
+                        <h1 className="text-lg font-semibold text-white tracking-tight mb-1.5">{preset.title}</h1>
+                        <p className="text-sm text-sky-400 font-medium mb-3">{preset.summary}</p>
+
                         {/* Explanatory Blueprint Introduction */}
                         {preset.introduction && (
-                          <div className="text-[14.5px] text-zinc-300 leading-relaxed space-y-3 pt-2">
+                          <div className="text-sm text-zinc-300 leading-relaxed space-y-3 pt-2">
                             {Array.isArray(preset.introduction) ? (
                               preset.introduction.map((para, i) => <p key={i}>{para}</p>)
                             ) : (
@@ -2512,7 +2496,7 @@ export function GlossaryPage({ onBack }) {
                       </div>
 
                       {/* Specs Grid */}
-                      <div className="bg-zinc-900/80 border border-zinc-800/80 rounded-xl p-4 mb-8 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 text-xs">
+                      <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 mb-5 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 text-xs">
                         <div>
                           <span className="text-zinc-500 block text-[11px] uppercase font-mono">Model / Precision</span>
                           <span className="font-semibold text-zinc-200">{preset.specs.model}</span>
@@ -2560,9 +2544,9 @@ export function GlossaryPage({ onBack }) {
                       </div>
 
                       {/* Rationales */}
-                      <div className="space-y-8 text-[15px] text-zinc-300 leading-relaxed">
+                      <div className="space-y-6 text-[14px] text-zinc-300 leading-relaxed">
                         <div>
-                          <h3 className="text-base font-bold text-white mb-2 flex items-center gap-2">
+                          <h3 className="text-sm font-semibold text-zinc-100 mb-2 flex items-center gap-2">
                             <Cpu className="w-4 h-4 text-sky-400" />
                             1. Why this Silicon &amp; Sharding Topology?
                           </h3>
@@ -2570,7 +2554,7 @@ export function GlossaryPage({ onBack }) {
                         </div>
 
                         <div>
-                          <h3 className="text-base font-bold text-white mb-2 flex items-center gap-2">
+                          <h3 className="text-sm font-semibold text-zinc-100 mb-2 flex items-center gap-2">
                             <Database className="w-4 h-4 text-sky-400" />
                             2. Memory, KV Cache &amp; Context Dynamics
                           </h3>
@@ -2578,7 +2562,7 @@ export function GlossaryPage({ onBack }) {
                         </div>
 
                         <div>
-                          <h3 className="text-base font-bold text-white mb-2 flex items-center gap-2">
+                          <h3 className="text-sm font-semibold text-zinc-100 mb-2 flex items-center gap-2">
                             <Network className="w-4 h-4 text-sky-400" />
                             3. Ancillary Subsystems: RAG, Guardrails, Storage &amp; HA/DR
                           </h3>
@@ -2587,20 +2571,18 @@ export function GlossaryPage({ onBack }) {
 
                         {/* Model Selection & Alternatives Evaluation */}
                         <div>
-                          <h3 className="text-base font-bold text-white mb-2 flex items-center gap-2">
+                          <h3 className="text-sm font-semibold text-zinc-100 mb-2 flex items-center gap-2">
                             <Layers className="w-4 h-4 text-emerald-400" />
                             4. Model Selection &amp; Alternative Architectures
                           </h3>
                           <p className="mb-4">{preset.rationale.modelSelection}</p>
 
                           {preset.rationale.modelAlternatives && (
-                            <div className="space-y-3 mt-4">
-                              <span className="text-xs font-mono uppercase text-zinc-400 font-semibold block">
-                                Architectural Alternatives Comparison:
-                              </span>
+                            <div className="space-y-2 mt-3">
+                              <SectionLabel>Architectural Alternatives Comparison</SectionLabel>
                               <div className="grid grid-cols-1 gap-3">
                                 {preset.rationale.modelAlternatives.map((alt, idx) => (
-                                  <div key={idx} className="p-4 bg-zinc-900/90 border border-zinc-800 rounded-xl text-xs space-y-2">
+                                  <div key={idx} className="p-4 bg-zinc-900 border border-zinc-800 rounded-xl text-xs space-y-2">
                                     <div className="flex flex-wrap items-center justify-between gap-2 pb-1 border-b border-zinc-800/60">
                                       <strong className="text-sky-300 font-semibold text-sm">{alt.name}</strong>
                                       <span className="font-mono text-zinc-400 text-[11px] bg-zinc-800/80 px-2 py-0.5 rounded">{alt.specs}</span>
@@ -2623,7 +2605,7 @@ export function GlossaryPage({ onBack }) {
                         {/* Security & Compliance Posture */}
                         {preset.complianceFacts && (
                           <div>
-                            <h3 className="text-base font-bold text-white mb-3 flex items-center gap-2">
+                            <h3 className="text-sm font-semibold text-zinc-100 mb-2 flex items-center gap-2">
                               <ShieldCheck className="w-4 h-4 text-sky-400" />
                               5. Security &amp; Compliance Posture
                             </h3>
@@ -2638,13 +2620,13 @@ export function GlossaryPage({ onBack }) {
                         {/* Common Anti-Patterns & Failure Modes */}
                         {preset.antiPatterns && preset.antiPatterns.length > 0 && (
                           <div>
-                            <h3 className="text-base font-bold text-white mb-3 flex items-center gap-2">
+                            <h3 className="text-sm font-semibold text-zinc-100 mb-2 flex items-center gap-2">
                               <AlertTriangle className="w-4 h-4 text-amber-400" />
                               6. Common Anti-Patterns &amp; &quot;What Breaks First&quot;
                             </h3>
                             <div className="grid grid-cols-1 gap-3">
                               {preset.antiPatterns.map((item, idx) => (
-                                <div key={idx} className="p-4 bg-amber-950/15 border border-amber-800/40 rounded-xl text-xs space-y-1.5">
+                                <div key={idx} className="p-4 bg-amber-950/40 border border-amber-800 rounded-xl text-xs space-y-1.5">
                                   <div className="flex items-center gap-2">
                                     <span className="font-semibold text-amber-300 text-sm">{item.title}</span>
                                   </div>
@@ -2660,14 +2642,14 @@ export function GlossaryPage({ onBack }) {
                         {/* Production Engine Launch Recipe */}
                         {preset.engineRecipe && (
                           <div>
-                            <h3 className="text-base font-bold text-white mb-3 flex items-center gap-2">
+                            <h3 className="text-sm font-semibold text-zinc-100 mb-2 flex items-center gap-2">
                               <Terminal className="w-4 h-4 text-sky-400" />
                               7. Production Engine Launch Recipe ({preset.engineRecipe.framework})
                             </h3>
                             <div className="bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden text-xs">
                               <div className="bg-zinc-950 px-4 py-2 border-b border-zinc-800 flex items-center justify-between">
                                 <span className="text-zinc-400 font-mono text-[11px]">{preset.engineRecipe.commandTitle || 'Production CLI Flags'}</span>
-                                <Badge variant="sky">{preset.engineRecipe.framework}</Badge>
+                                <Tag tone="accent">{preset.engineRecipe.framework}</Tag>
                               </div>
                               <pre className="p-4 font-mono text-sky-300 bg-zinc-950/60 overflow-x-auto whitespace-pre text-[12px] leading-relaxed">
                                 {preset.engineRecipe.command}
@@ -2692,11 +2674,11 @@ export function GlossaryPage({ onBack }) {
             )}
 
             {/* Next / Previous Pagination Footer */}
-            <div className="mt-16 pt-8 border-t border-zinc-800 flex items-center justify-between gap-4">
+            <div className="mt-10 pt-6 border-t border-zinc-800 flex items-center justify-between gap-4">
               {prevDoc ? (
                 <button
                   onClick={() => setActiveDocId(prevDoc.id)}
-                  className="flex items-center gap-3 p-3 bg-zinc-900/50 hover:bg-zinc-900 border border-zinc-800 hover:border-zinc-700 rounded-xl transition text-left cursor-pointer group max-w-[45%]"
+                  className="flex items-center gap-3 p-3 bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 hover:border-zinc-700 rounded-xl transition text-left cursor-pointer group max-w-[45%]"
                 >
                   <ChevronLeft className="w-4 h-4 text-zinc-500 group-hover:text-sky-400 transition shrink-0" />
                   <div className="truncate">
@@ -2711,7 +2693,7 @@ export function GlossaryPage({ onBack }) {
               {nextDoc ? (
                 <button
                   onClick={() => setActiveDocId(nextDoc.id)}
-                  className="flex items-center gap-3 p-3 bg-zinc-900/50 hover:bg-zinc-900 border border-zinc-800 hover:border-zinc-700 rounded-xl transition text-right cursor-pointer group max-w-[45%] ml-auto"
+                  className="flex items-center gap-3 p-3 bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 hover:border-zinc-700 rounded-xl transition text-right cursor-pointer group max-w-[45%] ml-auto"
                 >
                   <div className="truncate">
                     <span className="text-[10px] uppercase font-mono text-zinc-500 block">Next</span>

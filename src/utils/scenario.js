@@ -371,8 +371,6 @@ function computeScenarioCore(config) {
   const energy = calculateEnergy({ cost, throughput, tokenEconomics, trainingTime, gridCarbonKgPerKwh: c.gridCarbonKgPerKwh });
   const rentVsBuy = calculateRentVsBuy({
     cost,
-    totalGpus: results.totalGpus,
-    cloudRateUsdPerHr: c.cloudRateUsdPerHr,
     reservedDiscountPct: c.cloudReservedDiscountPct,
     dutyCyclePct: c.dutyCyclePct,
     isInference: c.workloadType === 'inference',

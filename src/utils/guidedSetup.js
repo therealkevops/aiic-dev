@@ -4,6 +4,7 @@
 import { DEFAULT_CONFIG, applyPresetConfig, withPlatform } from '../state/config.js';
 import { USE_CASE_PRESETS } from '../data/presets.js';
 import { PLATFORM_SYSTEMS } from '../data/platforms.js';
+import { MODEL_PRESETS } from '../data/models.js';
 import { computeScenario } from './scenario.js';
 
 export const USE_CASES = [
@@ -51,7 +52,8 @@ export function configFromAnswers(answers, current = DEFAULT_CONFIG) {
     // Longer documents lengthen the prompt, not the answer: keep the preset's answer length.
     const answerTokens = preset.config.contextLength * (1 - preset.config.promptTokenRatio);
     const doc = DOC_LENGTHS.find(d => d.id === a.docLength) || DOC_LENGTHS[1];
-    c.contextLength = doc.tokens;
+    const modelMax = MODEL_PRESETS.find(m => m.id === c.selectedModelId)?.maxContextLength || doc.tokens;
+    c.contextLength = Math.min(doc.tokens, modelMax);
     c.promptTokenRatio = Math.min(0.99, Math.max(0.5, Number((1 - answerTokens / c.contextLength).toFixed(3))));
     // Size for a responsive service: ~20 words/s per user, and a first token within a time
     // that grows with how much has to be read.

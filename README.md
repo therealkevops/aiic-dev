@@ -97,6 +97,11 @@ Test modules cover:
 6. Disaggregated Serving (LLM-D) & Cisco RoCEv2 Transfer
 7. Datacenter BOM, Facilities & Rail-Optimized Network
 8. Calibration Test Suite (`tests/calibration.test.js` - throughput vs NVIDIA's published TensorRT-LLM results, fitted and held-out points)
+9. End-to-end scenario pipeline (`tests/scenario.test.js`): presets, traffic sizing, latency solver, LLM-D auto-sizing, speculative decoding, NVL72, training time
+10. Planning (`tests/planning.test.js`): energy and carbon, rent vs buy, power budget, sensitivity, growth plan; guided setup (`tests/guidedSetup.test.js`)
+11. Add-on modules: storage, RAG, guardrails, ingress, HA/DR, MLOps, MIG, SLA queueing, training redundancy, cost and security posture
+
+Browser tests (`npm run test:ui`) build the app, render every preset on every tab against a golden snapshot, and exercise scenario comparison, report export and guided setup.
 
 Detailed mathematical documentation and references can be found in [`docs/SIZING_LOGIC_SPEC.md`](docs/SIZING_LOGIC_SPEC.md).
 

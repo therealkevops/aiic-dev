@@ -56,6 +56,9 @@ export function CostTab({ ctx }) {
             </div>
           </Field>
         </div>
+        <div className="text-[10.5px] text-zinc-500 -mt-2">
+          Choosing a platform with a different GPU resets both fields to that GPU&apos;s catalog estimate.
+        </div>
 
         <SliderField
           label="Network + Storage Hardware Adder:"

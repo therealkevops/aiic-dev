@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import {
   Activity, Building2, Layers, Network, Zap, HardDrive, Search, Workflow, Shield, Globe,
-  LifeBuoy, GitBranch, Grid2x2, Timer, DollarSign,
+  LifeBuoy, GitBranch, Grid2x2, Timer, DollarSign, LineChart,
 } from 'lucide-react';
 
 import { PLATFORM_SYSTEMS, PLATFORM_VENDORS } from './data/platforms';
@@ -31,6 +31,7 @@ import { MlopsTab } from './components/tabs/MlopsTab';
 import { MigTab } from './components/tabs/MigTab';
 import { SlaTab } from './components/tabs/SlaTab';
 import { CostTab } from './components/tabs/CostTab';
+import { PlanningTab } from './components/tabs/PlanningTab';
 
 // One setter per config field (setContextLength, setEnableRag, ...), each accepting a value or
 // an updater function, so tab components read like they did when every field was its own state.
@@ -152,6 +153,7 @@ export default function App() {
   const economicsNavTabs = [
     { id: 'sla', label: 'SLA & Tail Latency', icon: Timer, meta: sla.eligible ? `P99 ${sla.ttftP99Sec < 1 ? `${(sla.ttftP99Sec * 1000).toFixed(0)}ms` : `${sla.ttftP99Sec.toFixed(1)}s`}` : 'N/A' },
     { id: 'cost', label: 'Cost & TCO', icon: DollarSign, meta: `$${cost.effectiveUsdPerGpuHour.toFixed(2)}/GPU-hr` },
+    { id: 'planning', label: 'Planning', icon: LineChart, meta: config.enableGrowthPlan && workloadType === 'inference' ? `+${config.demandGrowthPctPerYear}%/yr` : 'Sensitivity · rent vs buy' },
   ];
 
   // Everything a tab or pane component may read: config values, their setters, computed
@@ -163,6 +165,7 @@ export default function App() {
     page, setPage, activeInputTab, setActiveInputTab, selectedPresetId, applyPreset, activePreset,
     handleVendorChange, copiedBOM, technicalNavTabs, economicsNavTabs,
   };
+  ctx.config = config;
   ctx.pinned = pinned;
   ctx.currentMetrics = currentMetrics;
   ctx.currentLabel = currentLabel;
@@ -252,6 +255,9 @@ export default function App() {
 
           {/* 15. Cost & TCO */}
           {activeInputTab === 'cost' && <CostTab ctx={ctx} />}
+
+          {/* 16. Planning: sensitivity, rent vs buy, growth over time */}
+          {activeInputTab === 'planning' && <PlanningTab ctx={ctx} />}
 
         </main>
 

@@ -34,6 +34,10 @@ export const DEFAULT_CONFIG = {
   kvActiveSessionPct: 100, // with KV offload on: share of sessions actively generating (rest offloaded)
   microBatchSize: 2, // training micro-batch
   pue: 1.35,
+  coolingType: 'air', // 'air' | 'liquid'
+  rackPowerKw: 28, // power each rack can deliver and cool
+  facilityPowerBudgetKw: 0, // facility power available (0 = no limit)
+  gridCarbonKgPerKwh: 0.37, // grid carbon intensity (US average ~0.37 kg CO2/kWh, EPA eGRID 2022)
   trainingType: 'pretrain_sft', // 'pretrain_sft' | 'lora'
   zeroStage: 3,
   trainingTokensB: 10, // training tokens (billions): dataset tokens x epochs
@@ -89,6 +93,11 @@ export const DEFAULT_CONFIG = {
   enableNvidiaAiEnterprise: false,
   supportPctPerYear: DEFAULT_SUPPORT_PCT_PER_YEAR,
   tcoYears: DEFAULT_TCO_YEARS,
+  cloudReservedDiscountPct: 35, // reserved / committed-use discount off the on-demand cloud rate
+  enableGrowthPlan: false, // plan capacity year by year as demand grows
+  demandGrowthPctPerYear: 50, // yearly growth in traffic or concurrent streams
+  gpuPriceChangePctPerYear: 0, // yearly change in GPU price (negative = cheaper later)
+  refreshYear: 0, // year the hardware is replaced (0 = no refresh within the horizon)
   dutyCyclePct: 50, // share of hours the cluster runs at its sized load (monthly average)
   apiInputUsdPer1M: 0.6, // comparison API price per 1M input tokens (illustrative, editable)
   apiOutputUsdPer1M: 0.8, // comparison API price per 1M output tokens (illustrative, editable)
@@ -135,6 +144,10 @@ const PRESET_FALLBACKS = {
   restartMin: 20,
   nodeRepairHours: 48,
   sizingInputMode: 'concurrency',
+  coolingType: 'air',
+  rackPowerKw: 28,
+  facilityPowerBudgetKw: 0,
+  enableGrowthPlan: false,
   llmdAutoSize: true,
   specMethod: 'draft-model',
   specDraftParamsB: 1,

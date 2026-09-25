@@ -18,6 +18,7 @@ import {
   calculateSla, calculateRag, calculateGuardrails, calculateIngress, calculateHaDr,
   calculateTrainingRedundancy, calculateMlops, recommendSharding, calculateTokenEconomics, calculateTrainingTime,
 } from './calculator.js';
+import { calculateEnergy, calculateRentVsBuy } from './planning.js';
 
 /**
  * Turns the workload inputs into what the GPUs actually hold and process:
@@ -165,6 +166,7 @@ function computeScenarioCore(config) {
     networkProtocol: c.selectedProtocolId,
     oversubscriptionRatio: c.oversubscriptionRatio,
     pue: c.pue,
+    rackKw: c.rackPowerKw,
     memoryHeadroomPct: c.memoryHeadroomPct,
     expertParallelNodes: c.expertParallelNodes,
     servingConfig,
@@ -365,8 +367,28 @@ function computeScenarioCore(config) {
       })
     : { eligible: false };
 
+  // ── Energy, carbon and renting the same GPUs ─────────────────────────────────
+  const energy = calculateEnergy({ cost, throughput, tokenEconomics, trainingTime, gridCarbonKgPerKwh: c.gridCarbonKgPerKwh });
+  const rentVsBuy = calculateRentVsBuy({
+    cost,
+    totalGpus: results.totalGpus,
+    cloudRateUsdPerHr: c.cloudRateUsdPerHr,
+    reservedDiscountPct: c.cloudReservedDiscountPct,
+    dutyCyclePct: c.dutyCyclePct,
+    isInference: c.workloadType === 'inference',
+  });
+
   // ── 11. Advisories beyond the engine's own warnings ─────────────────────────
   const advisories = [];
+  if (platform.requiresLiquidCooling && c.coolingType !== 'liquid') {
+    advisories.push(`Cooling: ${platform.name} is liquid-cooled only; switch Facility & Power to liquid cooling or pick an air-cooled platform.`);
+  }
+  if (!platform.rackKw && platform.chassisTdpKw > c.rackPowerKw) {
+    advisories.push(`Rack power: one ${platform.shortName || platform.name} server draws up to ${platform.chassisTdpKw} kW, more than the ${c.rackPowerKw} kW each rack can supply and cool. Raise the rack power limit (typically liquid or rear-door cooling) or pick a lower-power platform.`);
+  }
+  if (c.facilityPowerBudgetKw > 0 && cost.billedFacilityPowerKw > c.facilityPowerBudgetKw) {
+    advisories.push(`Power budget: this design needs ${cost.billedFacilityPowerKw.toFixed(0)} kW of facility power, over the ${c.facilityPowerBudgetKw.toLocaleString()} kW available. Facility & Power shows the largest workload that fits.`);
+  }
   if (model.license?.commercial === 'non-commercial') {
     advisories.push(`License: ${model.name} is released under the ${model.license.name}. ${model.license.note || 'Commercial use is not permitted without a separate license.'}`);
   }
@@ -383,6 +405,8 @@ function computeScenarioCore(config) {
 
   return {
     trainingTime,
+    energy,
+    rentVsBuy,
     llmdSizing: null,
     tokenEconomics,
     workloadShape,

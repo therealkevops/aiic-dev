@@ -1727,6 +1727,8 @@ export function calculateCost(config) {
     buildVsBuySavingsUsd,
     breakEvenMonths,
     useColo,
+    billedItPowerKw,
+    billedFacilityPowerKw,
   };
 }
 

@@ -350,6 +350,7 @@ export const PLATFORM_SYSTEMS = [
     gpusPerChassis: 72,        // one NVLink domain = one rack
     nvlinkDomainGpus: 72,
     chassisTdpKw: 120,        // whole rack
+    requiresLiquidCooling: true,
     chassisHeightRu: 48,
     rackKw: 130,           // rack-scale power & liquid cooling; replaces the default per-rack limit
     scaleOutRails: 8,          // rail-optimized scale-out fabric uses 8 rails, as on 8-GPU nodes
@@ -376,6 +377,7 @@ export const PLATFORM_SYSTEMS = [
     gpusPerChassis: 72,        // one NVLink domain = one rack
     nvlinkDomainGpus: 72,
     chassisTdpKw: 135,        // whole rack
+    requiresLiquidCooling: true,
     chassisHeightRu: 48,
     rackKw: 145,           // rack-scale power & liquid cooling; replaces the default per-rack limit
     scaleOutRails: 8,          // rail-optimized scale-out fabric uses 8 rails, as on 8-GPU nodes
@@ -640,6 +642,7 @@ export const PLATFORM_SYSTEMS = [
     formFactor: "8U Rack Chassis (8x OAM on UBB)",
     gpusPerChassis: 8,
     chassisTdpKw: 14.5,
+    requiresLiquidCooling: true,
     chassisHeightRu: 8,
     nicSpeedGbps: 400,         // 400G AMD Pensando Pollara / ConnectX-7, 1 per GPU
     switchPowerKw: 2.5,

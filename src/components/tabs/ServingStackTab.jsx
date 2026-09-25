@@ -1,12 +1,14 @@
 import React from 'react';
 import { Activity, Layers, Network, Server, Workflow, Zap } from 'lucide-react';
 import { InfoHelper } from '../InfoHelper';
-import { Card, ChoiceCard, Row, Rows, Tag } from '../ui';
+import { Card, ChoiceCard, Field, Row, Rows, Tag } from '../ui';
 import { GPU_CATALOG } from '../../data/hardware';
 import { kvFabricName } from '../../utils/calculator';
 
 export function ServingStackTab({ ctx }) {
   const {
+    specMethod, setSpecMethod, specDraftParamsB, setSpecDraftParamsB, specNumTokens, setSpecNumTokens,
+    specAcceptanceRate, setSpecAcceptanceRate, throughput, workloadType,
     availablePlatforms, decodeNodes, effectiveConcurrency, enableChunkedPrefill, enablePrefixCaching, enableSpeculativeDecoding,
     llmdDisaggregationMode, orchestrator, platform, prefillNodes, results, secondaryGpu,
     secondaryPlatform, secondaryPlatformId, selectedProtocolId, selectedVendor, servingArchitecture, servingEngine,
@@ -259,10 +261,58 @@ export function ServingStackTab({ ctx }) {
             <input type="checkbox" checked={enableSpeculativeDecoding} onChange={(e) => setEnableSpeculativeDecoding(e.target.checked)}
               className="mt-0.5 accent-sky-500 w-3.5 h-3.5 rounded" />
             <div>
-              <span className="font-medium text-zinc-200">Speculative Decoding (Draft Model Acceleration)</span>
-              <span className="block text-[11px] text-zinc-400">Pairs a lightweight draft model (e.g. LLaMA 8B) with the target model (LLaMA 70B) to verify multiple candidate tokens per memory read pass.</span>
+              <span className="font-medium text-zinc-200">Speculative decoding</span>
+              <span className="block text-[11px] text-zinc-400">A small drafter proposes several tokens; the target model checks them all in one pass. Helps most at low batch sizes.</span>
             </div>
           </label>
+          {enableSpeculativeDecoding && workloadType === 'inference' && (
+            <div className="ml-6 space-y-2.5 p-2.5 rounded-lg border border-zinc-800 bg-zinc-950/60">
+              <div className="grid grid-cols-2 gap-2.5">
+                <Field label="Drafter">
+                  <select
+                    value={specMethod}
+                    onChange={(e) => setSpecMethod(e.target.value)}
+                    className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-2 py-1.5 text-xs text-white focus:outline-none focus:border-sky-500"
+                  >
+                    <option value="draft-model">Separate draft model</option>
+                    <option value="draft-head">Draft head (EAGLE / MTP)</option>
+                  </select>
+                </Field>
+                {specMethod === 'draft-model' ? (
+                  <Field label="Draft model size (B params)">
+                    <input
+                      type="number" min="0.1" max="16" step="0.1"
+                      value={specDraftParamsB}
+                      onChange={(e) => setSpecDraftParamsB(Math.max(0.1, Number(e.target.value) || 0.1))}
+                      className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-2 py-1.5 text-xs text-white font-mono focus:outline-none focus:border-sky-500"
+                    />
+                  </Field>
+                ) : (
+                  <div className="text-[10.5px] text-zinc-500 self-end pb-1.5">Head is ~1 decoder layer of the target model; must be trained for that model.</div>
+                )}
+                <Field label={`Draft tokens per step: ${specNumTokens}`}>
+                  <input type="range" min="1" max="8" step="1" value={specNumTokens}
+                    onChange={(e) => setSpecNumTokens(Number(e.target.value))}
+                    className="w-full accent-sky-500 bg-zinc-800 h-1.5 rounded-lg cursor-pointer" />
+                </Field>
+                <Field label={`Acceptance rate: ${Math.round(specAcceptanceRate * 100)}%`}>
+                  <input type="range" min="0.3" max="0.95" step="0.05" value={specAcceptanceRate}
+                    onChange={(e) => setSpecAcceptanceRate(Number(e.target.value))}
+                    className="w-full accent-sky-500 bg-zinc-800 h-1.5 rounded-lg cursor-pointer" />
+                </Field>
+              </div>
+              {throughput?.speculative && (
+                <div className={`text-[11px] ${throughput.speculative.helps ? 'text-emerald-400' : 'text-amber-400'}`}>
+                  {throughput.speculative.helps
+                    ? `~${throughput.speculative.expectedTokensPerStep.toFixed(1)} tokens accepted per step: time per output token ${throughput.speculative.tpotWithoutMs} → ${throughput.tpotMs} ms (${throughput.speculative.speedup.toFixed(2)}x).`
+                    : `No gain at this batch size (${throughput.speculative.speedup.toFixed(2)}x): decode is compute-bound, so verifying extra tokens costs more than it saves. Engines turn speculation off here, and the sizing ignores it.`}
+                </div>
+              )}
+              <div className="text-[10.5px] text-zinc-500">
+                Acceptance depends on how well the drafter matches the target and on the content: 0.5-0.7 is typical for a separate small model, 0.7-0.85 for a trained draft head, higher on repetitive code or JSON.
+              </div>
+            </div>
+          )}
         </div>
       </Card>
     </>

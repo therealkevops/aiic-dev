@@ -124,3 +124,26 @@ test('report HTML escapes content and includes every section', () => {
   assert.ok(!html.includes('<script>'));
   assert.ok(html.includes('B &amp; co') && html.includes('&lt;bom&gt;'));
 });
+
+test('speculative decoding speeds up low-batch decode and is ignored when it would not help', () => {
+  const base = applyPresetConfig(DEFAULT_CONFIG, USE_CASE_PRESETS.find(p => p.id === 'ent-rag-assistant').config);
+  const low = computeScenario({ ...base, concurrency: 1, enableSpeculativeDecoding: true, specAcceptanceRate: 0.7, specNumTokens: 4 });
+  const sp = low.throughput.speculative;
+  assert.ok(Math.abs(sp.expectedTokensPerStep - (1 - 0.7 ** 5) / 0.3) < 1e-9);
+  assert.ok(sp.helps && low.throughput.tpotMs < sp.tpotWithoutMs);
+  assert.ok(low.memory.draftWeightGb > 0);
+  const high = computeScenario({ ...base, concurrency: 256, enableSpeculativeDecoding: true, specAcceptanceRate: 0.5 });
+  assert.equal(high.throughput.speculative.helps, false);
+  assert.equal(Number(high.throughput.tpotMs), high.throughput.speculative.tpotWithoutMs);
+});
+
+test('prefix caching switch and chunked prefill switch change the sizing', () => {
+  const base = applyPresetConfig(DEFAULT_CONFIG, USE_CASE_PRESETS.find(p => p.id === 'ent-rag-assistant').config);
+  const on = computeScenario(base);
+  const off = computeScenario({ ...base, enablePrefixCaching: false });
+  assert.ok(off.memory.kvCacheTotalGb > on.memory.kvCacheTotalGb);
+  const docs = applyPresetConfig(DEFAULT_CONFIG, USE_CASE_PRESETS.find(p => p.id === 'ent-document-analysis').config);
+  const chunked = computeScenario(docs);
+  const unchunked = computeScenario({ ...docs, enableChunkedPrefill: false });
+  assert.ok(unchunked.memory.perGpuActGb > chunked.memory.perGpuActGb);
+});

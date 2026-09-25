@@ -28,7 +28,11 @@ export const CONFIG = {
   rackRU: 40,                   // Standard usable RU per rack (M2)
   rackKW: 28,                   // Default rack power limit in kW (M2)
   overlapKvTransfer: true,      // Disaggregated serving: overlap KV transfer with computation (M3)
-  a2aLatency: 30e-6,            // Per-MoE-layer dispatch or combine latency across nodes (wide EP), seconds -- approximate
+  a2aLatency: 30e-6,
+  specNumTokens: 4,             // speculative decoding: draft tokens proposed per verification step
+  specAcceptanceRate: 0.6,      // speculative decoding: probability each draft token is accepted
+  specVerifyOverhead: 1.25,     // speculative decoding: verify-step cost multiplier (rejection sampling, ragged batching, scheduling)
+  specVerifyMfu: 0.25,          // speculative decoding: MFU of the (k+1)-token verify pass (small, irregular GEMMs)            // Per-MoE-layer dispatch or combine latency across nodes (wide EP), seconds -- approximate
 };
 
 const VRAM_USABLE_FACTOR = CONFIG.gpuMemUtil;
@@ -81,6 +85,26 @@ export function splitExpertWeightsGb(model, weightTotalGb) {
 function perGpuWeightGbFor(model, weightTotalGb, tp, pp, epNodes = 1) {
   const { routedGb, nonExpertGb } = splitExpertWeightsGb(model, weightTotalGb);
   return nonExpertGb / (tp * pp) + routedGb / (tp * pp * Math.max(1, epNodes));
+}
+
+/**
+ * Speculative decoding: a cheap drafter proposes k tokens, the target model verifies all of them
+ * in one forward pass, and each proposal is accepted with probability α (stopping at the first
+ * rejection). Expected tokens produced per verification step = (1 − α^(k+1)) / (1 − α).
+ * Returns null when disabled or not applicable.
+ */
+export function resolveSpeculative(servingConfig, model, workloadType) {
+  if (workloadType !== 'inference' || !servingConfig?.enableSpeculativeDecoding) return null;
+  const k = Math.max(1, Math.min(16, Math.round(Number(servingConfig.specNumTokens) || CONFIG.specNumTokens)));
+  const alpha = Math.min(0.99, Math.max(0, Number(servingConfig.specAcceptanceRate ?? CONFIG.specAcceptanceRate)));
+  const method = servingConfig.specMethod === 'draft-head' ? 'draft-head' : 'draft-model';
+  // A draft head (EAGLE / MTP) is roughly one decoder layer of the target model.
+  const totalParams = model.params || 32;
+  const draftParamsB = method === 'draft-head'
+    ? totalParams / (model.layers || 32) * (model.isMoe && model.activeParams ? model.activeParams / totalParams : 1)
+    : Math.max(0.05, Number(servingConfig.specDraftParamsB) || 1);
+  const expectedTokensPerStep = alpha >= 0.999 ? k + 1 : (1 - Math.pow(alpha, k + 1)) / (1 - alpha);
+  return { k, alpha, method, draftParamsB, expectedTokensPerStep };
 }
 
 /**
@@ -204,7 +228,13 @@ export function recommendSharding(params) {
     // Mean tokens per stream when requests vary in length (null = every stream at contextLength).
     // contextLength stays the per-request maximum (single-stream fit, max-model-len).
     avgContextLength = null,
+    servingConfig = null,
   } = params;
+  const specR = resolveSpeculative(servingConfig, model, workloadType);
+  const draftWeightGbR = specR ? specR.draftParamsB * (precision?.bytesPerParam || 1) : 0;
+  const maxBatchedTokensR = (servingConfig && servingConfig.enableChunkedPrefill === false)
+    ? Math.max(CONFIG.maxBatchedTokens, Math.round(contextLength * promptTokenRatio))
+    : CONFIG.maxBatchedTokens;
   const meanSeqTokens = avgContextLength ? Math.min(contextLength, Math.max(1, avgContextLength)) : contextLength;
   const epNodes = (workloadType === 'inference' && model.isMoe) ? Math.max(1, Math.floor(expertParallelNodes) || 1) : 1;
 
@@ -255,10 +285,10 @@ export function recommendSharding(params) {
     const kvFloorGb = (bytesPerTokenSeq * contextLength * CONFIG.minKvStreams) / 1e9;
 
     // C1: Inference activation memory: tokensPerStep × (hidden + 2 × intermediate) × B_act × 1.2 + maxNumSeqs × vocab × 4
-    const tokensPerStep = CONFIG.maxBatchedTokens;
+    const tokensPerStep = maxBatchedTokensR;
     mActBytes = (tokensPerStep * (hiddenDim + 2 * intermediate) * CONFIG.B_act * 1.2) + (CONFIG.minKvStreams * vocab * 4);
     const actGb = (mActBytes / 1e9) + (CONFIG.runtimeOverheadPerGpu / 1e9);
-    totalReplicaMemoryGb = weightGb + kvFloorGb + actGb;
+    totalReplicaMemoryGb = weightGb + draftWeightGbR + kvFloorGb + actGb;
 
   } else {
     // Training mode
@@ -412,7 +442,7 @@ export function recommendSharding(params) {
     const weightGb = ((totalParams * 1e9 - headParamsCount) * precision.bytesPerParam + unquantizedHeadBytes) / 1e9;
 
     const ppImbalanceFactor = recommendedPp > 1 ? CONFIG.ppImbalance : 1.0;
-    const perGpuWeightGb = perGpuWeightGbFor(model, weightGb, recommendedTp, recommendedPp, epNodes) * ppImbalanceFactor;
+    const perGpuWeightGb = (perGpuWeightGbFor(model, weightGb, recommendedTp, recommendedPp, epNodes) + draftWeightGbR / (recommendedTp * recommendedPp)) * ppImbalanceFactor;
     const perGpuActGb = (mActBytes / 1e9) / (recommendedTp * recommendedPp);
     const perGpuAvailForKvGb = Math.max(0, usableGpuVramGb - perGpuWeightGb - perGpuActGb);
 
@@ -489,6 +519,13 @@ export function calculateInfra(config) {
     avgContextLength = null, // mean tokens per stream for a mixed request-length workload (see recommendSharding)
   } = config;
   const meanSeqTokens = avgContextLength ? Math.min(contextLength, Math.max(1, avgContextLength)) : contextLength;
+  const spec = resolveSpeculative(servingConfig, model, workloadType);
+  const draftWeightGb = spec ? spec.draftParamsB * precision.bytesPerParam : 0;
+  // Without chunked prefill a whole prompt is processed in one step, so activation memory scales
+  // with the full prompt instead of the chunk size.
+  const maxBatchedTokens = (servingConfig && servingConfig.enableChunkedPrefill === false)
+    ? Math.max(CONFIG.maxBatchedTokens, Math.round(contextLength * promptTokenRatio))
+    : CONFIG.maxBatchedTokens;
 
   const totalParams = model.id === "custom" ? (Number(customParams) || 32) : model.params;
   const layers      = model.layers  || 32;
@@ -613,7 +650,7 @@ export function calculateInfra(config) {
     // C1: Inference activation memory:
     // tokensPerStep = CONFIG.maxBatchedTokens (default 8192)
     // M_act = tokensPerStep × (hidden + 2 × intermediate) × B_act × 1.2 + maxNumSeqs × vocab × 4
-    const tokensPerStep = CONFIG.maxBatchedTokens;
+    const tokensPerStep = maxBatchedTokens;
     const mActBytes = (tokensPerStep * (hiddenDim + 2 * intermediate) * CONFIG.B_act * 1.2) + (maxNumSeqs * vocab * 4);
     mActGb = mActBytes / 1e9;
     activationOverheadGb = mActGb + (totalGpus * (CONFIG.runtimeOverheadPerGpu / 1e9));
@@ -773,7 +810,8 @@ export function calculateInfra(config) {
     };
   } else if (workloadType === "inference") {
     const ppImbalanceFactor = pp > 1 ? CONFIG.ppImbalance : 1.0;
-    perGpuWeightsGb = perGpuWeightGbFor(model, weightMemoryTotalGb, tp, pp, epNodes) * ppImbalanceFactor;
+    // The speculative drafter's weights are sharded with the target (same TP), as vLLM does by default.
+    perGpuWeightsGb = (perGpuWeightGbFor(model, weightMemoryTotalGb, tp, pp, epNodes) + draftWeightGb / (tp * pp)) * ppImbalanceFactor;
     // Under wide EP each chassis runs attention for its own share of the replica's streams.
     if (model.isMla) {
       perGpuKvOrOptGb = kvCacheTotalGb / (pp * epNodes);
@@ -1173,7 +1211,34 @@ export function calculateInfra(config) {
         + moeLayers * 2 * CONFIG.a2aLatency
       : 0;
     const t_comm = (decodeTpCount > 1 ? 2 * layers * CONFIG.allreduceLatency : 0) + t_a2a;
-    const t_step = Math.max(t_mem, t_comp) + t_comm;
+    const t_step_plain = Math.max(t_mem, t_comp) + t_comm;
+
+    // Speculative decoding: one target pass verifies k+1 positions per stream (weights and KV
+    // are read once, compute grows k+1-fold), after k sequential drafter steps. The time per
+    // produced token is that step divided by the expected tokens accepted per step. At large
+    // batches decode turns compute-bound and the extra verification work outweighs the gain.
+    let speculative = null;
+    let t_step = t_step_plain;
+    if (spec && !isLlmd) {
+      const draftBytes = spec.draftParamsB * 1e9 * precision.bytesPerParam;
+      const t_draft_token = Math.max(
+        draftBytes / (decodeTpCount * BW_mem * CONFIG.bwEfficiency),
+        (2 * spec.draftParamsB * 1e9 * C_rep) / (decodeTpCount * decodePeakDenseFlops * CONFIG.mfuDecode)
+      ) + (decodeTpCount > 1 ? 2 * CONFIG.allreduceLatency : 0);
+      const t_verify_comp = (2 * pActiveParams * C_rep * (spec.k + 1)) / (decodeTpCount * epNodes * decodePeakDenseFlops * CONFIG.specVerifyMfu);
+      const t_verify = (Math.max(t_mem, t_verify_comp) + t_comm) * CONFIG.specVerifyOverhead;
+      const t_spec_per_token = (t_verify + spec.k * t_draft_token) / spec.expectedTokensPerStep;
+      const speedup = t_step_plain / t_spec_per_token;
+      speculative = {
+        ...spec,
+        speedup,
+        helps: speedup > 1,
+        tpotWithoutMs: Number((t_step_plain * 1000).toFixed(2)),
+      };
+      // Engines can turn speculation off above a batch size; model that by never going slower.
+      if (speedup > 1) t_step = t_spec_per_token;
+    }
+
     const tpotMs = Number((t_step * 1000).toFixed(2));
     const replicaThroughput = C_rep / t_step;
     const clusterThroughput = replicaThroughput * decodeDp;
@@ -1200,6 +1265,7 @@ export function calculateInfra(config) {
       t_comp,
       t_comm,
       t_a2a,
+      speculative,
       t_step,
       tpotMs,
       replicaThroughput:      Math.round(replicaThroughput),
@@ -1242,6 +1308,7 @@ export function calculateInfra(config) {
     // Memory
     memory: {
       weightTotalGb:      weightMemoryTotalGb,
+      draftWeightGb,
       kvCacheTotalGb,
       bytesPerTokenSeq,
       baselineKvGb,

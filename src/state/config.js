@@ -51,6 +51,10 @@ export const DEFAULT_CONFIG = {
   enableChunkedPrefill: true,
   enablePrefixCaching: true,
   enableSpeculativeDecoding: false,
+  specMethod: 'draft-model', // 'draft-model' (separate small model) | 'draft-head' (EAGLE / MTP head)
+  specDraftParamsB: 1, // draft model size in billions of parameters
+  specNumTokens: 4, // draft tokens proposed per verification step
+  specAcceptanceRate: 0.6, // chance each draft token is accepted
   llmdDisaggregationMode: 'heterogeneous', // 'heterogeneous' | 'homogeneous'
   secondaryPlatformId: 'cisco-c885a-h200',
   prefillNodes: 1,
@@ -112,6 +116,10 @@ const PRESET_FALLBACKS = {
   oversubscriptionRatio: 1,
   memoryHeadroomPct: 5,
   expertParallelNodes: 1,
+  specMethod: 'draft-model',
+  specDraftParamsB: 1,
+  specNumTokens: 4,
+  specAcceptanceRate: 0.6,
   reasoningTokensPerOutputToken: 0,
   requestMixEnabled: false,
   shortRequestPct: 70,

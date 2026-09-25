@@ -95,6 +95,26 @@ function computeScenarioCore(config) {
   const avgContextLength = workloadShape.avgSequenceTokens;
   const effectiveConcurrency = c.workloadType === 'inference' ? workloadShape.gpuResidentSessions : c.microBatchSize;
 
+  // Prefix sharing only applies when automatic prefix caching is on in the serving engine.
+  const prefixCacheRatio = c.enablePrefixCaching === false ? 0 : c.prefixCacheRatio;
+  const servingConfig = {
+    servingEngine: c.servingEngine,
+    orchestrator: c.orchestrator,
+    servingArchitecture: c.servingArchitecture,
+    enableChunkedPrefill: c.enableChunkedPrefill,
+    enablePrefixCaching: c.enablePrefixCaching,
+    enableSpeculativeDecoding: c.enableSpeculativeDecoding,
+    specMethod: c.specMethod,
+    specDraftParamsB: c.specDraftParamsB,
+    specNumTokens: c.specNumTokens,
+    specAcceptanceRate: c.specAcceptanceRate,
+    llmdDisaggregationMode: c.llmdDisaggregationMode,
+    secondaryPlatform,
+    secondaryGpu,
+    prefillNodes: c.prefillNodes,
+    decodeNodes: c.decodeNodes,
+  };
+
   // ── 1. Auto-sharding solver ──────────────────────────────────────────────────
   const autoRecommendation = recommendSharding({
     workloadType: c.workloadType,
@@ -102,7 +122,7 @@ function computeScenarioCore(config) {
     customParams: c.customParams,
     precision,
     kvPrecision: c.kvPrecision,
-    prefixCacheRatio: c.prefixCacheRatio,
+    prefixCacheRatio,
     promptTokenRatio,
     avgContextLength,
     contextLength,
@@ -114,6 +134,7 @@ function computeScenarioCore(config) {
     memoryHeadroomPct: c.memoryHeadroomPct,
     minTp: c._solverTp || 1,
     expertParallelNodes: c.expertParallelNodes,
+    servingConfig,
   });
   const tp = c.isAutoSharding ? autoRecommendation.tp : c.manualTp;
   const pp = c.isAutoSharding ? autoRecommendation.pp : c.manualPp;
@@ -129,7 +150,7 @@ function computeScenarioCore(config) {
     customParams: c.customParams,
     precision,
     kvPrecision: c.kvPrecision,
-    prefixCacheRatio: c.prefixCacheRatio,
+    prefixCacheRatio,
     promptTokenRatio,
     avgContextLength,
     contextLength,
@@ -146,19 +167,7 @@ function computeScenarioCore(config) {
     pue: c.pue,
     memoryHeadroomPct: c.memoryHeadroomPct,
     expertParallelNodes: c.expertParallelNodes,
-    servingConfig: {
-      servingEngine: c.servingEngine,
-      orchestrator: c.orchestrator,
-      servingArchitecture: c.servingArchitecture,
-      enableChunkedPrefill: c.enableChunkedPrefill,
-      enablePrefixCaching: c.enablePrefixCaching,
-      enableSpeculativeDecoding: c.enableSpeculativeDecoding,
-      llmdDisaggregationMode: c.llmdDisaggregationMode,
-      secondaryPlatform,
-      secondaryGpu,
-      prefillNodes: c.prefillNodes,
-      decodeNodes: c.decodeNodes,
-    },
+    servingConfig,
   });
   const { memory, facility, network, bom } = results;
   const isLlmd = !!memory.llmd;

@@ -82,8 +82,9 @@ export const MODEL_PRESETS = [
     routedExperts: 256,
     activeExperts: 8,
     sharedExperts: 1,
-    P_nonExpert: 61.0, // approx
-    P_routedExperts: 610.0, // approx
+    P_nonExpert: 17.0, // attention (MLA), 3 dense layers, shared experts, embeddings
+    P_routedExperts: 654.0, // 58 MoE layers x 256 experts x 3 x 7168 x 2048
+    moeLayers: 58,
     maxContextLength: 131072, // 128k max native context
     isMoe: true,
     license: { name: 'MIT', commercial: 'open' },
@@ -106,8 +107,8 @@ export const MODEL_PRESETS = [
     routedExperts: 8,
     activeExperts: 2,
     sharedExperts: 0,
-    P_nonExpert: 13.0, // approx
-    P_routedExperts: 128.0, // approx
+    P_nonExpert: 5.6, // attention, embeddings, router
+    P_routedExperts: 135.4, // 56 layers x 8 experts x 3 x 6144 x 16384
     maxContextLength: 65536,  // 64k max native context for Mixtral 8x22B
     isMoe: true,
     license: { name: 'Apache 2.0', commercial: 'open' },
@@ -270,6 +271,7 @@ export const MODEL_PRESETS = [
     sharedExperts: 1,
     P_nonExpert: 13.5,
     P_routedExperts: 386.5,
+    moeLayers: 24, // MoE on alternating layers
     localLayers: 36,
     localWindow: 8192,
     maxContextLength: 262144, // model supports up to 1M; capped here to typical serving limits
@@ -381,6 +383,7 @@ export const MODEL_PRESETS = [
     sharedExperts: 1,
     P_nonExpert: 12.0,
     P_routedExperts: 1014.0,
+    moeLayers: 60,
     maxContextLength: 262144, // 0905 release: 256k
     isMoe: true,
     isMla: true,

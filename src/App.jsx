@@ -91,7 +91,7 @@ export default function App() {
     enableTrainingRedundancy, enableHaDr, enableMlops, enableMig,
   } = config;
   const {
-    model, platform, tp, pp, dp, protocol, storageTier, rag, guardrails, guardModel, ingress, ingressTier,
+    model, platform, tp, pp, dp, results, protocol, storageTier, rag, guardrails, guardModel, ingress, ingressTier,
     trainingRedundancy, haDr, haDrTier, mlops, mlopsStrategy, mig, sla, cost,
   } = scenario;
 
@@ -103,7 +103,7 @@ export default function App() {
   const technicalNavTabs = [
     { id: 'workload', label: 'Workload', icon: Activity, meta: model.name },
     { id: 'platform', label: 'Platform', icon: Building2, meta: platform.shortName },
-    { id: 'sharding', label: 'Sharding', icon: Layers, meta: `TP=${tp} · PP=${pp} · DP=${dp}` },
+    { id: 'sharding', label: 'Sharding', icon: Layers, meta: `TP=${tp} · PP=${pp} · DP=${dp}${results.epNodes > 1 ? ` · EP×${results.epNodes}` : ''}` },
     { id: 'network', label: 'Network Fabric', icon: Network, meta: protocol.name },
     { id: 'facility', label: 'Facility & Power', icon: Zap, meta: `${pue.toFixed(2)} PUE` },
     { id: 'storage', label: 'Storage', icon: HardDrive, meta: storageTier.vendor },

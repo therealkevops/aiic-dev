@@ -61,3 +61,17 @@ test('memory headroom margin keeps free memory on every GPU', () => {
   const physicalUsable = s.gpu.vramGb * 0.9;
   assert.ok(s.memory.perGpuTotalUsedGb <= physicalUsable * 0.9 + 1e-9);
 });
+
+test('wide expert parallelism spreads experts and removes pipeline stages', () => {
+  const base = { ...DEFAULT_CONFIG, selectedModelId: 'kimi-k2', selectedPlatformId: 'cisco-c885a-h200', kvPrecision: 'fp8', contextLength: 32768, concurrency: 2048 };
+  const single = computeScenario(base);
+  const wide = computeScenario({ ...base, expertParallelNodes: 2 });
+  assert.ok(single.pp > 1, 'a 1T model needs PP on one H200 chassis');
+  assert.equal(wide.pp, 1);
+  assert.equal(wide.results.epNodes, 2);
+  assert.ok(wide.memory.perGpuWeightsGb < single.memory.perGpuWeightsGb);
+  assert.ok(wide.throughput.t_a2a > 0);
+  // Dense models ignore the setting.
+  const dense = computeScenario({ ...DEFAULT_CONFIG, expertParallelNodes: 4 });
+  assert.equal(dense.results.epNodes, 1);
+});

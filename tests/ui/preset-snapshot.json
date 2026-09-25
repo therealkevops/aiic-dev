@@ -1898,7 +1898,7 @@
       "hadr": "Multi-Site Active-Active",
       "mlops": "Blue/Green Cutover",
       "mig": "Off",
-      "sla": "P99 23.4s",
+      "sla": "P99 23.3s",
       "cost": "$8.24/GPU-hr"
     },
     "results": [
@@ -1915,7 +1915,7 @@
       "KV precision: FP8 · 10% prefix sharing",
       "Saving 78.8 GB/GPU vs FP16, no sharing",
       "Inference performance profile",
-      "261,251 gen tok/s · 9,308,032 prompt tok/s",
+      "263,268 gen tok/s · 9,308,032 prompt tok/s",
       "PREFILL · COMPUTE-BOUND",
       "Time to first token",
       "157.72ms",
@@ -1923,8 +1923,8 @@
       "10% prefix cached: evaluates 30,474 uncached tokens (1.58 PFLOPs) on NVIDIA Blackwell B200 (180GB)'s 4,500 TFLOPs engine.",
       "DECODE · BANDWIDTH-BOUND",
       "Time per output token",
-      "15.68ms",
-      "~510 tok/s/stream · ~261,251 tok/s cluster (×64 DP × 4096)",
+      "15.56ms",
+      "~514 tok/s/stream · ~263,268 tok/s cluster (×64 DP × 4096)",
       "MoE: decode sized on 37B active params (671B total weights in VRAM). Reads weights every step across 8 TB/s HBM.",
       "DATACENTER BILL OF MATERIALS",
       "Copy BOM",
@@ -1958,7 +1958,7 @@
       "Power & facility footprint",
       "974.2 kW IT",
       "SLA & tail latency (M/M/c queueing)",
-      "P99 23.4s",
+      "P99 23.3s",
       "Cost & TCO (illustrative estimate)",
       "$8.24/GPU-hr",
       "Cluster Topology & Hardware Schematic",
@@ -2021,19 +2021,19 @@
     "configPaneHashes": {
       "workload": "85e15dadd7ca",
       "platform": "abdb59984326",
-      "sharding": "d3c0107b8bd1",
+      "sharding": "6f28b16df9a8",
       "network": "8781c73dd6d7",
       "facility": "7c77766c24fa",
       "storage": "80e90127b9d2",
       "rag": "f7cab449b282",
       "stack": "8db8969fe9cf",
-      "guardrails": "4a5364848746",
-      "ingress": "2c91973f9504",
+      "guardrails": "3b518aeb16f2",
+      "ingress": "13f33379e996",
       "hadr": "676fcf4cc95c",
       "mlops": "32dcdaa1e779",
       "mig": "b5d8b480f2ee",
-      "sla": "77b2e6442680",
-      "cost": "a83f84e370a7"
+      "sla": "42b52acf0ffa",
+      "cost": "99dc7db4704d"
     }
   },
   "neo-llmd-disaggregated": {

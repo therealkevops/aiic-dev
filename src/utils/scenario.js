@@ -73,6 +73,7 @@ function computeScenarioCore(config) {
     zeroStage: c.zeroStage,
     memoryHeadroomPct: c.memoryHeadroomPct,
     minTp: c._solverTp || 1,
+    expertParallelNodes: c.expertParallelNodes,
   });
   const tp = c.isAutoSharding ? autoRecommendation.tp : c.manualTp;
   const pp = c.isAutoSharding ? autoRecommendation.pp : c.manualPp;
@@ -103,6 +104,7 @@ function computeScenarioCore(config) {
     oversubscriptionRatio: c.oversubscriptionRatio,
     pue: c.pue,
     memoryHeadroomPct: c.memoryHeadroomPct,
+    expertParallelNodes: c.expertParallelNodes,
     servingConfig: {
       servingEngine: c.servingEngine,
       orchestrator: c.orchestrator,

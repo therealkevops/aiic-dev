@@ -34,6 +34,7 @@ export const DEFAULT_CONFIG = {
   manualDp: 1,
   isAutoDp: true,
   memoryHeadroomPct: 5, // extra % of usable GPU memory kept free when sizing
+  expertParallelNodes: 1, // MoE: chassis each replica's experts are spread across (wide EP)
   latencyTargetsEnabled: false, // size for latency targets, not just memory
   targetTtftSec: 2, // time-to-first-token target (unloaded: prefill + guardrail/ingress latency)
   targetTpotMs: 50, // time-per-output-token target
@@ -102,6 +103,7 @@ export const DEFAULT_CONFIG = {
 const PRESET_FALLBACKS = {
   oversubscriptionRatio: 1,
   memoryHeadroomPct: 5,
+  expertParallelNodes: 1,
   latencyTargetsEnabled: false,
   targetTtftSec: 2,
   targetTpotMs: 50,

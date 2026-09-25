@@ -9,8 +9,9 @@ export function ShardingTab({ ctx }) {
     manualPp, manualTp, pp, setIsAutoDp, setIsAutoSharding, setManualDp,
     setManualPp, setManualTp, tp, workloadType, servingArchitecture, memoryHeadroomPct, setMemoryHeadroomPct,
     latencyTargetsEnabled, setLatencyTargetsEnabled, targetTtftSec, setTargetTtftSec, targetTpotMs, setTargetTpotMs,
-    latencySolve, memorySizing,
+    latencySolve, memorySizing, model, expertParallelNodes, setExpertParallelNodes, throughput, platform,
   } = ctx;
+  const epAvailable = model.isMoe && workloadType === 'inference' && servingArchitecture !== 'llmd';
   const fmtSec = (sec) => (sec < 1 ? `${Math.round(sec * 1000)} ms` : `${sec.toFixed(2)} s`);
   const latencyTargetsAvailable = workloadType === 'inference' && isAutoSharding && servingArchitecture !== 'llmd';
   return (
@@ -179,6 +180,31 @@ export function ShardingTab({ ctx }) {
           />
         </div>
       </Card>
+      {epAvailable && (
+        <Card icon={Layers} title="Expert Parallelism (MoE)" className="space-y-3">
+          <ScaleField
+            label="Chassis per replica (expert-parallel span)"
+            value={expertParallelNodes}
+            onChange={setExpertParallelNodes}
+            presets={[1, 2, 4, 8]}
+            min={1}
+            max={32}
+            helper={
+              <InfoHelper
+                title="Wide Expert Parallelism"
+                text={`At 1, each replica fits in one chassis and its ${model.routedExperts} routed experts are split by TP. Above 1, a replica spans that many chassis: attention and shared weights stay TP=${platform.gpusPerChassis} inside each chassis, each chassis serves its own share of the streams, and the routed experts are spread across every GPU in the group. Tokens are exchanged between chassis (all-to-all) at every MoE layer.`}
+                whyItMatters="Spreading experts leaves far more memory per GPU for KV cache, so large MoE deployments (DeepSeek, Kimi K2, Qwen3-235B) often need many fewer GPUs, and models too big for one chassis no longer need pipeline stages. The cost is all-to-all traffic on the scale-out fabric, which adds per-token latency and needs a non-blocking network."
+              />
+            }
+          />
+          {expertParallelNodes > 1 && throughput && (
+            <div className="text-[11px] text-zinc-400">
+              All-to-all adds ~{(throughput.t_a2a * 1000).toFixed(1)} ms to each decode step (included in time per output token).
+            </div>
+          )}
+        </Card>
+      )}
+
       <Card icon={Gauge} title="Sizing Targets" className="space-y-4">
         <SliderField
           label="Memory headroom margin:"

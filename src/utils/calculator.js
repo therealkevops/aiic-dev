@@ -28,6 +28,7 @@ export const CONFIG = {
   rackRU: 40,                   // Standard usable RU per rack (M2)
   rackKW: 28,                   // Default rack power limit in kW (M2)
   overlapKvTransfer: true,      // Disaggregated serving: overlap KV transfer with computation (M3)
+  a2aLatency: 30e-6,            // Per-MoE-layer dispatch or combine latency across nodes (wide EP), seconds -- approximate
 };
 
 const VRAM_USABLE_FACTOR = CONFIG.gpuMemUtil;
@@ -60,6 +61,26 @@ export function kvBytesPerToken(model, kvBytesPerElement, contextLength) {
   const kvHeads = model.kvHeads || 8;
   const headDim = model.headDim || 128;
   return 2 * effectiveLayers * kvHeads * headDim * kvBytesPerElement;
+}
+
+/**
+ * Splits total weight memory into the routed-expert part and everything else (attention,
+ * shared experts, dense layers, embeddings), in proportion to the model's parameter split.
+ * Dense models are all "non-expert".
+ */
+export function splitExpertWeightsGb(model, weightTotalGb) {
+  if (!model.isMoe || !model.P_routedExperts || !model.params) return { routedGb: 0, nonExpertGb: weightTotalGb };
+  const routedGb = weightTotalGb * Math.min(1, model.P_routedExperts / model.params);
+  return { routedGb, nonExpertGb: weightTotalGb - routedGb };
+}
+
+/**
+ * Per-GPU weight memory for a replica: non-expert weights split by TP (and PP), routed experts
+ * additionally spread over `epNodes` chassis under wide expert parallelism.
+ */
+function perGpuWeightGbFor(model, weightTotalGb, tp, pp, epNodes = 1) {
+  const { routedGb, nonExpertGb } = splitExpertWeightsGb(model, weightTotalGb);
+  return nonExpertGb / (tp * pp) + routedGb / (tp * pp * Math.max(1, epNodes));
 }
 
 /**
@@ -177,7 +198,11 @@ export function recommendSharding(params) {
     memoryHeadroomPct = 0,
     // Latency-driven sizing: use at least this TP (within the chassis) even if a smaller TP fits.
     minTp = 1,
+    // Wide expert parallelism (MoE inference): spread each replica's routed experts across this
+    // many chassis, with TP = the chassis size inside each one.
+    expertParallelNodes = 1,
   } = params;
+  const epNodes = (workloadType === 'inference' && model.isMoe) ? Math.max(1, Math.floor(expertParallelNodes) || 1) : 1;
 
   const totalParams    = model.id === "custom" ? (Number(customParams) || 32) : model.params;
   const layers         = model.layers  || 32;
@@ -337,6 +362,23 @@ export function recommendSharding(params) {
     }
   }
 
+  // Wide EP: the replica spans epNodes chassis at full in-chassis TP, with no pipeline stages.
+  if (epNodes > 1) {
+    const epTp = getValidTp(gpusPerChassis, numHeads);
+    const { routedGb, nonExpertGb } = splitExpertWeightsGb(model, totalReplicaMemoryGb);
+    const perGpuGb = nonExpertGb / epTp + routedGb / (epTp * epNodes);
+    recommendedTp = epTp;
+    recommendedPp = 1;
+    fitsInOneNode = false;
+    if (perGpuGb > usableGpuVramGb) {
+      error = "Model does not fit; increase GPU memory or quantise";
+      rationale = `Even spread across ${epNodes} chassis with expert parallelism, each GPU would need ~${perGpuGb.toFixed(0)} GB. Add chassis to the expert-parallel group, quantise, or pick higher-memory GPUs.`;
+    } else {
+      error = null;
+      rationale = `Wide expert parallelism: each replica spans ${epNodes} chassis (${epTp * epNodes} GPUs). Attention and shared weights use TP=${epTp} inside each chassis; the ${model.routedExperts || ''} routed experts are spread across all ${epTp * epNodes} GPUs, so no pipeline stages are needed.`;
+    }
+  }
+
   // S5: Set DP = ceil(requiredKvForC / kvCapacityPerReplica). Concurrency scales DP, not TP.
   let recommendedDp = 1;
   if (workloadType === "inference") {
@@ -366,16 +408,16 @@ export function recommendSharding(params) {
     const weightGb = ((totalParams * 1e9 - headParamsCount) * precision.bytesPerParam + unquantizedHeadBytes) / 1e9;
 
     const ppImbalanceFactor = recommendedPp > 1 ? CONFIG.ppImbalance : 1.0;
-    const perGpuWeightGb = (weightGb / (recommendedTp * recommendedPp)) * ppImbalanceFactor;
+    const perGpuWeightGb = perGpuWeightGbFor(model, weightGb, recommendedTp, recommendedPp, epNodes) * ppImbalanceFactor;
     const perGpuActGb = (mActBytes / 1e9) / (recommendedTp * recommendedPp);
     const perGpuAvailForKvGb = Math.max(0, usableGpuVramGb - perGpuWeightGb - perGpuActGb);
 
     let kvCapacityPerReplica = 0;
     if (model.isMla) {
-      kvCapacityPerReplica = perGpuAvailForKvGb * recommendedPp;
+      kvCapacityPerReplica = perGpuAvailForKvGb * recommendedPp * epNodes;
     } else {
       const tpEff = Math.min(recommendedTp, kvHeads);
-      kvCapacityPerReplica = perGpuAvailForKvGb * (tpEff * recommendedPp);
+      kvCapacityPerReplica = perGpuAvailForKvGb * (tpEff * recommendedPp) * epNodes;
     }
 
     // Each replica actually serves a WHOLE number of streams (ceil(concurrency / dp)), not
@@ -401,6 +443,7 @@ export function recommendSharding(params) {
     tp: recommendedTp,
     pp: recommendedPp,
     dp: recommendedDp,
+    epNodes,
     fitsInOneNode,
     totalReplicaMemoryGb,
     singleNodeCapacityGb,
@@ -438,6 +481,7 @@ export function calculateInfra(config) {
     pue = 1.35,      // facility PUE factor (default 1.35)
     servingConfig = null, // { servingEngine, orchestrator, servingArchitecture, enableChunkedPrefill, enablePrefixCaching }
     memoryHeadroomPct = 0, // extra % of usable memory kept free (see recommendSharding)
+    expertParallelNodes = 1, // wide expert parallelism span in chassis (MoE, colocated inference)
   } = config;
 
   const totalParams = model.id === "custom" ? (Number(customParams) || 32) : model.params;
@@ -510,7 +554,9 @@ export function calculateInfra(config) {
   const concurrencyPerReplica = Math.max(1, Math.ceil(concurrency / replicaDp));
   const maxNumSeqs = concurrencyPerReplica;
 
-  const modelParallelSize = tp * pp;
+  // Wide EP (MoE, colocated inference only): a replica spans epNodes chassis of tp GPUs each.
+  const epNodes = (workloadType === 'inference' && model.isMoe && !isLlmd) ? Math.max(1, Math.floor(expertParallelNodes) || 1) : 1;
+  const modelParallelSize = tp * pp * epNodes;
   const totalGpus         = isLlmd ? (prefillGpus + decodeGpus) : (modelParallelSize * dp);
   const nodes             = isLlmd ? (prefillNodes + decodeNodes) : Math.max(1, Math.ceil(totalGpus / gpusPerChassis));
   const gpusAllocated     = isLlmd ? totalGpus : (nodes * gpusPerChassis);
@@ -721,12 +767,13 @@ export function calculateInfra(config) {
     };
   } else if (workloadType === "inference") {
     const ppImbalanceFactor = pp > 1 ? CONFIG.ppImbalance : 1.0;
-    perGpuWeightsGb = (weightMemoryTotalGb / (tp * pp)) * ppImbalanceFactor;
+    perGpuWeightsGb = perGpuWeightGbFor(model, weightMemoryTotalGb, tp, pp, epNodes) * ppImbalanceFactor;
+    // Under wide EP each chassis runs attention for its own share of the replica's streams.
     if (model.isMla) {
-      perGpuKvOrOptGb = kvCacheTotalGb / pp;
+      perGpuKvOrOptGb = kvCacheTotalGb / (pp * epNodes);
     } else {
       const tpEff = Math.min(tp, kvHeads);
-      perGpuKvOrOptGb = kvCacheTotalGb / (tpEff * pp);
+      perGpuKvOrOptGb = kvCacheTotalGb / (tpEff * pp * epNodes);
     }
     perGpuActGb     = (mActGb / (tp * pp)) + (CONFIG.runtimeOverheadPerGpu / 1e9);
   } else {
@@ -801,6 +848,10 @@ export function calculateInfra(config) {
   // S6: Block ZeRO-2/3 with PP > 1
   if (workloadType === 'training' && pp > 1 && (zeroStage === 2 || zeroStage === 3)) {
     warnings.push(`ZeRO-${zeroStage} is incompatible with Pipeline Parallelism (PP=${pp} > 1). ZeRO gradient and parameter partitioning require synchronous Data Parallel groups without pipeline stage boundaries. Use ZeRO-1 with PP, or reduce PP to 1.`);
+  }
+
+  if (epNodes > 1 && oversubscriptionRatio > 1) {
+    warnings.push(`Wide expert parallelism sends all-to-all traffic across chassis at every MoE layer, but the fabric is ${oversubscriptionRatio}:1 oversubscribed. Expect higher per-token latency than modeled; use a non-blocking (1:1) fabric for expert-parallel groups.`);
   }
 
   // TensorRT-LLM is NVIDIA-only; AMD Instinct serving runs vLLM or SGLang on ROCm.
@@ -1097,13 +1148,22 @@ export function calculateInfra(config) {
     const BW_mem = (targetDecodeGpu.memBandwidthTbps || 4.8) * 1e12; // bytes/s
     const decodePeakDenseFlops = peakDenseFlops(targetDecodeGpu, precision);
 
-    const weightBytesRead = decodeWeightBytes(model, customParams, precision, config.ep || CONFIG.ep || 1, C_rep);
-    const kvBytesRead = bytesPerTokenSeq * S_avg * C_rep;
+    // Weight bytes each TP group reads per step: routed experts are spread over epNodes chassis,
+    // and each chassis only reads the experts it hosts that the step's tokens touch.
+    const weightBytesRead = decodeWeightBytes(model, customParams, precision, epNodes * (config.ep || CONFIG.ep || 1), C_rep);
+    const kvBytesRead = bytesPerTokenSeq * S_avg * C_rep / epNodes;
 
     const t_mem  = (weightBytesRead + kvBytesRead) / (decodeTpCount * BW_mem * CONFIG.bwEfficiency);
     const pActiveParams = (isMoe && model.activeParams ? model.activeParams : totalParams) * 1e9;
-    const t_comp = (2 * pActiveParams * C_rep) / (decodeTpCount * decodePeakDenseFlops * CONFIG.mfuDecode);
-    const t_comm = decodeTpCount > 1 ? 2 * layers * CONFIG.allreduceLatency : 0;
+    const t_comp = (2 * pActiveParams * C_rep) / (decodeTpCount * epNodes * decodePeakDenseFlops * CONFIG.mfuDecode);
+    // Wide EP all-to-all: every token's hidden state goes to its k experts and back, mostly to
+    // other chassis (FP8 dispatch + BF16 combine = 3 bytes/element), over the GPUs' NICs.
+    const moeLayers = model.moeLayers || layers;
+    const t_a2a = epNodes > 1
+      ? (C_rep * moeLayers * (model.activeExperts || 8) * hiddenDim * 3 * (1 - 1 / epNodes)) / (tp * epNodes * (nicSpeedGbps * 1e9 * 0.9 / 8))
+        + moeLayers * 2 * CONFIG.a2aLatency
+      : 0;
+    const t_comm = (decodeTpCount > 1 ? 2 * layers * CONFIG.allreduceLatency : 0) + t_a2a;
     const t_step = Math.max(t_mem, t_comp) + t_comm;
     const tpotMs = Number((t_step * 1000).toFixed(2));
     const replicaThroughput = C_rep / t_step;
@@ -1130,6 +1190,7 @@ export function calculateInfra(config) {
       t_mem,
       t_comp,
       t_comm,
+      t_a2a,
       t_step,
       tpotMs,
       replicaThroughput:      Math.round(replicaThroughput),
@@ -1166,6 +1227,7 @@ export function calculateInfra(config) {
     isMoe,
     modelParallelSize,
     totalGpus,
+    epNodes,
     gpusAllocated,
     nodes,
     // Memory

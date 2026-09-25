@@ -990,7 +990,7 @@ docker run -d --gpus '"device=0"' \\
       mlopsStrategyId: 'canary-release',
     },
     rationale: {
-      silicon: 'Multi-step agent loops emit extensive hidden reasoning tokens before executing tool calls. The prompt/generation split is inverted: 40% prompt, 60% generation. This heavy autoregressive decode phase is memory-bandwidth bound, which is why H200 (4.8 TB/s HBM3e) is used. The FP8 70B model would fit on one GPU, but six one-GPU replicas would each hold a copy of the weights; two TP=2 replicas (4 GPUs in one Cisco C885A) hold the same 64 concurrent agents with the weights stored twice instead of six times. The calculator estimates ~0.5s to first token and ~36ms per output token (~28 tokens/s per agent) at that batch size.',
+      silicon: 'Multi-step agent loops emit extensive hidden reasoning tokens before executing tool calls. The prompt/generation split is inverted: 40% prompt, 60% generation. This heavy autoregressive decode phase is memory-bandwidth bound, which is why H200 (4.8 TB/s HBM3e) is used. The FP8 70B model would fit on one GPU, but seven one-GPU replicas would each hold a copy of the weights; two TP=2 replicas (4 GPUs in one Cisco C885A) hold the same 64 concurrent agents with the weights stored twice instead of six times. The calculator estimates ~0.5s to first token and ~36ms per output token (~28 tokens/s per agent) at that batch size, or ~20ms with the preset\'s speculative decoding (1B draft, 60% acceptance).',
       memory: 'Agent workflows maintain constant system instructions, API function descriptions, and JSON schemas across all turns. Automatic Prefix Caching (APC) is configured at 60%: the shared tool catalog and instructions are computed and stored once and reused by every agent turn, saving both memory and prefill time. Speculative decoding is enabled because JSON and bracket syntax is highly predictable; gains depend on the draft acceptance rate and shrink at high batch sizes.',
       ancillary: 'Ingress employs an enterprise API Gateway (Kong/Apigee class) with rate-limiting, mTLS authentication, and token quota enforcement. RAG uses Qdrant (10 QPS) with BGE-Large embeddings. Guardrails enforce both input prompt sanitization and output tool-execution safety via Llama Guard 3 8B. Because the guard reads the full 32k-token context, the calculator adds ~1.4s to time-to-first-token and ~3.6s end to end -- per agent step, so consider checking only tool-call outputs or using a smaller guard model. New model versions roll out via a Canary Release validating against 10% of live traffic before full promotion.',
       tradeoff: 'Prioritizes high prefix caching hit rates and memory bandwidth over raw batch throughput, optimizing for multi-turn agent response latency.',
@@ -1675,16 +1675,16 @@ docker run -d --gpus '"device=0"' \\
     summary: 'Heterogeneous split: Compute-dense B200 prefill pool streaming KV cache over RoCEv2 to a memory-dense H200 decode pool.',
     introduction: [
       'Disaggregated Serving (LLM-D) is the most advanced inference topology in modern AI datacenters. In traditional shared servers, prompt processing ("Prefill") and token generation ("Decode") compete for the exact same GPU resources. When a large prompt arrives, it monopolizes the compute cores—causing noticeable stutter and latency spikes for ongoing users.',
-      'LLM-D physically splits the cluster into two heterogeneous pools: compute-heavy Blackwell B200 nodes crunch incoming prompts in milliseconds, then stream the resulting Key-Value memory across a lossless 400G RoCEv2 network to memory-heavy Hopper H200 nodes that handle token generation. Separating the phases removes prefill-decode interference, so decode latency stays far more predictable, at the cost of moving KV over the network.'
+      'LLM-D physically splits the cluster into two heterogeneous pools: compute-heavy Blackwell B200 nodes process incoming prompts, then stream the resulting Key-Value memory across a lossless 400G RoCEv2 network to memory-heavy Hopper H200 nodes that handle token generation. Separating the phases removes prefill-decode interference, so decode latency stays far more predictable, at the cost of moving KV over the network.'
     ],
     specs: {
       model: 'LLaMA 3.1 405B Dense',
       precision: 'FP8 Weights / FP8 KV',
       platform: 'Heterogeneous: B200 + H200',
-      gpus: '2x B200 Prefill Nodes (16 GPUs) + 8x H200 Decode Nodes (64 GPUs)',
+      gpus: '4x B200 Prefill Nodes (32 GPUs) + 14x H200 Decode Nodes (112 GPUs)',
       context: '32,768',
       concurrency: '1,024 Streams',
-      sharding: 'TP=8 Prefill / TP=8 Decode',
+      sharding: 'Prefill 8 × TP=4 / Decode 14 × TP=8 (auto-sized)',
       engine: 'vLLM (LLM-D Disaggregated Engine)',
       apc: '20% Cache Ratio',
       promptRatio: '70% Prompt / 30% Gen',
@@ -1708,9 +1708,9 @@ docker run -d --gpus '"device=0"' \\
       mlopsStrategyId: 'canary-release',
     },
     rationale: {
-      silicon: 'Colocated serving causes severe phase interference: a sudden 32k prompt floods the Tensor Cores, stalling active token generation for ongoing users. LLM-D completely physically decouples the cluster into two distinct hardware tiers: (1) Prefill Pool: 2 NVIDIA B200 nodes (16 GPUs) supplying dense FP8 compute to process prompts. (2) Decode Pool: 8 NVIDIA H200 nodes (64 GPUs, 9,024GB of aggregate HBM3e) holding the weights and KV cache and generating tokens for 1,024 concurrent users. Each pool runs TP=8 replicas inside its own chassis.',
+      silicon: 'Colocated serving causes phase interference: a long prompt occupies the GPUs for its whole prefill, stalling token generation for everyone else on that replica. LLM-D splits the cluster into two hardware tiers, each made of independent instances: (1) Prefill pool on NVIDIA B200 -- ~410GB of FP8 weights fit on four 180GB GPUs with room to spare, so each instance is TP=4 and the calculator needs 8 instances (4 nodes) to keep up with ~2.6 new 23k-token prompts per second at 65% utilization, each taking ~2.2s to prefill. (2) Decode pool on NVIDIA H200 -- the weights need TP=8 on 141GB GPUs, and holding the KV cache for 1,024 concurrent 32k-token users takes 14 instances (14 nodes, 1,974GB of HBM3e). Both pool sizes are solved automatically from the workload; you can switch to manual node counts on the Serving Stack tab.',
       memory: 'Prefill nodes maintain zero persistent KV cache—they generate the attention vectors for the prompt and immediately stream the KV chunk across the network. Decode nodes hold the persistent KV cache across the full 32k context window.',
-      ancillary: 'Networking is the critical system bus: Cisco Nexus 9000 400G RoCEv2 fabric streams the KV cache directly between prefill and decode GPUs via RDMA. Overlapped KV transfer is enabled, transmitting layers 1 to L-1 concurrently with compute. FP8 KV halves the payload: a ~23k-token prompt (70% of 32k) produces ~5.9GB of KV for LLaMA 405B, which takes ~16ms to send over eight 400G NICs, and with per-layer overlap only ~0.13ms of that remains on the critical path in the calculator. MLOps validation pools are disabled for this architecture showcase.',
+      ancillary: 'Networking is the critical system bus: a lossless 400G RoCEv2 fabric streams the KV cache directly from prefill to decode GPUs via RDMA. Overlapped KV transfer is enabled, transmitting each layer\'s KV while the next layer computes. FP8 KV halves the payload: a ~23k-token prompt (70% of 32k) produces ~5.9GB of KV for LLaMA 405B, which takes ~33ms to send over a TP=4 prefill instance\'s four 400G NICs, and with per-layer overlap only ~0.26ms of that remains on the critical path in the calculator. MLOps validation pools are disabled for this architecture showcase.',
       tradeoff: 'Introduces network-dependent KV streaming and two pools to size and balance, in exchange for isolating compute-bound prefill from memory-bound decode, which gives much steadier decode latency at scale.',
       modelSelection: 'LLaMA 3.1 405B shows where disaggregation pays off most: in colocated serving, a long 405B prefill occupies the GPUs for a long time and stalls decode for every other stream. Splitting into B200 prefill and H200 decode pools removes that interference.',
       modelAlternatives: [
@@ -1738,14 +1738,14 @@ docker run -d --gpus '"device=0"' \\
       {
         title: 'Sequential (Non-Overlapped) KV Cache Transfer',
         mistake: 'Waiting for all 126 transformer layers of prefill compute to finish before starting KV network transmission.',
-        impact: 'The whole transfer (~16ms for a 23k-token FP8 prompt over 8x 400G, twice that at FP16) lands on the critical path of every request, eroding the latency advantage of disaggregation.',
+        impact: 'The whole transfer (~33ms for a 23k-token FP8 prompt over a TP=4 instance\'s four 400G NICs, twice that at FP16) lands on the critical path of every request, eroding the latency advantage of disaggregation.',
         remediation: 'Enable layer-by-layer overlapped KV transfer, pipelining RDMA transfer of layer l concurrently with GPU computation of layer l+1.'
       },
       {
         title: 'Prefill-to-Decode Sizing Mismatch',
         mistake: 'Over-provisioning decode nodes while under-provisioning prefill nodes without dynamic routing.',
         impact: 'Prefill nodes hit 100% saturation and queue incoming requests, while expensive decode GPUs sit idle waiting for KV tokens.',
-        remediation: 'Size both pools from measured prompt and output lengths (this preset uses 1:4 prefill-to-decode nodes) and use a router that can rebalance or shift capacity between pools as the traffic mix changes.'
+        remediation: 'Size prefill from the prompt arrival rate and decode from the KV cache of all concurrent streams -- the calculator does this automatically (this preset lands at 4 prefill : 14 decode nodes) -- and use a router that can shift capacity between pools as the traffic mix changes.'
       }
     ],
     engineRecipe: {
@@ -1753,7 +1753,7 @@ docker run -d --gpus '"device=0"' \\
       commandTitle: 'Production LLM-D Node Launch Commands',
       command: `# 1. Prefill worker (B200 node) -- produces KV and sends it over RDMA
 vllm serve meta-llama/Llama-3.1-405B-Instruct-FP8 \\
-  --tensor-parallel-size 8 \\
+  --tensor-parallel-size 4 \\
   --kv-cache-dtype fp8 \\
   --kv-transfer-config '{"kv_connector":"NixlConnector","kv_role":"kv_both"}' \\
   --port 8000
@@ -1767,7 +1767,7 @@ vllm serve meta-llama/Llama-3.1-405B-Instruct-FP8 \\
 
 # 3. A disaggregation-aware router (e.g. the llm-d inference scheduler)
 #    sends each request to a prefill worker, then to a decode worker.`,
-      notes: 'Illustrative: vLLM\'s disaggregated-serving flags have changed across releases, so follow the llm-d / vLLM docs for your version. NIXL moves KV blocks GPU-to-GPU over RDMA (RoCEv2 or InfiniBand). Prefill nodes compute the prompt on B200 and hand the KV to H200 decode workers.'
+      notes: 'Illustrative: vLLM\'s disaggregated-serving flags have changed across releases, so follow the llm-d / vLLM docs for your version. Run 8 prefill instances (TP=4, two per B200 node) and 14 decode instances (TP=8, one per H200 node) to match the calculator. NIXL moves KV blocks GPU-to-GPU over RDMA (RoCEv2 or InfiniBand).'
     }
   }
 };
@@ -1910,8 +1910,11 @@ const CORE_CONTENT = {
           <li><strong>Prefill Pool:</strong> Optimized for compute density (FLOPs). Evaluates prompt attention and immediately streams the generated KV cache across the fabric. Retains zero persistent user KV cache.</li>
           <li><strong>Decode Pool:</strong> Optimized for memory bandwidth and VRAM capacity. Receives the KV cache and executes autoregressive generation without disruption.</li>
         </ul>
+        <DecisionCallout title="How the Calculator Sizes Each Pool">
+          Each pool is a set of independent instances. An instance uses the smallest TP that holds the weights with at least a quarter of memory left for KV cache; adding nodes adds instances, not pipeline stages. The decode pool gets the fewest nodes whose instances hold the KV cache for every concurrent stream. The prefill pool gets enough instances to keep up with the prompt arrival rate: each instance processes roughly one prompt per time-to-first-token, and requests arrive at the traffic rate you enter (or, in concurrency mode, concurrency divided by the time each request takes). Instances are then sized to run at the SLA tab&apos;s target utilization. You can switch to manual node counts on the Serving Stack tab.
+        </DecisionCallout>
         <DecisionCallout title="Lossless RoCEv2 KV Cache Streaming">
-          Under LLM-D, the network becomes the system bus: each request&apos;s prompt KV must move from a prefill GPU to a decode GPU. The calculator estimates the full transfer as prompt KV bytes ÷ (NICs in parallel × 400 Gb/s × 90% efficiency). With overlapped transfer, each layer&apos;s KV is sent while the next layer computes, so only about one layer&apos;s share (1/L of the total) adds to TTFT. Example: a 23k-token LLaMA 405B prompt is ~5.9GB of FP8 KV, ~16ms over eight 400G NICs, of which ~0.13ms stays exposed with overlap. FP16 KV doubles both figures. The fabric must be lossless (PFC and ECN/DCQCN tuned) on switches such as Cisco Nexus 9000, or retransmissions quickly dominate.
+          Under LLM-D, the network becomes the system bus: each request&apos;s prompt KV must move from a prefill GPU to a decode GPU. The calculator estimates the full transfer as prompt KV bytes ÷ (NICs in parallel × 400 Gb/s × 90% efficiency). With overlapped transfer, each layer&apos;s KV is sent while the next layer computes, so only about one layer&apos;s share (1/L of the total) adds to TTFT. Example: a 23k-token LLaMA 405B prompt is ~5.9GB of FP8 KV, ~33ms over a TP=4 prefill instance&apos;s four 400G NICs, of which ~0.26ms stays exposed with overlap. FP16 KV doubles both figures. The fabric must be lossless (PFC and ECN/DCQCN tuned) on switches such as Cisco Nexus 9000, or retransmissions quickly dominate.
         </DecisionCallout>
       </div>
     )
@@ -1956,6 +1959,9 @@ const CORE_CONTENT = {
         <p>
           Here <span className="font-mono text-sky-400">c</span> is the number of concurrent slots per replica, <span className="font-mono text-sky-400">μ</span> the service rate of one slot (1 / (TTFT + output tokens × TPOT)), <span className="font-mono text-sky-400">ρ</span> the target utilization (default 70%), and <span className="font-mono text-sky-400">C(c, a)</span> the Erlang C probability that a request has to wait at all. Mean wait scales with 1 / (1 − ρ), so it rises steeply as utilization approaches 100%: going from 80% to 90% roughly doubles it, and 95% doubles it again. That is why production clusters are sized for headroom rather than 100% utilization.
         </p>
+        <DecisionCallout title="Sizing from Traffic Instead of Concurrency">
+          If you know request rates rather than concurrent streams, choose <em>Size by: Peak traffic</em> on the Workload tab and enter requests per second (or active users × requests per user per hour). By Little&apos;s law, the requests in flight equal the arrival rate times how long each request is served (prefill plus its whole answer); dividing by the target utilization above gives the concurrency to size for. Because larger batches decode more slowly, the calculator iterates until the two agree, then runs the queueing model at the utilization that traffic actually produces. A &quot;request&quot; is one full use of the context window, so for agents it is a whole task or session.
+        </DecisionCallout>
         <DecisionCallout title="Scope of Queueing: TTFT vs TPOT">
           Queueing delay adds to Time-to-First-Token (TTFT) while a request waits for an execution slot. Once it is running, Time Per Output Token (TPOT) depends on memory bandwidth, compute and the batch size -- and the calculator already sizes TPOT at the full concurrency target, so a queue does not slow it further. Guardrail checks and ingress hops are modeled separately as fixed latency added before the queue (input checks, gateway) and after generation (output checks); they shift every percentile of the end-to-end response time by the same amount.
         </DecisionCallout>
@@ -2160,6 +2166,9 @@ const CORE_CONTENT = {
           </table>
         </div>
 
+        <DecisionCallout title="Speculative Decoding: Trading Spare Compute for Speed">
+          Because decode leaves the Tensor Cores mostly idle at small batch sizes, a small drafter can propose k tokens and the target model can check all of them in one pass that reads the weights once. If each proposal is accepted with probability α, a pass yields (1 − α^(k+1)) / (1 − α) tokens on average -- about 2.3 at α = 0.6 and k = 4. The calculator charges the verify pass for its k + 1 positions, the k drafter steps and a per-step overhead, which gives roughly 1.8x faster decode at low batch with α = 0.6. As batch size grows, decode becomes compute-bound, the extra verification work stops paying for itself, and the calculator (like serving engines) stops applying it.
+        </DecisionCallout>
         <DecisionCallout title="The L40S PCIe Inference Fallacy">
           Procurement teams are drawn to the L40S: it has strong FP8 Tensor throughput and costs far less than an H100. But its GDDR6 delivers 864 GB/s -- almost 4x less than H100 SXM5 (3,350 GB/s) -- and it has no NVLink, so multi-GPU tensor parallelism runs over PCIe. Splitting a 70B model across L40S cards gives slow decode and PCIe-bound all-reduces. Use L40S where each model fits on one card: embeddings (BGE-Large), vision encoders (CLIP), guard models and 8B-class LLMs, as the customer-support, swarm and air-gapped presets do.
         </DecisionCallout>

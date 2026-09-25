@@ -1,8 +1,122 @@
 import React from 'react';
-import { Activity, AlertTriangle, BookOpen, Boxes, Check, CheckCircle2, Copy, Database, DollarSign, Gauge, GitBranch, Globe, Grid2x2, HardDrive, LifeBuoy, Network, Search, Server, Shield, Timer, Zap } from 'lucide-react';
+import { Activity, AlertTriangle, BookOpen, Boxes, Check, Copy, Database, DollarSign, Gauge, GitBranch, Globe, Grid2x2, HardDrive, LifeBuoy, Network, Search, Server, Shield, Timer, Zap } from 'lucide-react';
 import { TopologyDiagram } from './TopologyDiagram';
 import { ScenarioCompare } from './ScenarioCompare';
 import { Banner, Card, Disclosure, Kpi, KpiRow, Meter, Row, Rows, SectionLabel, Tag } from './ui';
+
+const fmtMs = (ms) => (ms >= 10 ? `${Math.round(ms)} ms` : `${Number(ms).toFixed(ms >= 1 ? 1 : 2)} ms`);
+
+const STATUS_TONES = {
+  good: { edge: 'border-l-emerald-500', dot: 'bg-emerald-400' },
+  tight: { edge: 'border-l-amber-500', dot: 'bg-amber-400' },
+  bad: { edge: 'border-l-red-500', dot: 'bg-red-400' },
+};
+
+function Figure({ label, value, sub }) {
+  return (
+    <div className="min-w-0">
+      <div className="text-[11px] text-zinc-500">{label}</div>
+      <div className="text-[15px] font-semibold text-zinc-100 tabular-nums leading-tight mt-0.5">{value}</div>
+      {sub && <div className="text-[11px] text-zinc-500 tabular-nums">{sub}</div>}
+    </div>
+  );
+}
+
+// Headline answer to "does this design fit?", with the numbers behind it.
+function SizingStatus({ ctx }) {
+  const { memory, results, gpu, platform, isLlmd } = ctx;
+  const pools = isLlmd
+    ? [
+        { name: 'Prefill pool', m: memory.llmd.prefill, gpuName: memory.llmd.prefill.gpu.name, vram: memory.llmd.prefill.gpu.vramGb, platformName: `${memory.llmd.prefill.nodes}× ${memory.llmd.prefill.platform.shortName}` },
+        { name: 'Decode pool', m: memory.llmd.decode, gpuName: memory.llmd.decode.gpu.name, vram: memory.llmd.decode.gpu.vramGb, platformName: `${memory.llmd.decode.nodes}× ${memory.llmd.decode.platform.shortName}` },
+      ]
+    : null;
+  const tight = isLlmd
+    ? pools.some(p => p.m.headroomGb < 0.05 * p.vram)
+    : memory.headroomGb < 0.05 * memory.usableGpuCapacityGb;
+  const tone = memory.isOOM ? 'bad' : tight ? 'tight' : 'good';
+  const t = STATUS_TONES[tone];
+  const headline = memory.isOOM
+    ? (isLlmd
+        ? `Out of memory in the ${pools.filter(p => p.m.isOOM).map(p => p.name.toLowerCase()).join(' and ')}`
+        : 'Out of memory')
+    : tight ? 'Fits, with little headroom' : 'Fits in memory';
+
+  return (
+    <section
+      data-testid="sizing-status"
+      aria-label="Sizing status"
+      className={`rounded-lg border border-zinc-800 border-l-2 ${t.edge} bg-zinc-900/70 px-4 py-3.5 space-y-3`}
+    >
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className={`w-2 h-2 rounded-full shrink-0 ${t.dot}`} />
+          <h2 className="text-[13.5px] font-semibold text-zinc-100 truncate">{headline}</h2>
+        </div>
+        <span className="text-[11px] text-zinc-500 truncate" title={platform.name}>
+          {isLlmd ? 'Disaggregated prefill / decode' : platform.name}
+        </span>
+      </div>
+
+      {isLlmd ? (
+        <div className="divide-y divide-zinc-800/80 border-t border-zinc-800/80">
+          {pools.map(p => (
+            <div key={p.name} className="grid grid-cols-[1fr_auto_auto] gap-x-5 items-baseline py-2 text-[12px]">
+              <div className="min-w-0">
+                <div className="text-zinc-200 font-medium">{p.name}</div>
+                <div className="text-[11px] text-zinc-500 truncate">{p.platformName} · {p.gpuName}</div>
+              </div>
+              <div className="text-right tabular-nums text-zinc-200">
+                {p.m.totalUsedGb.toFixed(1)} / {p.vram} GB
+                <div className="text-[11px] text-zinc-500">{p.m.utilization}% used</div>
+              </div>
+              <div className={`text-right tabular-nums ${p.m.isOOM ? 'text-red-300' : 'text-zinc-200'}`}>
+                {p.m.headroomGb.toFixed(1)} GB
+                <div className="text-[11px] text-zinc-500">headroom</div>
+              </div>
+            </div>
+          ))}
+          <div className="flex items-baseline justify-between pt-2 text-[12px]">
+            <span className="text-zinc-400">KV cache hand-off per request</span>
+            <span className="tabular-nums text-zinc-200 text-right">
+              {memory.llmd.kvTransfer.promptKvChunkGb} GB · ~{fmtMs(memory.llmd.kvTransfer.totalTransferMs)} transfer
+              {memory.llmd.kvTransfer.isOverlapped && <span className="text-zinc-500">, ~{fmtMs(memory.llmd.kvTransfer.kvTransferLatencyMs)} exposed</span>}
+            </span>
+          </div>
+        </div>
+      ) : (
+        <div className="grid grid-cols-3 gap-4 border-t border-zinc-800/80 pt-3">
+          <Figure
+            label="Memory used per GPU"
+            value={`${memory.perGpuTotalUsedGb.toFixed(1)} GB`}
+            sub={memory.perGpuTotalUsedGb > gpu.vramGb
+              ? `${(memory.perGpuTotalUsedGb / gpu.vramGb).toFixed(1)}× the ${gpu.vramGb} GB on each GPU`
+              : `${memory.memoryUtilizationPercent}% of ${gpu.vramGb} GB`}
+          />
+          <Figure
+            label={memory.isOOM ? 'Over usable memory by' : 'Headroom per GPU'}
+            value={`${Math.abs(memory.isOOM ? memory.perGpuTotalUsedGb - memory.usableGpuCapacityGb : memory.headroomGb).toFixed(1)} GB`}
+            sub={memory.isOOM ? 'per GPU' : 'after runtime reserve'}
+          />
+          <Figure
+            label="GPUs"
+            value={results.totalGpus.toLocaleString()}
+            sub={`${results.nodes.toLocaleString()} ${results.nodes === 1 ? 'node' : 'nodes'}`}
+          />
+        </div>
+      )}
+
+      {memory.isOOM && results.recommendations?.length > 0 && (
+        <div className="border-t border-zinc-800/80 pt-2.5">
+          <div className="text-[11px] font-medium text-zinc-400 mb-1">Try</div>
+          <ul className="space-y-1 text-[12px] text-zinc-300 list-disc pl-4 marker:text-zinc-600">
+            {results.recommendations.map((rec, i) => <li key={i}>{rec}</li>)}
+          </ul>
+        </div>
+      )}
+    </section>
+  );
+}
 
 export function ResultsPane({ ctx }) {
   const {
@@ -20,56 +134,8 @@ export function ResultsPane({ ctx }) {
 
       <ScenarioCompare ctx={ctx} />
 
-      {/* Status Banner */}
-      {isLlmd ? (
-        <Banner
-          tone={memory.isOOM ? 'warn' : ((memory.llmd.prefill.headroomGb < 10 || memory.llmd.decode.headroomGb < 10) ? 'warn' : 'good')}
-          icon={memory.isOOM ? AlertTriangle : CheckCircle2}
-          title={
-            memory.isOOM
-              ? (memory.llmd.prefill.isOOM && memory.llmd.decode.isOOM
-                  ? 'Out of memory: both Prefill & Decode pools exceed GPU VRAM'
-                  : memory.llmd.prefill.isOOM
-                  ? `Out of memory: Prefill pool exceeds VRAM on ${memory.llmd.prefill.gpu.name}`
-                  : `Out of memory: Decode pool exceeds VRAM on ${memory.llmd.decode.gpu.name}`)
-              : 'LLM-D disaggregated architecture verified (dual-pool sizing)'
-          }
-        >
-          {memory.isOOM ? (
-            <div className="space-y-1">
-              {results.recommendations.map((rec, i) => <div key={i}>Fix: {rec}</div>)}
-            </div>
-          ) : (
-            <Rows>
-              <Row k={`Prefill pool (${memory.llmd.prefill.nodes}x ${memory.llmd.prefill.platform.shortName})`}
-                v={`${memory.llmd.prefill.totalUsedGb.toFixed(1)} / ${memory.llmd.prefill.gpu.vramGb} GB (${memory.llmd.prefill.utilization}%) · ${memory.llmd.prefill.headroomGb.toFixed(1)} GB free`} />
-              <Row k={`Decode pool (${memory.llmd.decode.nodes}x ${memory.llmd.decode.platform.shortName})`}
-                v={`${memory.llmd.decode.totalUsedGb.toFixed(1)} / ${memory.llmd.decode.gpu.vramGb} GB (${memory.llmd.decode.utilization}%) · ${memory.llmd.decode.headroomGb.toFixed(1)} GB free`} />
-              <Row k="Lossless RoCEv2 KV streaming" v={`~${memory.llmd.kvTransfer.promptKvChunkGb} GB in ~${memory.llmd.kvTransfer.kvTransferLatencyMs} ms`} />
-            </Rows>
-          )}
-        </Banner>
-      ) : (
-        <Banner
-          tone={memory.isOOM ? 'warn' : (memory.headroomGb < 0.05 * memory.usableGpuCapacityGb ? 'warn' : 'good')}
-          icon={memory.isOOM ? AlertTriangle : CheckCircle2}
-          title={
-            memory.isOOM
-              ? `Out of memory: workload exceeds usable VRAM by ${(memory.perGpuTotalUsedGb - memory.usableGpuCapacityGb).toFixed(1)} GB per GPU`
-              : `Hardware verified: fits with ${memory.headroomGb.toFixed(1)} GB headroom per GPU`
-          }
-        >
-          {memory.isOOM ? (
-            <div className="space-y-1">
-              {results.recommendations.map((rec, i) => <div key={i}>Fix: {rec}</div>)}
-            </div>
-          ) : (
-            <span>
-              Each GPU uses <strong>{memory.perGpuTotalUsedGb.toFixed(1)} GB</strong> ({memory.memoryUtilizationPercent}%) of <strong>{gpu.vramGb} GB</strong> on <strong>{platform.name}</strong>.
-            </span>
-          )}
-        </Banner>
-      )}
+      {/* Sizing status */}
+      <SizingStatus ctx={ctx} />
 
       {/* Warnings Banner */}
       {warnings.length > 0 && !memory.isOOM && (

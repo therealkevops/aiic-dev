@@ -5,7 +5,7 @@
 // directly, so every consumer sees exactly the numbers the UI shows.
 import { MODEL_PRESETS, PRECISION_OPTIONS } from '../data/models.js';
 import { GPU_CATALOG, NETWORK_PROTOCOLS } from '../data/hardware.js';
-import { PLATFORM_SYSTEMS } from '../data/platforms.js';
+import { PLATFORM_SYSTEMS, PLATFORM_VENDORS } from '../data/platforms.js';
 import { STORAGE_TIERS, DURABILITY_SCHEMES } from '../data/storage.js';
 import { GPU_PRICING, NVIDIA_AI_ENTERPRISE_USD_PER_GPU_PER_YEAR } from '../data/pricing.js';
 import { EMBEDDING_MODELS, VECTOR_DB_PLATFORMS } from '../data/rag.js';
@@ -39,8 +39,9 @@ export function computeScenario(config) {
   const availablePlatforms = PLATFORM_SYSTEMS.filter(p => p.vendor === c.selectedVendor);
   const platform = PLATFORM_SYSTEMS.find(p => p.id === c.selectedPlatformId) || availablePlatforms[0];
   const gpu = GPU_CATALOG.find(g => g.id === platform.gpuId) || GPU_CATALOG[0];
-  // Cisco = RoCEv2 only, NVIDIA = RoCEv2 + InfiniBand
-  const availableProtocols = NETWORK_PROTOCOLS.filter(p => (c.selectedVendor === 'cisco' ? p.id === 'rocev2' : true));
+  // Each vendor lists the scale-out fabrics it supports (Cisco and AMD: RoCEv2; NVIDIA: + InfiniBand)
+  const vendor = PLATFORM_VENDORS.find(v => v.id === c.selectedVendor) || PLATFORM_VENDORS[0];
+  const availableProtocols = NETWORK_PROTOCOLS.filter(p => vendor.supportedProtocols.includes(p.id));
   const secondaryPlatform = availablePlatforms.find(p => p.id === c.secondaryPlatformId) || availablePlatforms[0];
   const secondaryGpu = GPU_CATALOG.find(g => g.id === secondaryPlatform.gpuId) || GPU_CATALOG[0];
   const model = resolveModel(c);
@@ -267,8 +268,22 @@ export function computeScenario(config) {
     trainingRedundancyItPowerKw: trainingRedundancy.eligible ? trainingRedundancy.spareItPowerKw : 0,
   });
 
+  // ── 11. Advisories beyond the engine's own warnings ─────────────────────────
+  const advisories = [];
+  if (model.license?.commercial === 'non-commercial') {
+    advisories.push(`License: ${model.name} is released under the ${model.license.name}. ${model.license.note || 'Commercial use is not permitted without a separate license.'}`);
+  }
+  if (rag.eligible && embeddingModel.license?.commercial === 'non-commercial') {
+    advisories.push(`License: the ${embeddingModel.name} embedding model is ${embeddingModel.license.name}. ${embeddingModel.license.note || ''}`.trim());
+  }
+  if (c.enableNvidiaAiEnterprise && gpu.vendor !== 'NVIDIA') {
+    advisories.push('NVIDIA AI Enterprise is licensed for NVIDIA GPUs only; its per-GPU cost is still included in Cost & TCO. Turn it off for an AMD Instinct deployment.');
+  }
+  const warnings = [...(results.warnings || []), ...advisories];
+
   return {
-    availablePlatforms, platform, gpu, availableProtocols, secondaryPlatform, secondaryGpu,
+    warnings,
+    vendor, availablePlatforms, platform, gpu, availableProtocols, secondaryPlatform, secondaryGpu,
     model, maxContextLength, precision, protocol, effectiveConcurrency,
     autoRecommendation, tp, pp, dp, canAutoDp,
     results, memory, facility, network, bom, isLlmd,

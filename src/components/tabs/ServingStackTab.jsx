@@ -183,7 +183,7 @@ export function ServingStackTab({ ctx }) {
                     <Server className="w-3.5 h-3.5" />
                     Secondary Compute Platform (Decode Pool)
                   </span>
-                  <span className="text-[10.5px] text-zinc-400">{selectedVendor === 'cisco' ? 'Cisco AI Factory' : 'NVIDIA DGX'}</span>
+                  <span className="text-[10.5px] text-zinc-400">{selectedVendor === 'cisco' ? 'Cisco AI Factory' : selectedVendor === 'amd' ? 'AMD Instinct' : 'NVIDIA DGX'}</span>
                 </div>
 
                 <select

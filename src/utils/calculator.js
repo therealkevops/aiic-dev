@@ -36,6 +36,42 @@ const DEFAULT_SWITCH_POWER_KW = 3.5;
 
 // ─── Helper ───────────────────────────────────────────────────────────────────
 /**
+ * KV-cache bytes stored per token of one sequence, averaged over a sequence of `contextLength`
+ * tokens.
+ *  - MLA models (DeepSeek, Kimi K2) cache one compressed latent per layer: L × (512 + 64).
+ *  - GQA/MHA models cache K and V per KV head: 2 × L × H_kv × D_head.
+ *  - Hybrid-attention models (Gemma 3, gpt-oss, Llama 4) have `localLayers` layers that only
+ *    attend within a `localWindow`-token window, so those layers never hold more than the
+ *    window. Averaged over the sequence they count as min(1, window / context) of a layer.
+ */
+export function kvBytesPerToken(model, kvBytesPerElement, contextLength) {
+  const layers = model.layers || 32;
+  const localLayers = Math.min(layers, model.localLayers || 0);
+  const window = model.localWindow || 0;
+  const ctx = Math.max(1, contextLength || 1);
+  const effectiveLayers = localLayers > 0 && window > 0
+    ? (layers - localLayers) + localLayers * Math.min(1, window / ctx)
+    : layers;
+  if (model.isMla) return effectiveLayers * (512 + 64) * kvBytesPerElement;
+  const kvHeads = model.kvHeads || 8;
+  const headDim = model.headDim || 128;
+  return 2 * effectiveLayers * kvHeads * headDim * kvBytesPerElement;
+}
+
+/**
+ * Peak dense tensor throughput (FLOP/s) a GPU delivers for a given weight precision.
+ * FP8 uses FP8 Tensor Cores; NVFP4/MXFP4 use native FP4 units where the GPU has them
+ * (Blackwell, MI355X) and otherwise fall back to 16-bit math on dequantized weights, the
+ * same as weight-only INT4 (AWQ/GPTQ), which always computes in FP16/BF16.
+ */
+export function peakDenseFlops(gpu, precision) {
+  const fp16 = (gpu.fp16Tflops || 989) * 1e12;
+  if (precision.id === 'fp8') return (gpu.fp8Tflops || (gpu.fp16Tflops ? gpu.fp16Tflops * 2 : 1979)) * 1e12;
+  if ((precision.id === 'nvfp4' || precision.id === 'mxfp4') && gpu.fp4Tflops) return gpu.fp4Tflops * 1e12;
+  return fp16;
+}
+
+/**
  * Human-readable name of the fabric carrying disaggregated-serving KV transfers.
  * Only name Cisco Nexus when the platform is actually a Cisco one.
  */
@@ -165,12 +201,7 @@ export function recommendSharding(params) {
       kvBytesPerElement = 0.5;
     }
 
-    let bytesPerTokenSeq;
-    if (model.id === "deepseek-r1-671b" || model.isMla) {
-      bytesPerTokenSeq = layers * (512 + 64) * kvBytesPerElement;
-    } else {
-      bytesPerTokenSeq = 2 * layers * kvHeads * headDim * kvBytesPerElement;
-    }
+    const bytesPerTokenSeq = kvBytesPerToken(model, kvBytesPerElement, contextLength);
 
     const promptTokens = Math.round(contextLength * promptTokenRatio);
     // M4: Split prefixCacheRatio into globalPrefixTokens (stored 1x) and sessionReuseRatio (stored per stream)
@@ -296,11 +327,7 @@ export function recommendSharding(params) {
     if (kvPrecision === "fp8") kvBytesPerElement = 1.0;
     else if (kvPrecision === "int4") kvBytesPerElement = 0.5;
 
-    if (model.id === "deepseek-r1-671b" || model.isMla) {
-      bytesPerTokenSeq = layers * (512 + 64) * kvBytesPerElement;
-    } else {
-      bytesPerTokenSeq = 2 * layers * kvHeads * headDim * kvBytesPerElement;
-    }
+    bytesPerTokenSeq = kvBytesPerToken(model, kvBytesPerElement, contextLength);
 
     const promptTokens = Math.round(contextLength * promptTokenRatio);
     const effectiveGlobalPrefixTokens = globalPrefixTokens != null
@@ -326,7 +353,7 @@ export function recommendSharding(params) {
     const perGpuAvailForKvGb = Math.max(0, usableGpuVramGb - perGpuWeightGb - perGpuActGb);
 
     let kvCapacityPerReplica = 0;
-    if (model.id === "deepseek-r1-671b" || model.isMla) {
+    if (model.isMla) {
       kvCapacityPerReplica = perGpuAvailForKvGb * recommendedPp;
     } else {
       const tpEff = Math.min(recommendedTp, kvHeads);
@@ -494,16 +521,10 @@ export function calculateInfra(config) {
       kvBytesPerElement = 0.5;
     }
 
-    if (model.id === "deepseek-r1-671b" || model.isMla) {
-      bytesPerTokenSeq = layers * (512 + 64) * kvBytesPerElement;
-    } else {
-      bytesPerTokenSeq = 2 * layers * kvHeads * headDim * kvBytesPerElement;
-    }
+    bytesPerTokenSeq = kvBytesPerToken(model, kvBytesPerElement, contextLength);
 
     // Baseline unoptimized KV cache (standard FP16 with 0% prefix caching)
-    const baselineBytesPerTokenSeq = (model.id === "deepseek-r1-671b" || model.isMla)
-      ? layers * (512 + 64) * 2.0
-      : 2 * layers * kvHeads * headDim * 2.0;
+    const baselineBytesPerTokenSeq = kvBytesPerToken(model, 2.0, contextLength);
     baselineKvGb = (baselineBytesPerTokenSeq * contextLength * concurrencyPerReplica) / 1e9;
 
     // Prefix Caching: Shared prompt tokens stored ONCE in VRAM across streams;
@@ -582,7 +603,7 @@ export function calculateInfra(config) {
     const prefillTransientKvTotalBytes = bytesPerTokenSeq * CONFIG.maxBatchedTokens;
     const prefillTransientKvTotalGb = prefillTransientKvTotalBytes / 1e9;
     let prefillKvGb = 0;
-    if (model.id === "deepseek-r1-671b" || model.isMla) {
+    if (model.isMla) {
       prefillKvGb = prefillTransientKvTotalGb / prefillPp;
     } else {
       const prefillTpEff = Math.min(prefillTp, kvHeads);
@@ -599,7 +620,7 @@ export function calculateInfra(config) {
     const decodePpImbalance = decodePp > 1 ? CONFIG.ppImbalance : 1.0;
     const decodeWeightsGb = (weightMemoryTotalGb / (decodeTp * decodePp)) * decodePpImbalance;
     let decodeKvGb = 0;
-    if (model.id === "deepseek-r1-671b" || model.isMla) {
+    if (model.isMla) {
       decodeKvGb = kvCacheTotalGb / decodePp;
     } else {
       const decodeTpEff = Math.min(decodeTp, kvHeads);
@@ -617,11 +638,7 @@ export function calculateInfra(config) {
     // 3. Lossless RoCEv2 KV Cache Network Transfer (M3)
     let transferBytesPerTokenSeq;
     const kvTransferBytes = kvPrecision === "fp8" ? 1.0 : (kvPrecision === "int4" ? 0.5 : 2.0);
-    if (model.id === "deepseek-r1-671b" || model.isMla) {
-      transferBytesPerTokenSeq = layers * (512 + 64) * kvTransferBytes;
-    } else {
-      transferBytesPerTokenSeq = 2 * layers * kvHeads * headDim * kvTransferBytes;
-    }
+    transferBytesPerTokenSeq = kvBytesPerToken(model, kvTransferBytes, promptTokens);
     const promptKvBytes = transferBytesPerTokenSeq * promptTokens;
     const promptKvChunkGb = Number((promptKvBytes / 1e9).toFixed(2));
     const nicsPerNode = prefillPlatform?.nicsPerNode || prefillPlatform?.gpusPerChassis || prefillGpu?.gpusPerChassis || 8;
@@ -686,7 +703,7 @@ export function calculateInfra(config) {
   } else if (workloadType === "inference") {
     const ppImbalanceFactor = pp > 1 ? CONFIG.ppImbalance : 1.0;
     perGpuWeightsGb = (weightMemoryTotalGb / (tp * pp)) * ppImbalanceFactor;
-    if (model.id === "deepseek-r1-671b" || model.isMla) {
+    if (model.isMla) {
       perGpuKvOrOptGb = kvCacheTotalGb / pp;
     } else {
       const tpEff = Math.min(tp, kvHeads);
@@ -764,6 +781,11 @@ export function calculateInfra(config) {
   // S6: Block ZeRO-2/3 with PP > 1
   if (workloadType === 'training' && pp > 1 && (zeroStage === 2 || zeroStage === 3)) {
     warnings.push(`ZeRO-${zeroStage} is incompatible with Pipeline Parallelism (PP=${pp} > 1). ZeRO gradient and parameter partitioning require synchronous Data Parallel groups without pipeline stage boundaries. Use ZeRO-1 with PP, or reduce PP to 1.`);
+  }
+
+  // TensorRT-LLM is NVIDIA-only; AMD Instinct serving runs vLLM or SGLang on ROCm.
+  if (servingConfig?.servingEngine === 'trt-llm' && (gpu.vendor === 'AMD' || servingConfig?.secondaryGpu?.vendor === 'AMD')) {
+    warnings.push('TensorRT-LLM runs only on NVIDIA GPUs. For AMD Instinct, use vLLM or SGLang on ROCm; the sizing is otherwise unchanged.');
   }
 
   // LLM-D Disaggregated Serving architectural advisory
@@ -998,10 +1020,7 @@ export function calculateInfra(config) {
     const prefillTpCount = isLlmd ? prefillTp : tp;
 
     // Dense peak table without sparsity; INT4 uses FP16 compute (C4)
-    let prefillPeakDenseFlops = (targetPrefillGpu.fp16Tflops || 989) * 1e12;
-    if (precision.id === "fp8") {
-      prefillPeakDenseFlops = (targetPrefillGpu.fp8Tflops || (targetPrefillGpu.fp16Tflops ? targetPrefillGpu.fp16Tflops * 2 : 1979)) * 1e12;
-    }
+    const prefillPeakDenseFlops = peakDenseFlops(targetPrefillGpu, precision);
     const gpuTflops = prefillPeakDenseFlops / 1e12;
 
     // Dynamic MFU by prompt length (C4)
@@ -1013,7 +1032,7 @@ export function calculateInfra(config) {
     const mfuPrefill = uncachedPromptTokens < 512 ? 0.25 : (uncachedPromptTokens < 2048 ? 0.4 : 0.5);
 
     const fwdFlopsPerToken = 2 * effectiveParamsForThroughput * 1e9;
-    const attnDim = (model.id === "deepseek-r1-671b" || model.isMla) ? 576 : hiddenDim;
+    const attnDim = (model.isMla) ? 576 : hiddenDim;
     const attnFlopsPerToken = 2 * layers * attnDim * contextLength;
     const totalFlopsPerToken = fwdFlopsPerToken + attnFlopsPerToken;
     const totalPromptFlops = totalFlopsPerToken * uncachedPromptTokens;
@@ -1025,7 +1044,9 @@ export function calculateInfra(config) {
     // All-Reduce bandwidth & latency (C4)
     const isB200 = targetPrefillGpu.id?.includes("b200") || targetPrefillGpu.name?.includes("B200");
     const isNonNvlink = targetPrefillGpu.interconnectType === "pcie" || platform?.interconnectType === "pcie";
-    const interconnectBwUni = isNonNvlink ? CONFIG.pcieBw : (isB200 ? 900e9 : CONFIG.nvlinkBwUni);
+    const interconnectBwUni = isNonNvlink
+      ? CONFIG.pcieBw
+      : (targetPrefillGpu.linkBwUniGBs ? targetPrefillGpu.linkBwUniGBs * 1e9 : (isB200 ? 900e9 : CONFIG.nvlinkBwUni));
 
     const t_allreduce = prefillTpCount > 1
       ? layers * 2 * (2 * (prefillTpCount - 1) / prefillTpCount) * uncachedPromptTokens * hiddenDim * CONFIG.B_act / interconnectBwUni
@@ -1049,10 +1070,7 @@ export function calculateInfra(config) {
     const S_avg = model.avgContextLength || contextLength;
 
     const BW_mem = (targetDecodeGpu.memBandwidthTbps || 4.8) * 1e12; // bytes/s
-    let decodePeakDenseFlops = (targetDecodeGpu.fp16Tflops || 989) * 1e12;
-    if (precision.id === "fp8") {
-      decodePeakDenseFlops = (targetDecodeGpu.fp8Tflops || (targetDecodeGpu.fp16Tflops ? targetDecodeGpu.fp16Tflops * 2 : 1979)) * 1e12;
-    }
+    const decodePeakDenseFlops = peakDenseFlops(targetDecodeGpu, precision);
 
     const weightBytesRead = decodeWeightBytes(model, customParams, precision, config.ep || CONFIG.ep || 1, C_rep);
     const kvBytesRead = bytesPerTokenSeq * S_avg * C_rep;

@@ -45,10 +45,17 @@ export function WorkloadTab({ ctx }) {
           >
             {MODEL_PRESETS.map((m) => (
               <option key={m.id} value={m.id}>
-                {m.name} — {m.params}B params {m.isMoe ? '(MoE)' : ''}
+                {m.name} — {m.params}B params{m.isMoe ? ` (MoE, ${m.activeParams}B active)` : ''}
               </option>
             ))}
           </select>
+          {model.license && (
+            <div className={`text-[11px] mt-1.5 ${model.license.commercial === 'non-commercial' ? 'text-amber-400' : 'text-zinc-400'}`}>
+              License: {model.license.name}
+              {model.license.commercial === 'non-commercial' ? ' (non-commercial)' : ''}
+              {model.license.note ? ` — ${model.license.note}` : ''}
+            </div>
+          )}
         </Field>
 
         {/* Custom Param input if custom */}
@@ -124,7 +131,7 @@ export function WorkloadTab({ ctx }) {
           min="2048" max={maxContextLength} step="2048"
           value={Math.min(contextLength, maxContextLength)}
           onChange={(e) => setContextLength(Number(e.target.value))}
-          marks={['2k (Prompt)', '32k (Docs)', maxContextLength >= 131072 ? '128k (Max)' : `${(maxContextLength / 1024).toFixed(0)}k (Max)`]}
+          marks={['2k (Prompt)', '32k (Docs)', `${(maxContextLength / 1024).toFixed(0)}k (Max)`]}
           helper={
             <>
               {maxContextLength < 131072 && (

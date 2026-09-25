@@ -4,7 +4,7 @@ import {
   LifeBuoy, GitBranch, Grid2x2, Timer, DollarSign,
 } from 'lucide-react';
 
-import { PLATFORM_SYSTEMS } from './data/platforms';
+import { PLATFORM_SYSTEMS, PLATFORM_VENDORS } from './data/platforms';
 import { USE_CASE_PRESETS } from './data/presets';
 import { DEFAULT_CONFIG, applyPresetConfig } from './state/config';
 import { computeScenario } from './utils/scenario';
@@ -70,7 +70,7 @@ export default function App() {
   );
 
   // Vendor switch: pick that vendor's first platform, an H200 (or second) platform for the
-  // LLM-D decode pool, and force RoCEv2 on Cisco (no InfiniBand option there).
+  // LLM-D decode pool, and fall back to the vendor's default fabric if the current one isn't offered.
   const handleVendorChange = (vendorId) => {
     setConfig(c => {
       const next = { ...c, selectedVendor: vendorId };
@@ -80,7 +80,8 @@ export default function App() {
         const secondaryCandidate = vendorPlatforms.find(p => p.id.includes('h200')) || vendorPlatforms[Math.min(1, vendorPlatforms.length - 1)];
         next.secondaryPlatformId = secondaryCandidate.id;
       }
-      if (vendorId === 'cisco') next.selectedProtocolId = 'rocev2';
+      const vendor = PLATFORM_VENDORS.find(v => v.id === vendorId);
+      if (vendor && !vendor.supportedProtocols.includes(next.selectedProtocolId)) next.selectedProtocolId = vendor.defaultProtocol;
       return next;
     });
   };

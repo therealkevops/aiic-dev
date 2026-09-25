@@ -13,9 +13,9 @@ export function NetworkTab({ ctx }) {
       <Card icon={Network} title="4. Network Fabric" className="space-y-4">
         <Field label="Scale-Out Network Architecture" helper={
           <>
-            {selectedVendor === 'cisco' && (
+            {selectedVendor !== 'nvidia' && (
               <div className="text-[11px] text-zinc-400 mt-1.5">
-                Cisco Nexus AI Fabric uses Lossless RoCEv2 (PFC 802.1Qbb + ECN). NVIDIA InfiniBand is available on NVIDIA DGX platforms.
+                {selectedVendor === 'cisco' ? 'Cisco Nexus AI Fabric' : 'AMD Instinct platforms'} use Lossless RoCEv2 (PFC 802.1Qbb + ECN). NVIDIA InfiniBand is available on NVIDIA DGX platforms.
               </div>
             )}
             <InfoHelper

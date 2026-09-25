@@ -5,6 +5,7 @@ import { Banner, Card, Disclosure, Kpi, KpiRow, Meter, Row, Rows, SectionLabel, 
 
 export function ResultsPane({ ctx }) {
   const {
+    warnings,
     bom, concurrency, contextLength, copiedBOM, cost, dp,
     embeddingGpu, facility, gpu, guardGpu, guardModel, guardrails,
     haDr, haDrTier, handleCopyBOM, ingress, ingressTier, isLlmd,
@@ -68,10 +69,10 @@ export function ResultsPane({ ctx }) {
       )}
 
       {/* Warnings Banner */}
-      {results.warnings.length > 0 && !memory.isOOM && (
+      {warnings.length > 0 && !memory.isOOM && (
         <Banner tone="warn" icon={AlertTriangle} title="Architecture sizing notice">
           <ul className="list-disc list-inside space-y-1">
-            {results.warnings.map((w, idx) => <li key={idx}>{w}</li>)}
+            {warnings.map((w, idx) => <li key={idx}>{w}</li>)}
           </ul>
         </Banner>
       )}

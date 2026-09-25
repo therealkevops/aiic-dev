@@ -87,6 +87,7 @@ export function RagTab({ ctx }) {
                     onClick={() => setSelectedEmbeddingModelId(m.id)}
                     title={`${m.name} (${m.paramsMillion.toLocaleString()}M params)`}
                     desc={`${m.dims} dims · ${m.maxTokens.toLocaleString()} max tokens · ${m.vendor}`}
+                    badge={m.license?.commercial === 'non-commercial' ? <Tag tone="warn">Non-commercial</Tag> : null}
                   />
                 ))}
               </div>

@@ -14,7 +14,7 @@ AI INFRASTRUCTURE DATACENTER BILL OF MATERIALS (DC BOM)
 ${isDisagg ? `Serving Architecture: LLM-D Disaggregated (${bom.isHeterogeneous ? 'Heterogeneous Split' : 'Homogeneous Split'})
 Prefill Platform: ${bom.prefill.platformName}
 Decode Platform: ${bom.decode.platformName}` : `Platform: ${platform.name}`}
-Vendor: ${selectedVendor === 'cisco' ? (platform.id?.includes('smci') ? 'Cisco Secure AI Factory (Supermicro Compute + Nexus Fabric)' : 'Cisco UCS & Nexus AI Fabric') : 'NVIDIA DGX SuperPOD'}
+Vendor: ${selectedVendor === 'cisco' ? (platform.id?.includes('smci') ? 'Cisco Secure AI Factory (Supermicro Compute + Nexus Fabric)' : 'Cisco UCS & Nexus AI Fabric') : selectedVendor === 'amd' ? 'AMD Instinct (OEM platform)' : 'NVIDIA DGX SuperPOD'}
 =====================================================
 
 1. COMPUTE CLUSTER

@@ -415,9 +415,13 @@ KV cache bytes read per forward step:
 $$\text{kvBytesRead} = \text{kvBytesPerToken} \times S_{\text{avg}} \times C_{\text{rep}} \quad [\text{bytes}]$$
 
 Step latency components:
-$$t_{\text{mem}} = \frac{\text{weightBytesRead} + \text{kvBytesRead}}{TP \times BW_{\text{mem}} \times \text{CONFIG.bwEfficiency}} \quad (\text{default bwEfficiency } = 0.75)$$
+$$t_{\text{mem}} = \frac{\text{weightBytesRead}}{TP \times BW_{\text{mem}} \times \text{CONFIG.bwEfficiency}} + \frac{\text{kvBytesRead}}{TP \times BW_{\text{mem}} \times \text{CONFIG.kvBwEfficiency}} \quad (\text{defaults } 0.75,\ 0.45)$$
 
-$$t_{\text{comp}} = \frac{2 \times P_{\text{active}} \times C_{\text{rep}}}{TP \times \text{peakDenseFlops} \times \text{CONFIG.mfuDecode}} \quad (\text{default mfuDecode } = 0.4)$$
+$$t_{\text{comp}} = \frac{2 \times P_{\text{active}} \times C_{\text{rep}}}{TP \times \text{peakDenseFlops} \times \text{CONFIG.mfuDecode} \times f_{\text{MoE}}} \quad (\text{default mfuDecode } = 0.4;\ f_{\text{MoE}} = \text{CONFIG.moeMfuFactor} = 0.4 \text{ for MoE, else } 1)$$
+
+`peakDenseFlops` for NVFP4/MXFP4 on GPUs with native FP4 is the FP4 peak × `CONFIG.fp4ComputeEfficiency` (0.75). In prefill, the MoE factor divides only the linear-layer FLOPs, not attention FLOPs.
+
+**Calibration.** `kvBwEfficiency`, `moeMfuFactor` and `fp4ComputeEfficiency` were fitted to NVIDIA's published TensorRT-LLM max-load throughput (output tok/s/GPU; [perf-overview.md](https://github.com/NVIDIA/TensorRT-LLM/blob/main/docs/source/developer-guide/perf-overview.md)) for Llama 3.3 70B and gpt-oss on H100/H200/B200/GB200: typical error ~16% over 20 points, ~18% on 10 held-out MoE points (Qwen3-235B, DeepSeek R1, Llama 4 Maverick). `tests/calibration.test.js` holds the cited reference points and tolerance bands.
 
 $$t_{\text{comm}} = \begin{cases} 2 \times L \times \text{CONFIG.allreduceLatency} & \text{if } TP > 1 \quad (\text{default } 15\times 10^{-6}\text{ s}) \\ 0 & \text{if } TP = 1 \end{cases}$$
 

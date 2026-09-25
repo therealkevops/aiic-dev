@@ -16,8 +16,9 @@ import { MLOPS_STRATEGIES } from '../data/mlops.js';
 import {
   calculateInfra, calculateStorage, calculateCost, calculateMigConsolidation, applyMigThroughputScaling,
   calculateSla, calculateRag, calculateGuardrails, calculateIngress, calculateHaDr,
-  calculateTrainingRedundancy, calculateMlops, recommendSharding, calculateTokenEconomics,
+  calculateTrainingRedundancy, calculateMlops, recommendSharding, calculateTokenEconomics, calculateTrainingTime,
 } from './calculator.js';
+import { calculateEnergy, calculateRentVsBuy } from './planning.js';
 
 /**
  * Turns the workload inputs into what the GPUs actually hold and process:
@@ -95,6 +96,26 @@ function computeScenarioCore(config) {
   const avgContextLength = workloadShape.avgSequenceTokens;
   const effectiveConcurrency = c.workloadType === 'inference' ? workloadShape.gpuResidentSessions : c.microBatchSize;
 
+  // Prefix sharing only applies when automatic prefix caching is on in the serving engine.
+  const prefixCacheRatio = c.enablePrefixCaching === false ? 0 : c.prefixCacheRatio;
+  const servingConfig = {
+    servingEngine: c.servingEngine,
+    orchestrator: c.orchestrator,
+    servingArchitecture: c.servingArchitecture,
+    enableChunkedPrefill: c.enableChunkedPrefill,
+    enablePrefixCaching: c.enablePrefixCaching,
+    enableSpeculativeDecoding: c.enableSpeculativeDecoding,
+    specMethod: c.specMethod,
+    specDraftParamsB: c.specDraftParamsB,
+    specNumTokens: c.specNumTokens,
+    specAcceptanceRate: c.specAcceptanceRate,
+    llmdDisaggregationMode: c.llmdDisaggregationMode,
+    secondaryPlatform,
+    secondaryGpu,
+    prefillNodes: c.prefillNodes,
+    decodeNodes: c.decodeNodes,
+  };
+
   // ── 1. Auto-sharding solver ──────────────────────────────────────────────────
   const autoRecommendation = recommendSharding({
     workloadType: c.workloadType,
@@ -102,7 +123,7 @@ function computeScenarioCore(config) {
     customParams: c.customParams,
     precision,
     kvPrecision: c.kvPrecision,
-    prefixCacheRatio: c.prefixCacheRatio,
+    prefixCacheRatio,
     promptTokenRatio,
     avgContextLength,
     contextLength,
@@ -114,6 +135,7 @@ function computeScenarioCore(config) {
     memoryHeadroomPct: c.memoryHeadroomPct,
     minTp: c._solverTp || 1,
     expertParallelNodes: c.expertParallelNodes,
+    servingConfig,
   });
   const tp = c.isAutoSharding ? autoRecommendation.tp : c.manualTp;
   const pp = c.isAutoSharding ? autoRecommendation.pp : c.manualPp;
@@ -129,7 +151,7 @@ function computeScenarioCore(config) {
     customParams: c.customParams,
     precision,
     kvPrecision: c.kvPrecision,
-    prefixCacheRatio: c.prefixCacheRatio,
+    prefixCacheRatio,
     promptTokenRatio,
     avgContextLength,
     contextLength,
@@ -144,21 +166,10 @@ function computeScenarioCore(config) {
     networkProtocol: c.selectedProtocolId,
     oversubscriptionRatio: c.oversubscriptionRatio,
     pue: c.pue,
+    rackKw: c.rackPowerKw,
     memoryHeadroomPct: c.memoryHeadroomPct,
     expertParallelNodes: c.expertParallelNodes,
-    servingConfig: {
-      servingEngine: c.servingEngine,
-      orchestrator: c.orchestrator,
-      servingArchitecture: c.servingArchitecture,
-      enableChunkedPrefill: c.enableChunkedPrefill,
-      enablePrefixCaching: c.enablePrefixCaching,
-      enableSpeculativeDecoding: c.enableSpeculativeDecoding,
-      llmdDisaggregationMode: c.llmdDisaggregationMode,
-      secondaryPlatform,
-      secondaryGpu,
-      prefillNodes: c.prefillNodes,
-      decodeNodes: c.decodeNodes,
-    },
+    servingConfig,
   });
   const { memory, facility, network, bom } = results;
   const isLlmd = !!memory.llmd;
@@ -329,13 +340,55 @@ function computeScenarioCore(config) {
         promptTokensPerRequest: workloadShape.promptTokens * meanScale,
         outputTokensPerRequest: (workloadShape.visibleOutputTokens + workloadShape.thinkingTokens) * meanScale,
         dutyCyclePct: c.dutyCyclePct,
+        // In traffic mode the peak request rate is an input; otherwise it follows from throughput.
+        requestsPerSecAtPeak: c._trafficRps || null,
         apiInputUsdPer1M: c.apiInputUsdPer1M,
         apiOutputUsdPer1M: c.apiOutputUsdPer1M,
       })
     : { eligible: false };
 
+  // ── Training duration, failures and goodput ─────────────────────────────────
+  const trainingTime = c.workloadType === 'training'
+    ? calculateTrainingTime({
+        infraResults: results,
+        gpu,
+        precision,
+        model,
+        trainingType: c.trainingType,
+        trainingTokensB: c.trainingTokensB,
+        mfuPct: c.trainingMfuPct,
+        gpuMtbfHours: c.gpuMtbfHours,
+        checkpointWriteSec: c.checkpointTargetWriteTimeSec,
+        checkpointIntervalMin: c.checkpointIntervalMin,
+        restartMin: c.restartMin,
+        nodeRepairHours: c.nodeRepairHours,
+        pue: c.pue,
+        effectiveUsdPerGpuHour: cost.effectiveUsdPerGpuHour,
+      })
+    : { eligible: false };
+
+  // ── Energy, carbon and renting the same GPUs ─────────────────────────────────
+  const energy = calculateEnergy({ cost, throughput, tokenEconomics, trainingTime, gridCarbonKgPerKwh: c.gridCarbonKgPerKwh });
+  const rentVsBuy = calculateRentVsBuy({
+    cost,
+    totalGpus: results.totalGpus,
+    cloudRateUsdPerHr: c.cloudRateUsdPerHr,
+    reservedDiscountPct: c.cloudReservedDiscountPct,
+    dutyCyclePct: c.dutyCyclePct,
+    isInference: c.workloadType === 'inference',
+  });
+
   // ── 11. Advisories beyond the engine's own warnings ─────────────────────────
   const advisories = [];
+  if (platform.requiresLiquidCooling && c.coolingType !== 'liquid') {
+    advisories.push(`Cooling: ${platform.name} is liquid-cooled only; switch Facility & Power to liquid cooling or pick an air-cooled platform.`);
+  }
+  if (!platform.rackKw && platform.chassisTdpKw > c.rackPowerKw) {
+    advisories.push(`Rack power: one ${platform.shortName || platform.name} server draws up to ${platform.chassisTdpKw} kW, more than the ${c.rackPowerKw} kW each rack can supply and cool. Raise the rack power limit (typically liquid or rear-door cooling) or pick a lower-power platform.`);
+  }
+  if (c.facilityPowerBudgetKw > 0 && cost.billedFacilityPowerKw > c.facilityPowerBudgetKw) {
+    advisories.push(`Power budget: this design needs ${cost.billedFacilityPowerKw.toFixed(0)} kW of facility power, over the ${c.facilityPowerBudgetKw.toLocaleString()} kW available. Facility & Power shows the largest workload that fits.`);
+  }
   if (model.license?.commercial === 'non-commercial') {
     advisories.push(`License: ${model.name} is released under the ${model.license.name}. ${model.license.note || 'Commercial use is not permitted without a separate license.'}`);
   }
@@ -351,6 +404,10 @@ function computeScenarioCore(config) {
   const warnings = [...(results.warnings || []), ...advisories];
 
   return {
+    trainingTime,
+    energy,
+    rentVsBuy,
+    llmdSizing: null,
     tokenEconomics,
     workloadShape,
     warnings,
@@ -460,7 +517,47 @@ function tpCandidatesFor(scenario, fromTp) {
  * gives the rest to KV cache -- so for KV-heavy workloads a larger TP can need fewer GPUs in
  * total. Try each in-chassis TP and keep the layout with the fewest GPUs (ties: smaller TP).
  */
-function computeMemorySized(config) {
+/**
+ * LLM-D pool sizing. Decode: the fewest nodes whose instances hold every stream's KV cache.
+ * Prefill: enough instances to process the prompt arrival rate at the target utilization --
+ * each prefill instance handles about one prompt per TTFT, and requests arrive at the traffic
+ * rate (traffic mode) or concurrency ÷ service time (Little's law, concurrency mode).
+ */
+function applyLlmdAutoSize(config) {
+  if (config.workloadType !== 'inference' || config.servingArchitecture !== 'llmd' || config.llmdAutoSize === false) {
+    return { config, llmdSizing: null };
+  }
+  const withNodes = (prefillNodes, decodeNodes) => computeScenarioCore({ ...config, prefillNodes, decodeNodes });
+  const decodeFits = (n) => !withNodes(1, n).memory.llmd.decode.isOOM;
+  let hi = 1;
+  while (!decodeFits(hi) && hi < 4096) hi *= 2;
+  let lo = Math.max(1, Math.floor(hi / 2));
+  if (lo === hi || decodeFits(lo)) hi = lo;
+  while (hi - lo > 1) {
+    const mid = Math.floor((lo + hi) / 2);
+    if (decodeFits(mid)) hi = mid; else lo = mid;
+  }
+  const decodeNodes = hi;
+
+  const probe = withNodes(1, decodeNodes);
+  const t = probe.throughput;
+  const prefillSec = Math.max(1e-6, t.ttftSec - (t.kvTransferLatencyMs || 0) / 1000);
+  const rho = Math.min(0.95, Math.max(0.05, Number(config.targetUtilization) || 0.7));
+  const serviceSec = serviceTimeSec(probe);
+  const requestsPerSec = config._trafficRps || (serviceSec > 0 ? probe.effectiveConcurrency / serviceSec : 0);
+  const instancesNeeded = Math.max(1, Math.ceil((requestsPerSec * prefillSec) / rho));
+  const shape = probe.memory.llmd.prefill;
+  const perChassis = probe.platform.gpusPerChassis || 8;
+  const prefillNodes = Math.max(1, Math.ceil((instancesNeeded * shape.tp * shape.pp) / perChassis));
+  return {
+    config: { ...config, prefillNodes, decodeNodes },
+    llmdSizing: { prefillNodes, decodeNodes, prefillInstancesNeeded: instancesNeeded, requestsPerSec, prefillSecPerPrompt: prefillSec },
+  };
+}
+
+function computeMemorySized(configIn) {
+  const { config, llmdSizing } = applyLlmdAutoSize(configIn);
+  if (llmdSizing) return { ...computeScenarioCore(config), llmdSizing };
   const minimal = computeScenarioCore(config);
   const applies = config.workloadType === 'inference' && config.isAutoSharding && config.isAutoDp
     && config.servingArchitecture !== 'llmd' && minimal.pp === 1 && !minimal.autoRecommendation.error
@@ -479,7 +576,49 @@ function computeMemorySized(config) {
   };
 }
 
-export function computeScenario(config) {
+/** Mean time a request occupies a batch slot: prefill plus its full generation. */
+function serviceTimeSec(s) {
+  const t = s.throughput;
+  if (!t) return 0;
+  const w = s.workloadShape;
+  const meanScale = w.avgSequenceTokens ? w.avgSequenceTokens / w.sequenceTokens : 1;
+  const outputTokens = (w.visibleOutputTokens + w.thinkingTokens) * meanScale;
+  return t.ttftSec + outputTokens * (Number(t.tpotMs) / 1000);
+}
+
+/** Peak request rate implied by the traffic inputs. */
+export function trafficRequestsPerSec(config) {
+  if (config.trafficInputType === 'users') {
+    return Math.max(0, (Number(config.peakActiveUsers) || 0) * (Number(config.requestsPerUserPerHour) || 0) / 3600);
+  }
+  return Math.max(0, Number(config.peakRequestsPerSec) || 0);
+}
+
+/**
+ * Traffic mode: turn a peak request rate into the number of requests the cluster must hold at
+ * once. By Little's law, in-flight requests = arrival rate × time each request spends being
+ * served; dividing by the target utilization leaves the queueing headroom the SLA tab models.
+ * Service time depends on the batch size (bigger batches decode more slowly), so this iterates
+ * to a fixed point.
+ */
+function resolveTraffic(config) {
+  const rps = trafficRequestsPerSec(config);
+  const targetRho = Math.min(0.95, Math.max(0.05, Number(config.targetUtilization) || 0.7));
+  const base = { ...config, sizingInputMode: 'concurrency', kvActiveSessionPct: 100 };
+  let concurrency = 1;
+  let serviceSec = 0;
+  let iterations = 0;
+  for (; iterations < 15; iterations++) {
+    const s = computeMemorySized({ ...base, concurrency });
+    serviceSec = serviceTimeSec(s);
+    const needed = Math.max(1, Math.ceil((rps * serviceSec) / targetRho));
+    if (needed <= concurrency) break;
+    concurrency = needed;
+  }
+  return { rps, concurrency, serviceSec, targetRho, iterations: iterations + 1, base };
+}
+
+function computeScenarioForConcurrencyMode(config) {
   const memorySized = computeMemorySized(config);
   const solverApplies = config.latencyTargetsEnabled
     && config.workloadType === 'inference'
@@ -488,4 +627,28 @@ export function computeScenario(config) {
     && !memorySized.autoRecommendation.error;
   if (!solverApplies) return { memorySizing: null, ...memorySized, latencySolve: null };
   return { memorySizing: null, ...solveForLatency(config, memorySized) };
+}
+
+export function computeScenario(config) {
+  if (config.sizingInputMode !== 'traffic' || config.workloadType !== 'inference') {
+    return { traffic: null, ...computeScenarioForConcurrencyMode(config) };
+  }
+  const t = resolveTraffic(config);
+  // Queueing on the SLA tab should reflect the utilization this traffic actually produces.
+  const sized = (rho) => computeScenarioForConcurrencyMode({ ...t.base, concurrency: t.concurrency, targetUtilization: rho, _trafficRps: t.rps });
+  let s = sized(t.targetRho);
+  const actualRho = (sv) => Math.min(0.98, Math.max(0.001, (t.rps * serviceTimeSec(sv)) / t.concurrency));
+  const rho = actualRho(s);
+  if (Math.abs(rho - t.targetRho) > 0.005) s = sized(rho);
+  return {
+    ...s,
+    traffic: {
+      requestsPerSec: t.rps,
+      concurrency: t.concurrency,
+      serviceTimeSec: serviceTimeSec(s),
+      utilization: rho,
+      targetUtilization: t.targetRho,
+      iterations: t.iterations,
+    },
+  };
 }

@@ -1,12 +1,12 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import {
   Activity, Building2, Layers, Network, Zap, HardDrive, Search, Workflow, Shield, Globe,
-  LifeBuoy, GitBranch, Grid2x2, Timer, DollarSign,
+  LifeBuoy, GitBranch, Grid2x2, Timer, DollarSign, LineChart,
 } from 'lucide-react';
 
 import { PLATFORM_SYSTEMS, PLATFORM_VENDORS } from './data/platforms';
 import { USE_CASE_PRESETS } from './data/presets';
-import { DEFAULT_CONFIG, applyPresetConfig } from './state/config';
+import { DEFAULT_CONFIG, applyPresetConfig, withPlatform } from './state/config';
 import { computeScenario } from './utils/scenario';
 import { buildBomText } from './utils/bomText';
 import { scenarioMetrics } from './utils/compare';
@@ -15,6 +15,7 @@ import { GlossaryPage } from './components/GlossaryPage';
 import { AppHeader } from './components/AppHeader';
 import { NavRail } from './components/NavRail';
 import { ResultsPane } from './components/ResultsPane';
+import { GuidedSetup } from './components/GuidedSetup';
 import { WorkloadTab } from './components/tabs/WorkloadTab';
 import { PlatformTab } from './components/tabs/PlatformTab';
 import { ShardingTab } from './components/tabs/ShardingTab';
@@ -31,6 +32,7 @@ import { MlopsTab } from './components/tabs/MlopsTab';
 import { MigTab } from './components/tabs/MigTab';
 import { SlaTab } from './components/tabs/SlaTab';
 import { CostTab } from './components/tabs/CostTab';
+import { PlanningTab } from './components/tabs/PlanningTab';
 
 // One setter per config field (setContextLength, setEnableRag, ...), each accepting a value or
 // an updater function, so tab components read like they did when every field was its own state.
@@ -53,6 +55,7 @@ export default function App() {
   const [copiedBOM, setCopiedBOM] = useState(false);
   // Scenario A for side-by-side comparison: a frozen copy of a configuration and its metrics.
   const [pinned, setPinned] = useState(null);
+  const [guidedOpen, setGuidedOpen] = useState(false);
 
   const scenario = useMemo(() => computeScenario(config), [config]);
 
@@ -95,10 +98,10 @@ export default function App() {
   // LLM-D decode pool, and fall back to the vendor's default fabric if the current one isn't offered.
   const handleVendorChange = (vendorId) => {
     setConfig(c => {
-      const next = { ...c, selectedVendor: vendorId };
+      let next = { ...c, selectedVendor: vendorId };
       const vendorPlatforms = PLATFORM_SYSTEMS.filter(p => p.vendor === vendorId);
       if (vendorPlatforms.length > 0) {
-        next.selectedPlatformId = vendorPlatforms[0].id;
+        next = withPlatform(next, vendorPlatforms[0].id, PLATFORM_SYSTEMS);
         const secondaryCandidate = vendorPlatforms.find(p => p.id.includes('h200')) || vendorPlatforms[Math.min(1, vendorPlatforms.length - 1)];
         next.secondaryPlatformId = secondaryCandidate.id;
       }
@@ -125,7 +128,12 @@ export default function App() {
   const technicalNavTabs = [
     { id: 'workload', label: 'Workload', icon: Activity, meta: model.name },
     { id: 'platform', label: 'Platform', icon: Building2, meta: platform.shortName },
-    { id: 'sharding', label: 'Sharding', icon: Layers, meta: `TP=${tp} · PP=${pp} · DP=${dp}${results.epNodes > 1 ? ` · EP×${results.epNodes}` : ''}` },
+    {
+      id: 'sharding', label: 'Sharding', icon: Layers,
+      meta: results.memory.llmd
+        ? `P ${results.memory.llmd.prefill.instances}×TP${results.memory.llmd.prefill.tp} · D ${results.memory.llmd.decode.instances}×TP${results.memory.llmd.decode.tp}`
+        : `TP=${tp} · PP=${pp} · DP=${dp}${results.epNodes > 1 ? ` · EP×${results.epNodes}` : ''}`,
+    },
     { id: 'network', label: 'Network Fabric', icon: Network, meta: protocol.name },
     { id: 'facility', label: 'Facility & Power', icon: Zap, meta: `${pue.toFixed(2)} PUE` },
     { id: 'storage', label: 'Storage', icon: HardDrive, meta: storageTier.vendor },
@@ -147,15 +155,21 @@ export default function App() {
   const economicsNavTabs = [
     { id: 'sla', label: 'SLA & Tail Latency', icon: Timer, meta: sla.eligible ? `P99 ${sla.ttftP99Sec < 1 ? `${(sla.ttftP99Sec * 1000).toFixed(0)}ms` : `${sla.ttftP99Sec.toFixed(1)}s`}` : 'N/A' },
     { id: 'cost', label: 'Cost & TCO', icon: DollarSign, meta: `$${cost.effectiveUsdPerGpuHour.toFixed(2)}/GPU-hr` },
+    { id: 'planning', label: 'Planning', icon: LineChart, meta: config.enableGrowthPlan && workloadType === 'inference' ? `+${config.demandGrowthPctPerYear}%/yr` : 'Sensitivity · rent vs buy' },
   ];
 
   // Everything a tab or pane component may read: config values, their setters, computed
   // scenario results and App-level UI state/handlers.
   const ctx = {
     ...config, ...setters, ...scenario,
+    // In traffic mode the concurrency to size for is solved from the request rate.
+    concurrency: scenario.traffic ? scenario.traffic.concurrency : config.concurrency,
     page, setPage, activeInputTab, setActiveInputTab, selectedPresetId, applyPreset, activePreset,
     handleVendorChange, copiedBOM, technicalNavTabs, economicsNavTabs,
   };
+  ctx.config = config;
+  ctx.openGuidedSetup = () => setGuidedOpen(true);
+  ctx.setSelectedPlatformId = (id) => setConfig(c => withPlatform(c, id, PLATFORM_SYSTEMS));
   ctx.pinned = pinned;
   ctx.currentMetrics = currentMetrics;
   ctx.currentLabel = currentLabel;
@@ -187,6 +201,19 @@ export default function App() {
     <div className="h-screen w-screen flex flex-col bg-zinc-950 text-zinc-100 antialiased overflow-hidden select-none-text">
       {/* Top Banner / Header (Compact, Fixed at top) */}
       <AppHeader ctx={ctx} />
+
+      {guidedOpen && (
+        <GuidedSetup
+          current={config}
+          onClose={() => setGuidedOpen(false)}
+          onApply={(next) => {
+            setConfig(next);
+            setSelectedPresetId('');
+            setActiveInputTab('workload');
+            setGuidedOpen(false);
+          }}
+        />
+      )}
 
       {/* Main 3-Pane Layout Area (Fills Viewport Height) */}
       <div className="flex-1 flex overflow-hidden">
@@ -245,6 +272,9 @@ export default function App() {
 
           {/* 15. Cost & TCO */}
           {activeInputTab === 'cost' && <CostTab ctx={ctx} />}
+
+          {/* 16. Planning: sensitivity, rent vs buy, growth over time */}
+          {activeInputTab === 'planning' && <PlanningTab ctx={ctx} />}
 
         </main>
 

@@ -22,6 +22,11 @@ export const DEFAULT_CONFIG = {
   promptTokenRatio: 0.8, // 0.8 = 80% prompt / 20% gen
   contextLength: 16384,
   concurrency: 8,
+  sizingInputMode: 'concurrency', // 'concurrency' (streams held at once) | 'traffic' (peak request rate)
+  trafficInputType: 'users', // traffic mode: 'users' (active users x requests/hour) | 'rps'
+  peakActiveUsers: 500, // traffic mode: users active in the peak hour
+  requestsPerUserPerHour: 20, // traffic mode: requests each active user sends per hour
+  peakRequestsPerSec: 5, // traffic mode: peak request rate when entered directly
   reasoningTokensPerOutputToken: 0, // hidden thinking tokens per visible output token (reasoning models)
   requestMixEnabled: false, // size KV for a mix of short and full-length requests
   shortRequestPct: 70, // share of requests that are short
@@ -29,8 +34,18 @@ export const DEFAULT_CONFIG = {
   kvActiveSessionPct: 100, // with KV offload on: share of sessions actively generating (rest offloaded)
   microBatchSize: 2, // training micro-batch
   pue: 1.35,
+  coolingType: 'air', // 'air' | 'liquid'
+  rackPowerKw: 28, // power each rack can deliver and cool
+  facilityPowerBudgetKw: 0, // facility power available (0 = no limit)
+  gridCarbonKgPerKwh: 0.37, // grid carbon intensity (US average ~0.37 kg CO2/kWh, EPA eGRID 2022)
   trainingType: 'pretrain_sft', // 'pretrain_sft' | 'lora'
-  zeroStage: 3, // 0, 1, 2, 3
+  zeroStage: 3,
+  trainingTokensB: 10, // training tokens (billions): dataset tokens x epochs
+  trainingMfuPct: 40, // Model FLOPs Utilization the run sustains
+  gpuMtbfHours: 50000, // mean GPU-hours between job-interrupting failures (per GPU)
+  checkpointIntervalMin: 0, // 0 = optimal (Young/Daly) interval
+  restartMin: 20, // detect + replace + reload time after a failure
+  nodeRepairHours: 48, // time a failed node is out of service // 0, 1, 2, 3
   selectedVendor: 'cisco', // 'cisco' | 'nvidia'
   selectedPlatformId: 'cisco-c885a-h200',
   isAutoSharding: true,
@@ -51,8 +66,13 @@ export const DEFAULT_CONFIG = {
   enableChunkedPrefill: true,
   enablePrefixCaching: true,
   enableSpeculativeDecoding: false,
+  specMethod: 'draft-model', // 'draft-model' (separate small model) | 'draft-head' (EAGLE / MTP head)
+  specDraftParamsB: 1, // draft model size in billions of parameters
+  specNumTokens: 4, // draft tokens proposed per verification step
+  specAcceptanceRate: 0.6, // chance each draft token is accepted
   llmdDisaggregationMode: 'heterogeneous', // 'heterogeneous' | 'homogeneous'
   secondaryPlatformId: 'cisco-c885a-h200',
+  llmdAutoSize: true, // size LLM-D prefill/decode pools from the workload (false = manual node counts)
   prefillNodes: 1,
   decodeNodes: 2,
   selectedStorageTierId: 'vast-universal',
@@ -73,6 +93,11 @@ export const DEFAULT_CONFIG = {
   enableNvidiaAiEnterprise: false,
   supportPctPerYear: DEFAULT_SUPPORT_PCT_PER_YEAR,
   tcoYears: DEFAULT_TCO_YEARS,
+  cloudReservedDiscountPct: 35, // reserved / committed-use discount off the on-demand cloud rate
+  enableGrowthPlan: false, // plan capacity year by year as demand grows
+  demandGrowthPctPerYear: 50, // yearly growth in traffic or concurrent streams
+  gpuPriceChangePctPerYear: 0, // yearly change in GPU price (negative = cheaper later)
+  refreshYear: 0, // year the hardware is replaced (0 = no refresh within the horizon)
   dutyCyclePct: 50, // share of hours the cluster runs at its sized load (monthly average)
   apiInputUsdPer1M: 0.6, // comparison API price per 1M input tokens (illustrative, editable)
   apiOutputUsdPer1M: 0.8, // comparison API price per 1M output tokens (illustrative, editable)
@@ -112,6 +137,22 @@ const PRESET_FALLBACKS = {
   oversubscriptionRatio: 1,
   memoryHeadroomPct: 5,
   expertParallelNodes: 1,
+  trainingTokensB: 10,
+  trainingMfuPct: 40,
+  gpuMtbfHours: 50000,
+  checkpointIntervalMin: 0,
+  restartMin: 20,
+  nodeRepairHours: 48,
+  sizingInputMode: 'concurrency',
+  coolingType: 'air',
+  rackPowerKw: 28,
+  facilityPowerBudgetKw: 0,
+  enableGrowthPlan: false,
+  llmdAutoSize: true,
+  specMethod: 'draft-model',
+  specDraftParamsB: 1,
+  specNumTokens: 4,
+  specAcceptanceRate: 0.6,
   reasoningTokensPerOutputToken: 0,
   requestMixEnabled: false,
   shortRequestPct: 70,
@@ -126,6 +167,21 @@ const PRESET_FALLBACKS = {
   selectedMlopsStrategyId: DEFAULT_MLOPS_STRATEGY_ID,
   canaryTrafficPct: DEFAULT_CANARY_TRAFFIC_PCT,
 };
+
+/**
+ * Selects a platform. When its GPU differs from the current one, the GPU's catalog price and
+ * cloud rate replace the old ones (a price typed for a different GPU no longer applies).
+ */
+export function withPlatform(current, platformId, platforms) {
+  const next = { ...current, selectedPlatformId: platformId };
+  const from = platforms.find(p => p.id === current.selectedPlatformId);
+  const to = platforms.find(p => p.id === platformId);
+  if (to && from?.gpuId !== to.gpuId && GPU_PRICING[to.gpuId]) {
+    next.gpuUnitPriceUsd = GPU_PRICING[to.gpuId].estimatedUnitPriceUsd;
+    next.cloudRateUsdPerHr = GPU_PRICING[to.gpuId].estimatedCloudRateUsdPerHr;
+  }
+  return next;
+}
 
 /** Returns the config that results from applying a preset on top of the current config. */
 export function applyPresetConfig(current, presetConfig) {

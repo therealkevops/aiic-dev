@@ -124,3 +124,99 @@ test('report HTML escapes content and includes every section', () => {
   assert.ok(!html.includes('<script>'));
   assert.ok(html.includes('B &amp; co') && html.includes('&lt;bom&gt;'));
 });
+
+test('speculative decoding speeds up low-batch decode and is ignored when it would not help', () => {
+  const base = applyPresetConfig(DEFAULT_CONFIG, USE_CASE_PRESETS.find(p => p.id === 'ent-rag-assistant').config);
+  const low = computeScenario({ ...base, concurrency: 1, enableSpeculativeDecoding: true, specAcceptanceRate: 0.7, specNumTokens: 4 });
+  const sp = low.throughput.speculative;
+  assert.ok(Math.abs(sp.expectedTokensPerStep - (1 - 0.7 ** 5) / 0.3) < 1e-9);
+  assert.ok(sp.helps && low.throughput.tpotMs < sp.tpotWithoutMs);
+  assert.ok(low.memory.draftWeightGb > 0);
+  const high = computeScenario({ ...base, concurrency: 256, enableSpeculativeDecoding: true, specAcceptanceRate: 0.5 });
+  assert.equal(high.throughput.speculative.helps, false);
+  assert.equal(Number(high.throughput.tpotMs), high.throughput.speculative.tpotWithoutMs);
+});
+
+test('prefix caching switch and chunked prefill switch change the sizing', () => {
+  const base = applyPresetConfig(DEFAULT_CONFIG, USE_CASE_PRESETS.find(p => p.id === 'ent-rag-assistant').config);
+  const on = computeScenario(base);
+  const off = computeScenario({ ...base, enablePrefixCaching: false });
+  assert.ok(off.memory.kvCacheTotalGb > on.memory.kvCacheTotalGb);
+  const docs = applyPresetConfig(DEFAULT_CONFIG, USE_CASE_PRESETS.find(p => p.id === 'ent-document-analysis').config);
+  const chunked = computeScenario(docs);
+  const unchunked = computeScenario({ ...docs, enableChunkedPrefill: false });
+  assert.ok(unchunked.memory.perGpuActGb > chunked.memory.perGpuActGb);
+});
+
+test('traffic mode solves concurrency with Little\'s law and scales with load', () => {
+  const base = applyPresetConfig(DEFAULT_CONFIG, USE_CASE_PRESETS.find(p => p.id === 'ent-customer-support').config);
+  const light = computeScenario({ ...base, sizingInputMode: 'traffic', trafficInputType: 'rps', peakRequestsPerSec: 1 });
+  const heavy = computeScenario({ ...base, sizingInputMode: 'traffic', trafficInputType: 'rps', peakRequestsPerSec: 20 });
+  const t = light.traffic;
+  // In-flight requests at the resulting utilization match rate x service time.
+  assert.ok(Math.abs(t.requestsPerSec * t.serviceTimeSec / t.concurrency - t.utilization) < 0.02);
+  assert.ok(t.utilization <= base.targetUtilization + 1e-9);
+  assert.ok(heavy.traffic.concurrency > light.traffic.concurrency * 10);
+  assert.ok(heavy.results.totalGpus > light.results.totalGpus);
+  // Users x requests/hour is the same as the equivalent rate.
+  const users = computeScenario({ ...base, sizingInputMode: 'traffic', trafficInputType: 'users', peakActiveUsers: 360, requestsPerUserPerHour: 10 });
+  assert.equal(users.traffic.requestsPerSec, 1);
+  assert.equal(users.traffic.concurrency, t.concurrency);
+  // Token economics uses the known request rate.
+  assert.ok(Math.abs(light.tokenEconomics.requestsPerMonth - 1 * 3600 * 730 * base.dutyCyclePct / 100) < 1);
+});
+
+test('LLM-D auto-sizing fits the decode pool and scales prefill with traffic', () => {
+  const base = applyPresetConfig(DEFAULT_CONFIG, USE_CASE_PRESETS.find(p => p.id === 'neo-llmd-disaggregated').config);
+  const s = computeScenario(base);
+  assert.equal(s.memory.llmd.decode.isOOM, false);
+  assert.equal(s.memory.llmd.prefill.isOOM, false);
+  // One fewer decode node would not fit.
+  const smaller = computeScenario({ ...base, llmdAutoSize: false, prefillNodes: s.llmdSizing.prefillNodes, decodeNodes: s.llmdSizing.decodeNodes - 1 });
+  assert.equal(smaller.memory.llmd.decode.isOOM, true);
+  const busy = computeScenario({ ...base, sizingInputMode: 'traffic', trafficInputType: 'rps', peakRequestsPerSec: s.llmdSizing.requestsPerSec * 4 });
+  assert.ok(busy.llmdSizing.prefillNodes > s.llmdSizing.prefillNodes);
+  // Manual mode keeps the entered node counts.
+  const manual = computeScenario({ ...base, llmdAutoSize: false, prefillNodes: 3, decodeNodes: 5 });
+  assert.equal(manual.memory.llmd.prefill.nodes, 3);
+  assert.equal(manual.memory.llmd.decode.nodes, 5);
+});
+
+import { calculateTrainingTime } from '../src/utils/calculator.js';
+
+test('training time: 6ND compute, Young/Daly checkpointing and failure-driven goodput', () => {
+  const pre = applyPresetConfig(DEFAULT_CONFIG, USE_CASE_PRESETS.find(p => p.id === 'neo-frontier-pretrain').config);
+  const t = computeScenario(pre).trainingTime;
+  // 405B x 15T tokens x 6 = 3.6e25 FLOPs, in line with Meta's reported ~3.8e25 for Llama 3.1 405B.
+  assert.ok(Math.abs(t.totalFlops - 6 * 405e9 * 15000e9) / t.totalFlops < 1e-9);
+  assert.ok(t.usingOptimalInterval);
+  assert.ok(Math.abs(t.optimalIntervalMin / 60 - Math.sqrt(2 * (pre.checkpointTargetWriteTimeSec / 3600) * t.jobMtbfHours)) < 1e-9);
+  assert.ok(t.goodputPct > 80 && t.goodputPct < 100);
+  assert.ok(t.wallClockDays > t.computeDays);
+  // Slower checkpoints and more GPUs both cost goodput.
+  const slow = computeScenario({ ...pre, checkpointTargetWriteTimeSec: 900 }).trainingTime;
+  assert.ok(slow.goodputPct < t.goodputPct);
+  // LoRA costs 4ND, not 6ND.
+  const lora = computeScenario(applyPresetConfig(DEFAULT_CONFIG, USE_CASE_PRESETS.find(p => p.id === 'ent-lora-finetune').config)).trainingTime;
+  assert.ok(Math.abs(lora.flopsPerToken - 4 * 70.6e9) < 1);
+  // Tiny clusters need no standing spares; large ones do.
+  assert.equal(lora.recommendedSpareNodes, 0);
+  assert.ok(t.recommendedSpareNodes >= 1);
+});
+
+test('rack-scale NVL72: wide TP and in-rack expert parallelism stay on NVLink; racks billed whole', () => {
+  const base = { ...DEFAULT_CONFIG, selectedVendor: 'nvidia', kvPrecision: 'fp8', contextLength: 32768 };
+  const kimi = computeScenario({ ...base, selectedModelId: 'kimi-k2', selectedPlatformId: 'nvidia-gb200-nvl72', concurrency: 1024 });
+  assert.equal(kimi.pp, 1);
+  assert.ok(kimi.tp >= 8);
+  const hgxEp = computeScenario({ ...base, selectedModelId: 'deepseek-r1-671b', selectedPlatformId: 'nvidia-hgx-b200', concurrency: 2048, expertParallelNodes: 4 });
+  const nvlEp = computeScenario({ ...base, selectedModelId: 'deepseek-r1-671b', selectedPlatformId: 'nvidia-gb200-nvl72', concurrency: 2048, expertParallelNodes: 4 });
+  assert.ok(nvlEp.throughput.t_a2a < hgxEp.throughput.t_a2a, 'all-to-all over NVLink is faster than over NICs');
+  // A small design on one rack still pays for all 72 GPUs.
+  const small = computeScenario({ ...base, selectedModelId: 'llama33-70b', selectedPlatformId: 'nvidia-gb200-nvl72', concurrency: 8 });
+  assert.equal(small.results.gpusAllocated, 72);
+  assert.ok(small.warnings.some(w => w.includes('whole 72-GPU racks')));
+  assert.equal(small.cost.computeCapexUsd, 72 * DEFAULT_CONFIG.gpuUnitPriceUsd);
+  // Racks are sized at the platform's own power rating, not the 28 kW default.
+  assert.ok(small.facility.totalRacks <= 2);
+});

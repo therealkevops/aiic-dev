@@ -124,3 +124,23 @@ test('pin a scenario, compare it with another, and export a report', async () =>
   assert.equal(errors.length, 0, errors.join('; '));
   await page.close();
 });
+
+test('guided setup recommends a design and applies it', async () => {
+  const page = await browser.newPage({ viewport: { width: 1600, height: 1000 } });
+  const errors = [];
+  page.on('pageerror', e => errors.push(e.message));
+  await page.goto(URL, { waitUntil: 'networkidle' });
+  await page.getByTestId('guided-setup').click();
+  const dialog = page.getByTestId('guided-setup-dialog');
+  await dialog.getByRole('button', { name: /^AI agents/ }).click();
+  await dialog.getByRole('button', { name: /^Long/ }).click();
+  const recommendation = await page.getByTestId('guided-recommendation').innerText();
+  assert.match(recommendation, /GPUs/);
+  const gpus = Number(recommendation.match(/([\d,]+) GPUs/)[1].replace(/,/g, ''));
+  await page.getByTestId('guided-apply').click();
+  assert.equal(await page.getByTestId('guided-setup-dialog').count(), 0, 'dialog closes after applying');
+  assert.equal(Number((await page.getByTestId('kpi-gpus').innerText()).replace(/,/g, '')), gpus);
+  assert.equal(await page.getByTestId('preset-select').inputValue(), '');
+  assert.equal(errors.length, 0, errors.join('; '));
+  await page.close();
+});

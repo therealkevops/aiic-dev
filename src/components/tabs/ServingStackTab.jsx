@@ -1,12 +1,15 @@
 import React from 'react';
 import { Activity, Layers, Network, Server, Workflow, Zap } from 'lucide-react';
 import { InfoHelper } from '../InfoHelper';
-import { Card, ChoiceCard, Row, Rows, Tag } from '../ui';
+import { Card, ChoiceCard, Field, Row, Rows, Tag, ToggleRow } from '../ui';
 import { GPU_CATALOG } from '../../data/hardware';
 import { kvFabricName } from '../../utils/calculator';
 
 export function ServingStackTab({ ctx }) {
   const {
+    llmdAutoSize, setLlmdAutoSize, llmdSizing, memory,
+    specMethod, setSpecMethod, specDraftParamsB, setSpecDraftParamsB, specNumTokens, setSpecNumTokens,
+    specAcceptanceRate, setSpecAcceptanceRate, throughput, workloadType,
     availablePlatforms, decodeNodes, effectiveConcurrency, enableChunkedPrefill, enablePrefixCaching, enableSpeculativeDecoding,
     llmdDisaggregationMode, orchestrator, platform, prefillNodes, results, secondaryGpu,
     secondaryPlatform, secondaryPlatformId, selectedProtocolId, selectedVendor, servingArchitecture, servingEngine,
@@ -120,60 +123,52 @@ export function ServingStackTab({ ctx }) {
               </div>
             </div>
 
-            {/* Dual Node Allocation: Prefill Nodes & Decode Nodes */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
-              <div className="bg-zinc-900/70 p-3 rounded-lg border border-zinc-800/80 space-y-2">
-                <div className="flex justify-between items-center text-xs">
-                  <span className="font-semibold text-sky-400 flex items-center gap-1.5">
-                    <Zap className="w-3.5 h-3.5" />
-                    Prefill Workers
-                  </span>
-                  <span className="font-mono font-semibold text-sky-400">
-                    {prefillNodes} Node{prefillNodes > 1 ? 's' : ''} ({prefillNodes * platform.gpusPerChassis}x GPUs)
-                  </span>
-                </div>
-                <input
-                  type="range" min="1" max="4" step="1" value={prefillNodes}
-                  onChange={(e) => setPrefillNodes(Number(e.target.value))}
-                  className="w-full accent-sky-500 bg-zinc-800 h-1.5 rounded-lg cursor-pointer"
-                />
-                <div className="flex justify-between items-center text-[10.5px] text-zinc-400">
-                  <span>Platform: {platform.shortName}</span>
-                  <span className="text-sky-300 font-mono">0 KV Retained</span>
-                </div>
+            {/* Pool sizing: automatic from the workload, or manual node counts */}
+            <ToggleRow
+              label="Size pools automatically"
+              description="Decode: fewest nodes that hold every stream's KV cache. Prefill: enough instances for the prompt arrival rate at the target utilization."
+              checked={llmdAutoSize}
+              onChange={(v) => {
+                if (!v && memory.llmd) { setPrefillNodes(memory.llmd.prefill.nodes); setDecodeNodes(memory.llmd.decode.nodes); }
+                setLlmdAutoSize(v);
+              }}
+            />
+            {memory.llmd && (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
+                {[
+                  { key: 'prefill', label: 'Prefill Workers', icon: Zap, tone: 'text-sky-400', accent: 'accent-sky-500', pool: memory.llmd.prefill, set: setPrefillNodes, value: prefillNodes, note: 'Transient KV only' },
+                  { key: 'decode', label: 'Decode Workers', icon: Activity, tone: 'text-emerald-400', accent: 'accent-emerald-500', pool: memory.llmd.decode, set: setDecodeNodes, value: decodeNodes, note: `KV for ${effectiveConcurrency.toLocaleString()} streams` },
+                ].map(({ key, label, icon: Icon, tone, accent, pool, set, value, note }) => (
+                  <div key={key} className="bg-zinc-900/70 p-3 rounded-lg border border-zinc-800/80 space-y-2">
+                    <div className="flex justify-between items-center text-xs">
+                      <span className={`font-semibold ${tone} flex items-center gap-1.5`}>
+                        <Icon className="w-3.5 h-3.5" />
+                        {label}
+                      </span>
+                      <span className={`font-mono font-semibold ${tone}`}>
+                        {pool.nodes} node{pool.nodes > 1 ? 's' : ''} ({pool.gpus} GPUs)
+                      </span>
+                    </div>
+                    {!llmdAutoSize && (
+                      <input
+                        type="range" min="1" max={key === 'prefill' ? 32 : 64} step="1" value={value}
+                        onChange={(e) => set(Number(e.target.value))}
+                        className={`w-full ${accent} bg-zinc-800 h-1.5 rounded-lg cursor-pointer`}
+                      />
+                    )}
+                    <div className="flex justify-between items-center text-[10.5px] text-zinc-400">
+                      <span>{pool.instances} instance{pool.instances > 1 ? 's' : ''} × TP={pool.tp}{pool.pp > 1 ? ` PP=${pool.pp}` : ''} on {pool.gpu.name.replace(/^NVIDIA |^AMD /, '')}</span>
+                      <span className={pool.isOOM ? 'text-amber-400 font-mono' : 'text-zinc-400 font-mono'}>{pool.isOOM ? 'Out of memory' : note}</span>
+                    </div>
+                  </div>
+                ))}
               </div>
-
-              <div className="bg-zinc-900/70 p-3 rounded-lg border border-zinc-800/80 space-y-2">
-                <div className="flex justify-between items-center text-xs">
-                  <span className="font-semibold text-emerald-400 flex items-center gap-1.5">
-                    <Activity className="w-3.5 h-3.5" />
-                    Decode Workers
-                  </span>
-                  <span className="font-mono font-semibold text-emerald-400">
-                    {decodeNodes} Node{decodeNodes > 1 ? 's' : ''} ({decodeNodes * (llmdDisaggregationMode === 'heterogeneous' ? secondaryPlatform.gpusPerChassis : platform.gpusPerChassis)}x GPUs)
-                  </span>
-                </div>
-                <input
-                  type="range" min="1" max="8" step="1" value={decodeNodes}
-                  onChange={(e) => setDecodeNodes(Number(e.target.value))}
-                  className="w-full accent-emerald-500 bg-zinc-800 h-1.5 rounded-lg cursor-pointer"
-                />
-                <div className="flex justify-between items-center text-[10.5px] text-zinc-400">
-                  <span>Platform: {llmdDisaggregationMode === 'heterogeneous' ? secondaryPlatform.shortName : platform.shortName}</span>
-                  <span className="text-emerald-300 font-mono">KV Bound ({effectiveConcurrency} streams)</span>
-                </div>
+            )}
+            {llmdAutoSize && llmdSizing && (
+              <div className="px-3 py-2 bg-zinc-900/50 border border-zinc-800/70 rounded-lg text-[11px] text-zinc-400 leading-relaxed">
+                Requests arrive at ~{llmdSizing.requestsPerSec.toFixed(2)}/s and each prompt takes ~{llmdSizing.prefillSecPerPrompt.toFixed(2)} s to prefill on one instance, so {llmdSizing.prefillInstancesNeeded} prefill instance{llmdSizing.prefillInstancesNeeded > 1 ? 's are' : ' is'} needed at the target utilization. Prefill : decode nodes = {llmdSizing.prefillNodes} : {llmdSizing.decodeNodes}.
               </div>
-            </div>
-
-            {/* Disaggregation Ratio & Guidance */}
-            <div className="flex items-center justify-between px-3 py-2 bg-zinc-900/50 border border-zinc-800/70 rounded-lg text-[11px]">
-              <div className="text-zinc-300">
-                Prefill-to-Decode Ratio: <strong className="font-mono">{prefillNodes}P : {decodeNodes}D</strong> (1:{(decodeNodes / prefillNodes).toFixed(1)})
-              </div>
-              <span className="text-amber-400 font-medium">
-                {decodeNodes >= prefillNodes * 2 ? 'High-throughput sizing' : 'Recommend 1:2–1:4 for long context'}
-              </span>
-            </div>
+            )}
 
             {/* Heterogeneous Secondary Compute Platform Selector */}
             {llmdDisaggregationMode === 'heterogeneous' && (
@@ -259,10 +254,58 @@ export function ServingStackTab({ ctx }) {
             <input type="checkbox" checked={enableSpeculativeDecoding} onChange={(e) => setEnableSpeculativeDecoding(e.target.checked)}
               className="mt-0.5 accent-sky-500 w-3.5 h-3.5 rounded" />
             <div>
-              <span className="font-medium text-zinc-200">Speculative Decoding (Draft Model Acceleration)</span>
-              <span className="block text-[11px] text-zinc-400">Pairs a lightweight draft model (e.g. LLaMA 8B) with the target model (LLaMA 70B) to verify multiple candidate tokens per memory read pass.</span>
+              <span className="font-medium text-zinc-200">Speculative decoding</span>
+              <span className="block text-[11px] text-zinc-400">A small drafter proposes several tokens; the target model checks them all in one pass. Helps most at low batch sizes.</span>
             </div>
           </label>
+          {enableSpeculativeDecoding && workloadType === 'inference' && (
+            <div className="ml-6 space-y-2.5 p-2.5 rounded-lg border border-zinc-800 bg-zinc-950/60">
+              <div className="grid grid-cols-2 gap-2.5">
+                <Field label="Drafter">
+                  <select
+                    value={specMethod}
+                    onChange={(e) => setSpecMethod(e.target.value)}
+                    className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-2 py-1.5 text-xs text-white focus:outline-none focus:border-sky-500"
+                  >
+                    <option value="draft-model">Separate draft model</option>
+                    <option value="draft-head">Draft head (EAGLE / MTP)</option>
+                  </select>
+                </Field>
+                {specMethod === 'draft-model' ? (
+                  <Field label="Draft model size (B params)">
+                    <input
+                      type="number" min="0.1" max="16" step="0.1"
+                      value={specDraftParamsB}
+                      onChange={(e) => setSpecDraftParamsB(Math.max(0.1, Number(e.target.value) || 0.1))}
+                      className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-2 py-1.5 text-xs text-white font-mono focus:outline-none focus:border-sky-500"
+                    />
+                  </Field>
+                ) : (
+                  <div className="text-[10.5px] text-zinc-500 self-end pb-1.5">Head is ~1 decoder layer of the target model; must be trained for that model.</div>
+                )}
+                <Field label={`Draft tokens per step: ${specNumTokens}`}>
+                  <input type="range" min="1" max="8" step="1" value={specNumTokens}
+                    onChange={(e) => setSpecNumTokens(Number(e.target.value))}
+                    className="w-full accent-sky-500 bg-zinc-800 h-1.5 rounded-lg cursor-pointer" />
+                </Field>
+                <Field label={`Acceptance rate: ${Math.round(specAcceptanceRate * 100)}%`}>
+                  <input type="range" min="0.3" max="0.95" step="0.05" value={specAcceptanceRate}
+                    onChange={(e) => setSpecAcceptanceRate(Number(e.target.value))}
+                    className="w-full accent-sky-500 bg-zinc-800 h-1.5 rounded-lg cursor-pointer" />
+                </Field>
+              </div>
+              {throughput?.speculative && (
+                <div className={`text-[11px] ${throughput.speculative.helps ? 'text-emerald-400' : 'text-amber-400'}`}>
+                  {throughput.speculative.helps
+                    ? `~${throughput.speculative.expectedTokensPerStep.toFixed(1)} tokens accepted per step: time per output token ${throughput.speculative.tpotWithoutMs} → ${throughput.tpotMs} ms (${throughput.speculative.speedup.toFixed(2)}x).`
+                    : `No gain at this batch size (${throughput.speculative.speedup.toFixed(2)}x): decode is compute-bound, so verifying extra tokens costs more than it saves. Engines turn speculation off here, and the sizing ignores it.`}
+                </div>
+              )}
+              <div className="text-[10.5px] text-zinc-500">
+                Acceptance depends on how well the drafter matches the target and on the content: 0.5-0.7 is typical for a separate small model, 0.7-0.85 for a trained draft head, higher on repetitive code or JSON.
+              </div>
+            </div>
+          )}
         </div>
       </Card>
     </>

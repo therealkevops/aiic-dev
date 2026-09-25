@@ -9,8 +9,15 @@ export const CONFIG = {
   B_act: 2,                     // BF16 activation bytes (G2)
   maxBatchedTokens: 8192,       // Default max batched tokens per step (C1)
   runtimeOverheadPerGpu: 0,     // Absorbed into 10% reserve via gpuMemUtil = 0.90 (S3)
-  bwEfficiency: 0.75,           // Memory bandwidth efficiency (C2)
+  bwEfficiency: 0.75,           // Memory bandwidth efficiency for weight reads (C2)
+  // Calibrated against NVIDIA's published TensorRT-LLM max-throughput results (see
+  // tests/calibration.test.js): paged decode attention reaches a lower share of HBM bandwidth
+  // than weight streaming, MoE expert GEMMs run well below dense MFU, and FP4 GEMMs do not
+  // reach the full FP4 Tensor Core peak.
+  kvBwEfficiency: 0.45,         // Bandwidth efficiency of decode attention reading the KV cache
   mfuDecode: 0.4,               // Model FLOPs Utilization during decode (C2)
+  moeMfuFactor: 0.4,            // MFU multiplier on MoE linear layers (grouped expert GEMMs, routing)
+  fp4ComputeEfficiency: 0.75,   // Fraction of the FP4 Tensor Core peak reachable (block scaling overhead)
   allreduceLatency: 15e-6,      // Intra-node All-Reduce communication latency per layer in seconds (C2)
   switchPorts: 64,              // Standard 64-port leaf switch (C3)
   oversubscription: 1,          // 1:1 non-blocking leaf-spine fabric (C3)
@@ -29,6 +36,10 @@ export const CONFIG = {
   rackKW: 28,                   // Default rack power limit in kW (M2)
   overlapKvTransfer: true,      // Disaggregated serving: overlap KV transfer with computation (M3)
   a2aLatency: 30e-6,            // Per-MoE-layer dispatch or combine latency across nodes (wide EP), seconds -- approximate
+  specNumTokens: 4,             // speculative decoding: draft tokens proposed per verification step
+  specAcceptanceRate: 0.6,      // speculative decoding: probability each draft token is accepted
+  specVerifyOverhead: 1.25,     // speculative decoding: verify-step cost multiplier (rejection sampling, ragged batching, scheduling)
+  specVerifyMfu: 0.25,          // speculative decoding: MFU of the (k+1)-token verify pass (small, irregular GEMMs)
 };
 
 const VRAM_USABLE_FACTOR = CONFIG.gpuMemUtil;
@@ -84,6 +95,26 @@ function perGpuWeightGbFor(model, weightTotalGb, tp, pp, epNodes = 1) {
 }
 
 /**
+ * Speculative decoding: a cheap drafter proposes k tokens, the target model verifies all of them
+ * in one forward pass, and each proposal is accepted with probability α (stopping at the first
+ * rejection). Expected tokens produced per verification step = (1 − α^(k+1)) / (1 − α).
+ * Returns null when disabled or not applicable.
+ */
+export function resolveSpeculative(servingConfig, model, workloadType) {
+  if (workloadType !== 'inference' || !servingConfig?.enableSpeculativeDecoding) return null;
+  const k = Math.max(1, Math.min(16, Math.round(Number(servingConfig.specNumTokens) || CONFIG.specNumTokens)));
+  const alpha = Math.min(0.99, Math.max(0, Number(servingConfig.specAcceptanceRate ?? CONFIG.specAcceptanceRate)));
+  const method = servingConfig.specMethod === 'draft-head' ? 'draft-head' : 'draft-model';
+  // A draft head (EAGLE / MTP) is roughly one decoder layer of the target model.
+  const totalParams = model.params || 32;
+  const draftParamsB = method === 'draft-head'
+    ? totalParams / (model.layers || 32) * (model.isMoe && model.activeParams ? model.activeParams / totalParams : 1)
+    : Math.max(0.05, Number(servingConfig.specDraftParamsB) || 1);
+  const expectedTokensPerStep = alpha >= 0.999 ? k + 1 : (1 - Math.pow(alpha, k + 1)) / (1 - alpha);
+  return { k, alpha, method, draftParamsB, expectedTokensPerStep };
+}
+
+/**
  * Peak dense tensor throughput (FLOP/s) a GPU delivers for a given weight precision.
  * FP8 uses FP8 Tensor Cores; NVFP4/MXFP4 use native FP4 units where the GPU has them
  * (Blackwell, MI355X) and otherwise fall back to 16-bit math on dequantized weights, the
@@ -92,7 +123,7 @@ function perGpuWeightGbFor(model, weightTotalGb, tp, pp, epNodes = 1) {
 export function peakDenseFlops(gpu, precision) {
   const fp16 = (gpu.fp16Tflops || 989) * 1e12;
   if (precision.id === 'fp8') return (gpu.fp8Tflops || (gpu.fp16Tflops ? gpu.fp16Tflops * 2 : 1979)) * 1e12;
-  if ((precision.id === 'nvfp4' || precision.id === 'mxfp4') && gpu.fp4Tflops) return gpu.fp4Tflops * 1e12;
+  if ((precision.id === 'nvfp4' || precision.id === 'mxfp4') && gpu.fp4Tflops) return gpu.fp4Tflops * 1e12 * CONFIG.fp4ComputeEfficiency;
   return fp16;
 }
 
@@ -204,7 +235,13 @@ export function recommendSharding(params) {
     // Mean tokens per stream when requests vary in length (null = every stream at contextLength).
     // contextLength stays the per-request maximum (single-stream fit, max-model-len).
     avgContextLength = null,
+    servingConfig = null,
   } = params;
+  const specR = resolveSpeculative(servingConfig, model, workloadType);
+  const draftWeightGbR = specR ? specR.draftParamsB * (precision?.bytesPerParam || 1) : 0;
+  const maxBatchedTokensR = (servingConfig && servingConfig.enableChunkedPrefill === false)
+    ? Math.max(CONFIG.maxBatchedTokens, Math.round(contextLength * promptTokenRatio))
+    : CONFIG.maxBatchedTokens;
   const meanSeqTokens = avgContextLength ? Math.min(contextLength, Math.max(1, avgContextLength)) : contextLength;
   const epNodes = (workloadType === 'inference' && model.isMoe) ? Math.max(1, Math.floor(expertParallelNodes) || 1) : 1;
 
@@ -255,10 +292,10 @@ export function recommendSharding(params) {
     const kvFloorGb = (bytesPerTokenSeq * contextLength * CONFIG.minKvStreams) / 1e9;
 
     // C1: Inference activation memory: tokensPerStep × (hidden + 2 × intermediate) × B_act × 1.2 + maxNumSeqs × vocab × 4
-    const tokensPerStep = CONFIG.maxBatchedTokens;
+    const tokensPerStep = maxBatchedTokensR;
     mActBytes = (tokensPerStep * (hiddenDim + 2 * intermediate) * CONFIG.B_act * 1.2) + (CONFIG.minKvStreams * vocab * 4);
     const actGb = (mActBytes / 1e9) + (CONFIG.runtimeOverheadPerGpu / 1e9);
-    totalReplicaMemoryGb = weightGb + kvFloorGb + actGb;
+    totalReplicaMemoryGb = weightGb + draftWeightGbR + kvFloorGb + actGb;
 
   } else {
     // Training mode
@@ -334,7 +371,11 @@ export function recommendSharding(params) {
     fitsInOneNode = true;
     rationale = `Workload base (~${totalReplicaMemoryGb.toFixed(1)} GB) fits across 4 GPUs inside 1 chassis. TP=${recommendedTp} balances matrix multiplications over NVLink. Pipeline Parallelism is unnecessary (PP=1).`;
   } else if (totalReplicaMemoryGb <= singleNodeCapacityGb) {
-    const candidateTp = gpusPerChassis >= 8 ? 8 : gpusPerChassis;
+    // On 8-GPU nodes this is TP=8. Rack-scale NVLink domains (NVL72) can go wider without
+    // leaving NVLink, so take the smallest power-of-two TP that fits.
+    let candidateTp = gpusPerChassis >= 8 ? 8 : gpusPerChassis;
+    while (candidateTp < gpusPerChassis && totalReplicaMemoryGb > candidateTp * usableGpuVramGb) candidateTp *= 2;
+    candidateTp = Math.min(candidateTp, gpusPerChassis);
     recommendedTp = getValidTp(candidateTp, numHeads);
     recommendedPp = 1;
     fitsInOneNode = true;
@@ -368,7 +409,9 @@ export function recommendSharding(params) {
 
   // Wide EP: the replica spans epNodes chassis at full in-chassis TP, with no pipeline stages.
   if (epNodes > 1) {
-    const epTp = getValidTp(gpusPerChassis, numHeads);
+    // An expert-parallel group is a chassis on 8-GPU nodes; inside a rack-scale NVLink domain
+    // it is an 8-GPU TP group, and several groups can sit in the same domain.
+    const epTp = getValidTp(Math.min(gpusPerChassis, 8), numHeads);
     const { routedGb, nonExpertGb } = splitExpertWeightsGb(model, totalReplicaMemoryGb);
     const perGpuGb = nonExpertGb / epTp + routedGb / (epTp * epNodes);
     recommendedTp = epTp;
@@ -412,7 +455,7 @@ export function recommendSharding(params) {
     const weightGb = ((totalParams * 1e9 - headParamsCount) * precision.bytesPerParam + unquantizedHeadBytes) / 1e9;
 
     const ppImbalanceFactor = recommendedPp > 1 ? CONFIG.ppImbalance : 1.0;
-    const perGpuWeightGb = perGpuWeightGbFor(model, weightGb, recommendedTp, recommendedPp, epNodes) * ppImbalanceFactor;
+    const perGpuWeightGb = (perGpuWeightGbFor(model, weightGb, recommendedTp, recommendedPp, epNodes) + draftWeightGbR / (recommendedTp * recommendedPp)) * ppImbalanceFactor;
     const perGpuActGb = (mActBytes / 1e9) / (recommendedTp * recommendedPp);
     const perGpuAvailForKvGb = Math.max(0, usableGpuVramGb - perGpuWeightGb - perGpuActGb);
 
@@ -489,6 +532,13 @@ export function calculateInfra(config) {
     avgContextLength = null, // mean tokens per stream for a mixed request-length workload (see recommendSharding)
   } = config;
   const meanSeqTokens = avgContextLength ? Math.min(contextLength, Math.max(1, avgContextLength)) : contextLength;
+  const spec = resolveSpeculative(servingConfig, model, workloadType);
+  const draftWeightGb = spec ? spec.draftParamsB * precision.bytesPerParam : 0;
+  // Without chunked prefill a whole prompt is processed in one step, so activation memory scales
+  // with the full prompt instead of the chunk size.
+  const maxBatchedTokens = (servingConfig && servingConfig.enableChunkedPrefill === false)
+    ? Math.max(CONFIG.maxBatchedTokens, Math.round(contextLength * promptTokenRatio))
+    : CONFIG.maxBatchedTokens;
 
   const totalParams = model.id === "custom" ? (Number(customParams) || 32) : model.params;
   const layers      = model.layers  || 32;
@@ -545,10 +595,29 @@ export function calculateInfra(config) {
   const prefillGpus = isLlmd ? prefillNodes * prefillGpusPerChassis : 0;
   const decodeGpus  = isLlmd ? decodeNodes * decodeGpusPerChassis : 0;
 
-  const prefillTp = isLlmd ? Math.min(8, prefillGpus) : tp;
-  const prefillPp = isLlmd ? Math.max(1, Math.ceil(prefillGpus / 8)) : pp;
-  const decodeTp  = isLlmd ? Math.min(8, decodeGpus) : tp;
-  const decodePp  = isLlmd ? Math.max(1, Math.ceil(decodeGpus / 8)) : pp;
+  // Each LLM-D pool is made of independent instances. An instance uses the smallest TP whose
+  // GPUs hold the weights with at least 25% of usable memory left for KV cache and activations
+  // (pipeline stages only if even a full chassis can't); extra nodes add instances, not stages.
+  const llmdWeightGb = (() => {
+    const isQ = precision.isQuantized != null ? precision.isQuantized : (precision.bytesPerParam < 2.0);
+    const headParams = isQ ? 2 * vocab * hiddenDim : 0;
+    return ((totalParams * 1e9 - headParams) * precision.bytesPerParam + headParams * 2) / 1e9;
+  })();
+  const llmdInstanceShape = (poolGpu, perChassis) => {
+    const usable = poolGpu.vramGb * usableMemoryFactor(memoryHeadroomPct) * 0.75;
+    for (const t of [1, 2, 4, 8].filter(v => v <= perChassis)) {
+      if (llmdWeightGb / t <= usable) return { tp: t, pp: 1 };
+    }
+    const t = Math.min(8, perChassis);
+    return { tp: t, pp: Math.max(1, Math.ceil(llmdWeightGb / (t * usable))) };
+  };
+  const prefillShape = isLlmd ? llmdInstanceShape(prefillGpu, prefillGpusPerChassis) : { tp, pp };
+  const decodeShape  = isLlmd ? llmdInstanceShape(decodeGpu, decodeGpusPerChassis) : { tp, pp };
+  const prefillTp = prefillShape.tp;
+  const prefillPp = prefillShape.pp;
+  const decodeTp  = decodeShape.tp;
+  const decodePp  = decodeShape.pp;
+  const prefillInstances = isLlmd ? Math.max(1, Math.floor(prefillGpus / (prefillTp * prefillPp))) : 0;
 
   // S7 (scale): `concurrency` is the TOTAL concurrent streams the whole deployment must
   // serve; Data Parallelism (`dp`, or the decode pool's implied replica count under LLM-D)
@@ -556,7 +625,7 @@ export function calculateInfra(config) {
   // KV cache / decode activations for its own share of the load, not the cluster total —
   // otherwise adding replicas (the mechanism for scaling to hundreds of GPUs) would never
   // relieve per-GPU memory pressure.
-  const replicaDp = isLlmd ? Math.max(1, Math.floor(decodeGpus / (decodeTp || 1))) : Math.max(1, dp || 1);
+  const replicaDp = isLlmd ? Math.max(1, Math.floor(decodeGpus / (decodeTp * decodePp))) : Math.max(1, dp || 1);
   const concurrencyPerReplica = Math.max(1, Math.ceil(concurrency / replicaDp));
   const maxNumSeqs = concurrencyPerReplica;
 
@@ -613,7 +682,7 @@ export function calculateInfra(config) {
     // C1: Inference activation memory:
     // tokensPerStep = CONFIG.maxBatchedTokens (default 8192)
     // M_act = tokensPerStep × (hidden + 2 × intermediate) × B_act × 1.2 + maxNumSeqs × vocab × 4
-    const tokensPerStep = CONFIG.maxBatchedTokens;
+    const tokensPerStep = maxBatchedTokens;
     const mActBytes = (tokensPerStep * (hiddenDim + 2 * intermediate) * CONFIG.B_act * 1.2) + (maxNumSeqs * vocab * 4);
     mActGb = mActBytes / 1e9;
     activationOverheadGb = mActGb + (totalGpus * (CONFIG.runtimeOverheadPerGpu / 1e9));
@@ -735,6 +804,7 @@ export function calculateInfra(config) {
         gpus: prefillGpus,
         tp: prefillTp,
         pp: prefillPp,
+        instances: prefillInstances,
         weightsGb: prefillWeightsGb,
         actGb: prefillActGb,
         kvGb: prefillKvGb,
@@ -752,6 +822,7 @@ export function calculateInfra(config) {
         gpus: decodeGpus,
         tp: decodeTp,
         pp: decodePp,
+        instances: replicaDp,
         weightsGb: decodeWeightsGb,
         actGb: decodeActGb,
         kvGb: decodeKvGb,
@@ -773,7 +844,8 @@ export function calculateInfra(config) {
     };
   } else if (workloadType === "inference") {
     const ppImbalanceFactor = pp > 1 ? CONFIG.ppImbalance : 1.0;
-    perGpuWeightsGb = perGpuWeightGbFor(model, weightMemoryTotalGb, tp, pp, epNodes) * ppImbalanceFactor;
+    // The speculative drafter's weights are sharded with the target (same TP), as vLLM does by default.
+    perGpuWeightsGb = (perGpuWeightGbFor(model, weightMemoryTotalGb, tp, pp, epNodes) + draftWeightGb / (tp * pp)) * ppImbalanceFactor;
     // Under wide EP each chassis runs attention for its own share of the replica's streams.
     if (model.isMla) {
       perGpuKvOrOptGb = kvCacheTotalGb / (pp * epNodes);
@@ -839,8 +911,8 @@ export function calculateInfra(config) {
     warnings.push(`Selected GPU uses PCIe bus (no NVLink). High Tensor Parallelism (TP=${tp}) will cause All-Reduce communication bottlenecks.`);
   }
 
-  if (pp > 1 && tp < gpusPerChassis && !isLlmd) {
-    warnings.push(`Sub-optimal sharding: You configured Pipeline Parallelism (PP=${pp}) across nodes while TP is only ${tp}. Maximize intra-node TP to ${gpusPerChassis} first over NVLink before splitting across nodes with PP.`);
+  if (pp > 1 && tp < Math.min(8, gpusPerChassis) && !isLlmd) {
+    warnings.push(`Sub-optimal sharding: You configured Pipeline Parallelism (PP=${pp}) across nodes while TP is only ${tp}. Maximize intra-node TP to ${Math.min(8, gpusPerChassis)} first over NVLink before splitting across nodes with PP.`);
   }
 
   // FIX: Pipeline bubble overhead warning
@@ -861,6 +933,10 @@ export function calculateInfra(config) {
 
   if (epNodes > 1 && oversubscriptionRatio > 1) {
     warnings.push(`Wide expert parallelism sends all-to-all traffic across chassis at every MoE layer, but the fabric is ${oversubscriptionRatio}:1 oversubscribed. Expect higher per-token latency than modeled; use a non-blocking (1:1) fabric for expert-parallel groups.`);
+  }
+
+  if (platform?.nvlinkDomainGpus && !isLlmd && gpusAllocated > totalGpus) {
+    warnings.push(`${platform.shortName} is bought as whole ${gpusPerChassis}-GPU racks: this design uses ${totalGpus} of ${gpusAllocated} installed GPUs. Cost & TCO counts every installed GPU; add concurrency or replicas to use the rest.`);
   }
 
   // TensorRT-LLM is NVIDIA-only; AMD Instinct serving runs vLLM or SGLang on ROCm.
@@ -938,10 +1014,11 @@ export function calculateInfra(config) {
     transceivers   = 2 * fabricCables;
   } else {
     // C3: Rail-optimised leaf-spine fabric
-    const R = gpusPerChassis; // rails
+    const R = platform?.scaleOutRails || gpusPerChassis; // rails
     const D = Math.floor(CONFIG.switchPorts / 2); // downlink ports per leaf at 1:1 (32)
     const N_gpus = totalGpus;
-    const N_chassis = nodes;
+    // GPUs per rail: one per chassis on 8-GPU nodes; rack-scale systems spread their NICs over R rails.
+    const N_chassis = platform?.scaleOutRails ? Math.ceil(N_gpus / R) : nodes;
 
     if (N_gpus <= CONFIG.switchPorts) {
       leafSwitches  = 1;
@@ -1002,7 +1079,8 @@ export function calculateInfra(config) {
   const totalFacilityPowerKw = facilityTotalPower;
 
   // M2: Rack bin-packing
-  const rackKw = config.rackKw || config.rackKW || CONFIG.rackKW || 28;
+  // Rack-scale systems (NVL72) come as one fixed ~120-135 kW liquid-cooled rack.
+  const rackKw = platform?.rackKw || config.rackKw || config.rackKW || CONFIG.rackKW || 28;
   const chassisRU = chassisHeightRu || 8;
   const chassisTDP_W = chassisTdpKw ? (chassisTdpKw * 1000) : 10200;
   const perRack = Math.max(1, Math.floor(Math.min(CONFIG.rackRU / chassisRU, (rackKw * 1000) / chassisTDP_W)));
@@ -1119,7 +1197,8 @@ export function calculateInfra(config) {
     const fwdFlopsPerToken = 2 * effectiveParamsForThroughput * 1e9;
     const attnDim = (model.isMla) ? 576 : hiddenDim;
     const attnFlopsPerToken = 2 * layers * attnDim * contextLength;
-    const totalFlopsPerToken = fwdFlopsPerToken + attnFlopsPerToken;
+    // MoE expert GEMMs run below dense MFU; attention does not, so only the linear part is scaled.
+    const totalFlopsPerToken = fwdFlopsPerToken / (isMoe ? CONFIG.moeMfuFactor : 1) + attnFlopsPerToken;
     const totalPromptFlops = totalFlopsPerToken * uncachedPromptTokens;
 
     // Compute rate uses ONLY replica tensor-parallel GPUs (C4)
@@ -1145,7 +1224,7 @@ export function calculateInfra(config) {
 
     const promptTokensPerSecPerReplica = Math.round(promptTokens / ttftSec);
     const promptTokensPerSecPerGpu = Math.round(promptTokensPerSecPerReplica / prefillTpCount);
-    const clusterBatchPromptTps = isLlmd ? promptTokensPerSecPerReplica : Math.round(promptTokensPerSecPerReplica * dp);
+    const clusterBatchPromptTps = isLlmd ? Math.round(promptTokensPerSecPerReplica * prefillInstances) : Math.round(promptTokensPerSecPerReplica * dp);
 
     // ── Phase 2: Decode (Autoregressive Token Generation) (C2) ──────────────
     const targetDecodeGpu = isLlmd ? decodeGpu : gpu;
@@ -1162,18 +1241,52 @@ export function calculateInfra(config) {
     const weightBytesRead = decodeWeightBytes(model, customParams, precision, epNodes * (config.ep || CONFIG.ep || 1), C_rep);
     const kvBytesRead = bytesPerTokenSeq * S_avg * C_rep / epNodes;
 
-    const t_mem  = (weightBytesRead + kvBytesRead) / (decodeTpCount * BW_mem * CONFIG.bwEfficiency);
+    const t_mem  = weightBytesRead / (decodeTpCount * BW_mem * CONFIG.bwEfficiency)
+      + kvBytesRead / (decodeTpCount * BW_mem * CONFIG.kvBwEfficiency);
     const pActiveParams = (isMoe && model.activeParams ? model.activeParams : totalParams) * 1e9;
-    const t_comp = (2 * pActiveParams * C_rep) / (decodeTpCount * epNodes * decodePeakDenseFlops * CONFIG.mfuDecode);
+    const mfuDecode = CONFIG.mfuDecode * (isMoe ? CONFIG.moeMfuFactor : 1);
+    const t_comp = (2 * pActiveParams * C_rep) / (decodeTpCount * epNodes * decodePeakDenseFlops * mfuDecode);
     // Wide EP all-to-all: every token's hidden state goes to its k experts and back, mostly to
     // other chassis (FP8 dispatch + BF16 combine = 3 bytes/element), over the GPUs' NICs.
     const moeLayers = model.moeLayers || layers;
+    // Inside one NVLink domain (e.g. NVL72) the exchange runs over NVLink instead of the NICs.
+    const a2aInDomain = tp * epNodes <= gpusPerChassis;
+    const a2aLinkBw = a2aInDomain
+      ? (gpu.linkBwUniGBs ? gpu.linkBwUniGBs * 1e9 : CONFIG.nvlinkBwUni) * 0.8
+      : nicSpeedGbps * 1e9 * 0.9 / 8;
     const t_a2a = epNodes > 1
-      ? (C_rep * moeLayers * (model.activeExperts || 8) * hiddenDim * 3 * (1 - 1 / epNodes)) / (tp * epNodes * (nicSpeedGbps * 1e9 * 0.9 / 8))
-        + moeLayers * 2 * CONFIG.a2aLatency
+      ? (C_rep * moeLayers * (model.activeExperts || 8) * hiddenDim * 3 * (1 - 1 / epNodes)) / (tp * epNodes * a2aLinkBw)
+        + moeLayers * 2 * (a2aInDomain ? CONFIG.a2aLatency / 3 : CONFIG.a2aLatency)
       : 0;
     const t_comm = (decodeTpCount > 1 ? 2 * layers * CONFIG.allreduceLatency : 0) + t_a2a;
-    const t_step = Math.max(t_mem, t_comp) + t_comm;
+    const t_step_plain = Math.max(t_mem, t_comp) + t_comm;
+
+    // Speculative decoding: one target pass verifies k+1 positions per stream (weights and KV
+    // are read once, compute grows k+1-fold), after k sequential drafter steps. The time per
+    // produced token is that step divided by the expected tokens accepted per step. At large
+    // batches decode turns compute-bound and the extra verification work outweighs the gain.
+    let speculative = null;
+    let t_step = t_step_plain;
+    if (spec && !isLlmd) {
+      const draftBytes = spec.draftParamsB * 1e9 * precision.bytesPerParam;
+      const t_draft_token = Math.max(
+        draftBytes / (decodeTpCount * BW_mem * CONFIG.bwEfficiency),
+        (2 * spec.draftParamsB * 1e9 * C_rep) / (decodeTpCount * decodePeakDenseFlops * CONFIG.mfuDecode)
+      ) + (decodeTpCount > 1 ? 2 * CONFIG.allreduceLatency : 0);
+      const t_verify_comp = (2 * pActiveParams * C_rep * (spec.k + 1)) / (decodeTpCount * epNodes * decodePeakDenseFlops * CONFIG.specVerifyMfu);
+      const t_verify = (Math.max(t_mem, t_verify_comp) + t_comm) * CONFIG.specVerifyOverhead;
+      const t_spec_per_token = (t_verify + spec.k * t_draft_token) / spec.expectedTokensPerStep;
+      const speedup = t_step_plain / t_spec_per_token;
+      speculative = {
+        ...spec,
+        speedup,
+        helps: speedup > 1,
+        tpotWithoutMs: Number((t_step_plain * 1000).toFixed(2)),
+      };
+      // Engines can turn speculation off above a batch size; model that by never going slower.
+      if (speedup > 1) t_step = t_spec_per_token;
+    }
+
     const tpotMs = Number((t_step * 1000).toFixed(2));
     const replicaThroughput = C_rep / t_step;
     const clusterThroughput = replicaThroughput * decodeDp;
@@ -1200,6 +1313,7 @@ export function calculateInfra(config) {
       t_comp,
       t_comm,
       t_a2a,
+      speculative,
       t_step,
       tpotMs,
       replicaThroughput:      Math.round(replicaThroughput),
@@ -1237,11 +1351,13 @@ export function calculateInfra(config) {
     modelParallelSize,
     totalGpus,
     epNodes,
+    isRackScale: !!platform?.nvlinkDomainGpus,
     gpusAllocated,
     nodes,
     // Memory
     memory: {
       weightTotalGb:      weightMemoryTotalGb,
+      draftWeightGb,
       kvCacheTotalGb,
       bytesPerTokenSeq,
       baselineKvGb,
@@ -1523,7 +1639,10 @@ export function calculateCost(config) {
     cloudEquivalentUsdPerHr = (prefillGpus * cloudRateUsdPerHr) + (decodeGpus * decCloud);
   } else {
     const totalGpus = infraResults.totalGpus;
-    const billedGpuCount = computeGpuCountOverride != null ? computeGpuCountOverride : totalGpus;
+    // Rack-scale NVLink systems are bought per rack, so every installed GPU is paid for.
+    const billedGpuCount = computeGpuCountOverride != null
+      ? computeGpuCountOverride
+      : (infraResults.isRackScale ? (infraResults.gpusAllocated || totalGpus) : totalGpus);
     computeCapexUsd = billedGpuCount * gpuUnitPriceUsd;
     cloudEquivalentUsdPerHr = totalGpus * cloudRateUsdPerHr;
   }
@@ -1608,6 +1727,8 @@ export function calculateCost(config) {
     buildVsBuySavingsUsd,
     breakEvenMonths,
     useColo,
+    billedItPowerKw,
+    billedFacilityPowerKw,
   };
 }
 
@@ -2283,6 +2404,102 @@ export function calculateTrainingRedundancy(config) {
   };
 }
 
+// ─── Training Time, Failures & Goodput ─────────────────────────────────────────────────────────
+/**
+ * How long a training job takes on the sized cluster, and how much of that time is lost to
+ * hardware failures and checkpointing.
+ *  - Compute: 6·N·D FLOPs for full training (forward + backward incl. weight gradients), 4·N·D
+ *    for LoRA (frozen weights need no weight-gradient matmuls); N = active parameters.
+ *  - Failures: with a per-GPU MTBF, the job as a whole fails every MTBF / GPUs hours. Each
+ *    failure loses the work since the last checkpoint (half an interval on average) plus the
+ *    restart time. Checkpoints stall the job for their write time.
+ *  - Interval: Young/Daly optimum sqrt(2 · write time · job MTBF) unless one is given.
+ *  - Spares: the fewest nodes that cover every node out for repair at once, 97.5% of the time (Poisson).
+ * Default MTBF (~50,000 GPU-hours) follows Meta's report of 419 unplanned interruptions in 54
+ * days on 16,384 H100s for Llama 3 405B training.
+ */
+export function calculateTrainingTime(config) {
+  const {
+    infraResults,
+    gpu,
+    precision,
+    model,
+    trainingType = 'pretrain_sft',
+    trainingTokensB = 10,
+    mfuPct = 40,
+    gpuMtbfHours = 50000,
+    checkpointWriteSec = 60,
+    checkpointIntervalMin = 0, // 0 = Young/Daly optimum
+    restartMin = 20,
+    nodeRepairHours = 48,
+    pue = 1.35,
+    effectiveUsdPerGpuHour = 0,
+  } = config;
+  if (infraResults.workloadType !== 'training') return { eligible: false };
+
+  const gpus = infraResults.totalGpus;
+  const gpusPerNode = infraResults.nodes > 0 ? infraResults.gpusAllocated / infraResults.nodes : 8;
+  const activeParams = (model.isMoe && model.activeParams ? model.activeParams : infraResults.totalParams) * 1e9;
+  const flopsPerToken = (trainingType === 'lora' ? 4 : 6) * activeParams;
+  const totalFlops = flopsPerToken * trainingTokensB * 1e9;
+  // Training runs in BF16 unless an FP8 training precision is chosen.
+  const peak = precision.id === 'fp8' ? peakDenseFlops(gpu, precision) : (gpu.fp16Tflops || 989) * 1e12;
+  const mfu = Math.min(0.9, Math.max(0.05, mfuPct / 100));
+  const clusterFlops = gpus * peak * mfu;
+  const computeHours = totalFlops / clusterFlops / 3600;
+
+  const jobMtbfHours = Math.max(1e-6, gpuMtbfHours / gpus);
+  const writeHours = Math.max(0, checkpointWriteSec) / 3600;
+  const optimalIntervalHours = Math.sqrt(2 * writeHours * jobMtbfHours);
+  const intervalHours = checkpointIntervalMin > 0 ? checkpointIntervalMin / 60 : optimalIntervalHours;
+  const restartHours = Math.max(0, restartMin) / 60;
+  const checkpointOverhead = writeHours / (intervalHours + writeHours);
+  const failureLoss = (intervalHours / 2 + restartHours) / jobMtbfHours;
+  const goodput = Math.max(0.01, 1 - checkpointOverhead - failureLoss);
+  const wallClockHours = computeHours / goodput;
+  const expectedFailures = wallClockHours / jobMtbfHours;
+
+  // Spare nodes: failures arrive at nodes x gpusPerNode / MTBF per hour; each keeps a node out
+  // for the repair time. Cover the Poisson mean + 2 sigma of nodes out at once.
+  const nodeFailuresPerHour = gpus / gpuMtbfHours;
+  const meanNodesOut = nodeFailuresPerHour * Math.max(0, nodeRepairHours);
+  // Smallest spare count n with P(more than n nodes out at once) < 2.5% (Poisson).
+  let recommendedSpareNodes = 0;
+  if (meanNodesOut > 0) {
+    let term = Math.exp(-meanNodesOut);
+    let cdf = term;
+    while (1 - cdf >= 0.025 && recommendedSpareNodes < 10000) {
+      recommendedSpareNodes++;
+      term *= meanNodesOut / recommendedSpareNodes;
+      cdf += term;
+    }
+  }
+  const recommendedSparePct = infraResults.nodes > 0 ? (recommendedSpareNodes / infraResults.nodes) * 100 : 0;
+
+  const itKw = infraResults.facility.totalItPowerKw;
+  return {
+    eligible: true,
+    totalFlops,
+    flopsPerToken,
+    clusterPflops: clusterFlops / 1e15,
+    computeDays: computeHours / 24,
+    wallClockDays: wallClockHours / 24,
+    goodputPct: goodput * 100,
+    checkpointOverheadPct: checkpointOverhead * 100,
+    failureLossPct: failureLoss * 100,
+    jobMtbfHours,
+    checkpointIntervalMin: intervalHours * 60,
+    optimalIntervalMin: optimalIntervalHours * 60,
+    usingOptimalInterval: !(checkpointIntervalMin > 0),
+    expectedFailures,
+    recommendedSpareNodes,
+    recommendedSparePct,
+    gpusPerNode,
+    energyMwh: (itKw * pue * wallClockHours) / 1000,
+    computeCostUsd: effectiveUsdPerGpuHour * gpus * wallClockHours,
+  };
+}
+
 // ─── MLOps Lifecycle: Canary / Shadow / Blue-Green Validation Pool ─────────────────────────────
 /**
  * Sizes the standing compute pool a safe model-rollout strategy needs alongside the primary
@@ -2363,6 +2580,7 @@ export function calculateTokenEconomics({
   promptTokensPerRequest,
   outputTokensPerRequest,      // visible answer + reasoning tokens
   dutyCyclePct = 50,
+  requestsPerSecAtPeak: requestsPerSecAtPeakInput = null, // known peak request rate (traffic mode)
   apiInputUsdPer1M = 0,
   apiOutputUsdPer1M = 0,
 }) {
@@ -2375,7 +2593,9 @@ export function calculateTokenEconomics({
   const fullyLoadedMonthlyCostUsd = cost.totalCapexUsd / (cost.tcoYears * 12) + cost.annualOpexUsd / 12;
   const monthlyCostUsd = (cost.servingCapexUsd ?? cost.totalCapexUsd) / (cost.tcoYears * 12)
     + (cost.servingAnnualOpexUsd ?? cost.annualOpexUsd) / 12;
-  const requestsPerSecAtPeak = throughput.batchThroughputTps / outputTokensPerRequest;
+  const requestsPerSecAtPeak = requestsPerSecAtPeakInput > 0
+    ? requestsPerSecAtPeakInput
+    : throughput.batchThroughputTps / outputTokensPerRequest;
   const duty = Math.min(1, Math.max(0.01, dutyCyclePct / 100));
   const requestsPerMonthAtFull = requestsPerSecAtPeak * 3600 * hoursPerMonth;
   const requestsPerMonth = requestsPerMonthAtFull * duty;

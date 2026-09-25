@@ -27,6 +27,16 @@ Built for infrastructure architects and systems engineers designing clusters for
 - **Inference Performance & Latency Engine**:
   - **Prefill (Time to First Token - TTFT)**: Evaluates dense Tensor Core FLOPs, dynamic prompt-length MFU, unidirectional NVLink/PCIe All-Reduce bandwidth, and pipeline latency.
   - **Decode (Time Per Output Token - TPOT)**: Models HBM memory bandwidth saturation ($t_{\text{mem}}$), active parameter FLOPs ($t_{\text{comp}}$), and All-Reduce communication ($t_{\text{comm}}$).
+  - **Calibrated** against NVIDIA's published TensorRT-LLM max-load throughput (H100 / H200 / B200 / GB200): ~16% typical error on the fitted points, ~18% on held-out MoE models.
+
+- **Planning & Facilities**:
+  - Guided setup: five plain questions produce a starting design, sized on every platform from a vendor with latency targets.
+  - Air or liquid cooling, rack power limits, and working back from a facility power budget to the largest workload that fits.
+  - Energy and carbon per year and per 1M output tokens.
+  - Sensitivity (tornado) of TCO and cost per token, rent vs buy (reserved, on-demand, scaled to use), and year-by-year growth plans with phased purchases and hardware refresh.
+
+- **Training Time & Reliability**:
+  - Time to train from 6ND (4ND for LoRA) FLOPs and MFU; GPU failure rate, Young/Daly checkpoint interval, goodput, wall-clock days and a recommended hot-spare node count.
 
 - **Disaggregated Serving (LLM-D)**:
   - Partitions clusters into dedicated Prefill pools (compute-dense) and Decode pools (memory-dense).
@@ -34,7 +44,7 @@ Built for infrastructure architects and systems engineers designing clusters for
   - Lossless RoCEv2 KV-cache chunk network transfer over parallel NICs with computation overlap.
 
 - **Datacenter Facilities & BOM**:
-  - **Hardware Platforms**: NVIDIA SXM/PCIe server chassis, Cisco UCS C885A M8, and Cisco UCS X9508 modular chassis.
+  - **Hardware Platforms**: NVIDIA SXM/PCIe server chassis, GB200 / GB300 NVL72 rack-scale systems (72-GPU NVLink domain), Cisco UCS C885A M8, and Cisco UCS X9508 modular chassis.
   - **Rail-Optimized Fabric**: Leaf-spine 2-tier Clos network with 1:1 non-blocking bisection, single-tier leaf bypass ($N_{\text{gpus}} \le 64$), and optical transceiver counts.
   - **Power & Rack Packing**: Bin-packs chassis and switches into standard 42U racks based on RU and power limits ($\text{rackKW}$), with facility total power and cooling overhead via PUE.
 
@@ -86,7 +96,7 @@ Test modules cover:
 5. Inference Latency & Throughput Engine (Prefill TTFT & Decode TPOT)
 6. Disaggregated Serving (LLM-D) & Cisco RoCEv2 Transfer
 7. Datacenter BOM, Facilities & Rail-Optimized Network
-8. Calibration Test Suite (`tests/calibration.test.js` - MLPerf & vLLM benchmark validation)
+8. Calibration Test Suite (`tests/calibration.test.js` - throughput vs NVIDIA's published TensorRT-LLM results, fitted and held-out points)
 
 Detailed mathematical documentation and references can be found in [`docs/SIZING_LOGIC_SPEC.md`](docs/SIZING_LOGIC_SPEC.md).
 

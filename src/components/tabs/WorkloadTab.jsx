@@ -6,6 +6,9 @@ import { MODEL_PRESETS, PRECISION_OPTIONS } from '../../data/models';
 
 export function WorkloadTab({ ctx }) {
   const {
+    trainingTokensB, setTrainingTokensB, trainingMfuPct, setTrainingMfuPct,
+    sizingInputMode, setSizingInputMode, trafficInputType, setTrafficInputType, peakActiveUsers, setPeakActiveUsers,
+    requestsPerUserPerHour, setRequestsPerUserPerHour, peakRequestsPerSec, setPeakRequestsPerSec, traffic,
     concurrency, contextLength, customKvHeads, customLayers, customNumHeads, customParams,
     kvPrecision, maxContextLength, microBatchSize, model, prefixCacheRatio, promptTokenRatio,
     results, selectedModelId, selectedPrecisionId, setConcurrency, setContextLength, setCustomKvHeads,
@@ -153,22 +156,69 @@ export function WorkloadTab({ ctx }) {
         {/* Concurrency / Batch Size */}
         {workloadType === 'inference' ? (
           <>
-            <ScaleField
-              label="Concurrent User Requests (Total Cluster-Wide):"
-              value={concurrency}
-              onChange={setConcurrency}
-              presets={[1, 8, 32, 128, 512, 2048, 8192]}
-              min={1}
-              max={16384}
-              suffix=" streams"
-              helper={
-                <InfoHelper
-                  title="Concurrency & KV Cache Multiplying"
-                  text="How many separate users or agent tasks are generating answers at the exact same millisecond, across the whole deployment (not per replica). Each concurrent stream maintains its own independent KV Cache in GPU memory."
-                  whyItMatters="At large scale, this is what Data Parallelism (DP) auto-scales against on the Sharding tab: more replicas means each one only has to hold KV cache for its own share of these streams."
+            <Field label="Size by">
+              <SegmentedToggle
+                value={sizingInputMode}
+                onChange={setSizingInputMode}
+                options={[{ value: 'concurrency', label: 'Concurrent streams' }, { value: 'traffic', label: 'Peak traffic' }]}
+              />
+            </Field>
+            {sizingInputMode === 'traffic' ? (
+              <div className="space-y-3">
+                <SegmentedToggle
+                  value={trafficInputType}
+                  onChange={setTrafficInputType}
+                  options={[{ value: 'users', label: 'Users × requests/hour' }, { value: 'rps', label: 'Requests / second' }]}
                 />
-              }
-            />
+                {trafficInputType === 'users' ? (
+                  <div className="grid grid-cols-2 gap-3">
+                    <Field label="Active users in the peak hour">
+                      <input type="number" min="1" step="10" value={peakActiveUsers}
+                        onChange={(e) => setPeakActiveUsers(Math.max(1, Number(e.target.value) || 1))}
+                        className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-2 py-1.5 text-xs text-white font-mono focus:outline-none focus:border-sky-500" />
+                    </Field>
+                    <Field label="Requests per user per hour">
+                      <input type="number" min="0.1" step="1" value={requestsPerUserPerHour}
+                        onChange={(e) => setRequestsPerUserPerHour(Math.max(0.1, Number(e.target.value) || 0.1))}
+                        className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-2 py-1.5 text-xs text-white font-mono focus:outline-none focus:border-sky-500" />
+                    </Field>
+                  </div>
+                ) : (
+                  <Field label="Peak requests per second">
+                    <input type="number" min="0.01" step="0.5" value={peakRequestsPerSec}
+                      onChange={(e) => setPeakRequestsPerSec(Math.max(0.01, Number(e.target.value) || 0.01))}
+                      className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-2 py-1.5 text-xs text-white font-mono focus:outline-none focus:border-sky-500" />
+                  </Field>
+                )}
+                {traffic && (
+                  <div className="text-[11px] text-zinc-400 leading-relaxed" data-testid="traffic-summary">
+                    {traffic.requestsPerSec.toFixed(2)} requests/s × {traffic.serviceTimeSec.toFixed(1)} s per request (prefill + full answer) ÷ {Math.round(traffic.targetUtilization * 100)}% target utilization ≈ <strong className="text-sky-400">{traffic.concurrency.toLocaleString()} concurrent requests</strong> to size for; they run at {Math.round(traffic.utilization * 100)}% utilization.
+                  </div>
+                )}
+                <InfoHelper
+                  title="Sizing from Traffic"
+                  text="A request here is one full use of the context window below: its prompt plus its whole answer (for an agent, one task or session). By Little's law, the requests in flight equal the arrival rate times how long each takes to serve; dividing by the target utilization (SLA tab) leaves headroom so requests rarely wait for a slot."
+                  whyItMatters="Most teams know users and request rates, not concurrent streams. Long answers and reasoning tokens stretch service time, so the same traffic can need many more concurrent slots, and GPUs, than it first appears."
+                />
+              </div>
+            ) : (
+              <ScaleField
+                label="Concurrent User Requests (Total Cluster-Wide):"
+                value={concurrency}
+                onChange={setConcurrency}
+                presets={[1, 8, 32, 128, 512, 2048, 8192]}
+                min={1}
+                max={16384}
+                suffix=" streams"
+                helper={
+                  <InfoHelper
+                    title="Concurrency & KV Cache Multiplying"
+                    text="How many separate users or agent tasks are generating answers at the exact same millisecond, across the whole deployment (not per replica). Each concurrent stream maintains its own independent KV Cache in GPU memory."
+                    whyItMatters="At large scale, this is what Data Parallelism (DP) auto-scales against on the Sharding tab: more replicas means each one only has to hold KV cache for its own share of these streams."
+                  />
+                }
+              />
+            )}
 
             {/* Advanced KV Cache Optimization Sub-panel */}
             <div className="p-3 bg-zinc-950/60 border border-zinc-800/70 rounded-lg space-y-3.5">
@@ -233,10 +283,10 @@ export function WorkloadTab({ ctx }) {
               <SliderField
                 label="Workload Profile (Prompt vs. Output Split):"
                 valueLabel={`${(promptTokenRatio * 100).toFixed(0)}% / ${((1 - promptTokenRatio) * 100).toFixed(0)}%`}
-                min="0.1" max="0.9" step="0.05"
+                min="0.1" max="0.99" step="0.01"
                 value={promptTokenRatio}
                 onChange={(e) => setPromptTokenRatio(Number(e.target.value))}
-                marks={['10% (Agentic / Code & Reasoning)', '50% (Chat)', '90% (RAG & Docs)']}
+                marks={['10% (Agentic / Code & Reasoning)', '50% (Chat)', '99% (Long documents)']}
                 helper={
                   <InfoHelper
                     title="Workload Profile (Prompt vs. Output Split)"
@@ -322,6 +372,20 @@ export function WorkloadTab({ ctx }) {
                 />
               }
             />
+
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Training tokens (billions)">
+                <input type="number" min="0.001" step="1" value={trainingTokensB}
+                  onChange={(e) => setTrainingTokensB(Math.max(0.001, Number(e.target.value) || 0.001))}
+                  className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-2 py-1.5 text-xs text-white font-mono focus:outline-none focus:border-sky-500" />
+              </Field>
+              <Field label={`Sustained MFU: ${trainingMfuPct}%`}>
+                <input type="range" min="10" max="60" step="1" value={trainingMfuPct}
+                  onChange={(e) => setTrainingMfuPct(Number(e.target.value))}
+                  className="w-full accent-sky-500 bg-zinc-800 h-1.5 rounded-lg cursor-pointer" />
+              </Field>
+            </div>
+            <div className="text-[10.5px] text-zinc-500">Tokens = dataset tokens × epochs. MFU: 35-45% is typical for well-tuned large dense runs, lower for small models, LoRA and MoE.</div>
 
             <Field label="Training Strategy">
               <select

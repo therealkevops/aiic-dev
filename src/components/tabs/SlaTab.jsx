@@ -5,7 +5,7 @@ import { Banner, Card, Row, Rows, SectionLabel, SliderField, Tag } from '../ui';
 
 export function SlaTab({ ctx }) {
   const {
-    setTargetUtilization, sla, targetUtilization,
+    setTargetUtilization, sla, targetUtilization, traffic,
   } = ctx;
   return (
     <>
@@ -29,8 +29,10 @@ export function SlaTab({ ctx }) {
           <>
             <div className="pt-1">
               <SliderField
-                label="Target Replica Utilization (ρ):"
-                valueLabel={`${(sla.targetUtilization * 100).toFixed(0)}%${sla.wasClamped ? ' (clamped)' : ''}`}
+                label={traffic ? 'Target utilization for traffic sizing (ρ):' : 'Target Replica Utilization (ρ):'}
+                valueLabel={traffic
+                  ? `${Math.round(targetUtilization * 100)}% (actual ${Math.round(traffic.utilization * 100)}%)`
+                  : `${(sla.targetUtilization * 100).toFixed(0)}%${sla.wasClamped ? ' (clamped)' : ''}`}
                 min="0.05" max="0.99" step="0.01"
                 value={targetUtilization}
                 onChange={(e) => setTargetUtilization(Number(e.target.value))}

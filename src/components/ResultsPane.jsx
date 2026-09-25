@@ -6,7 +6,7 @@ import { Banner, Card, Disclosure, Kpi, KpiRow, Meter, Row, Rows, SectionLabel, 
 
 export function ResultsPane({ ctx }) {
   const {
-    warnings, tokenEconomics,
+    warnings, tokenEconomics, trainingTime,
     bom, concurrency, contextLength, copiedBOM, cost, dp,
     embeddingGpu, facility, gpu, guardGpu, guardModel, guardrails,
     haDr, haDrTier, handleCopyBOM, ingress, ingressTier, isLlmd,
@@ -51,7 +51,7 @@ export function ResultsPane({ ctx }) {
         </Banner>
       ) : (
         <Banner
-          tone={memory.isOOM ? 'warn' : (memory.headroomGb < 10 ? 'warn' : 'good')}
+          tone={memory.isOOM ? 'warn' : (memory.headroomGb < 0.05 * memory.usableGpuCapacityGb ? 'warn' : 'good')}
           icon={memory.isOOM ? AlertTriangle : CheckCircle2}
           title={
             memory.isOOM
@@ -130,6 +130,22 @@ export function ResultsPane({ ctx }) {
       )}
 
       {/* Inference Performance Profile (Prefill & Decode) */}
+      {trainingTime?.eligible && (
+        <Card icon={Timer} title="Training time" right={`${trainingTime.wallClockDays < 2 ? `${(trainingTime.wallClockDays * 24).toFixed(1)} hours` : `${trainingTime.wallClockDays.toFixed(1)} days`}`}>
+          <KpiRow>
+            <Kpi label="Wall-clock" value={trainingTime.wallClockDays < 2 ? `${(trainingTime.wallClockDays * 24).toFixed(1)} h` : `${trainingTime.wallClockDays.toFixed(1)} d`} sub={`${trainingTime.computeDays < 2 ? `${(trainingTime.computeDays * 24).toFixed(1)} h` : `${trainingTime.computeDays.toFixed(1)} d`} of compute`} tone="accent" />
+            <Kpi label="Goodput" value={`${trainingTime.goodputPct.toFixed(1)}%`} sub={`${trainingTime.expectedFailures < 1 ? trainingTime.expectedFailures.toFixed(2) : Math.round(trainingTime.expectedFailures)} expected failures`} tone={trainingTime.goodputPct >= 95 ? 'good' : 'warn'} />
+            <Kpi label="Energy" value={`${trainingTime.energyMwh < 10 ? trainingTime.energyMwh.toFixed(1) : Math.round(trainingTime.energyMwh).toLocaleString()} MWh`} sub="facility, incl. PUE" />
+          </KpiRow>
+          <Rows className="mt-3">
+            <Row k="Training compute" v={`${trainingTime.totalFlops.toExponential(2)} FLOPs (${Math.round(trainingTime.flopsPerToken / 1e9).toLocaleString()} GFLOPs/token)`} />
+            <Row k="Cluster sustained throughput" v={`${trainingTime.clusterPflops.toFixed(1)} PFLOP/s`} />
+            <Row k="Lost to checkpoints / failures" v={`${trainingTime.checkpointOverheadPct.toFixed(1)}% / ${trainingTime.failureLossPct.toFixed(1)}%`} />
+            <Row k="Run cost at effective $/GPU-hr" v={`$${Math.round(trainingTime.computeCostUsd).toLocaleString()}`} />
+          </Rows>
+        </Card>
+      )}
+
       {workloadType === 'inference' && throughput && (
         <Card icon={Gauge} title="Inference performance profile"
           right={<span className="font-mono text-zinc-400">{throughput.batchThroughputTps?.toLocaleString()} gen tok/s · {throughput.clusterBatchPromptTps?.toLocaleString()} prompt tok/s</span>}
@@ -158,7 +174,7 @@ export function ResultsPane({ ctx }) {
               <div className="text-2xl font-semibold font-mono text-emerald-400">
                 {throughput.tpotMs}<span className="text-xs text-zinc-500 ml-1 font-sans">ms</span>
               </div>
-              <div className="text-[11px] text-zinc-500 mt-0.5">~{throughput.tokensPerSecPerGpu} tok/s/stream · ~{throughput.batchThroughputTps?.toLocaleString()} tok/s cluster (×{dp} DP × {concurrency})</div>
+              <div className="text-[11px] text-zinc-500 mt-0.5">~{Math.round(1000 / throughput.tpotMs).toLocaleString()} tok/s/stream · ~{throughput.tokensPerSecPerGpu.toLocaleString()} tok/s/GPU · ~{throughput.batchThroughputTps?.toLocaleString()} tok/s cluster ({isLlmd ? memory.llmd.decode.instances : dp} replicas × ~{Math.ceil(concurrency / (isLlmd ? memory.llmd.decode.instances : dp))} streams)</div>
               <div className="text-[11px] text-zinc-400 leading-relaxed mt-2.5 pt-2.5 border-t border-zinc-800/70">
                 {throughput.decodeNote || throughput.note}. Reads weights every step across {gpu.memBandwidthTbps} TB/s HBM.
               </div>

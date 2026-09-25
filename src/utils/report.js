@@ -21,7 +21,9 @@ function assumptions(config, s) {
   ];
   if (c.workloadType === 'inference') {
     rows.push(
-      ['Concurrent streams', c.concurrency.toLocaleString()],
+      s.traffic
+        ? ['Peak traffic', `${s.traffic.requestsPerSec.toFixed(2)} requests/s → ${s.traffic.concurrency.toLocaleString()} concurrent requests at ${Math.round(s.traffic.utilization * 100)}% utilization`]
+        : ['Concurrent streams', c.concurrency.toLocaleString()],
       ['Prefix cache sharing', `${Math.round(c.prefixCacheRatio * 100)}%`],
       ['Reasoning tokens per output token', c.reasoningTokensPerOutputToken || 0],
       ['Request-length mix', c.requestMixEnabled ? `${c.shortRequestPct}% short (${c.shortRequestTokens.toLocaleString()} tokens)` : 'Off'],
@@ -36,7 +38,8 @@ function assumptions(config, s) {
     ['Sharding', `${c.isAutoSharding ? 'Auto' : 'Manual'}: TP=${s.tp}, PP=${s.pp}, DP=${s.dp}${s.results.epNodes > 1 ? `, expert-parallel over ${s.results.epNodes} chassis` : ''}`],
     ['Memory headroom margin', `${c.memoryHeadroomPct}%`],
     ['Network', `${s.protocol.name}, ${c.oversubscriptionRatio}:1 oversubscription`],
-    ['Facility', `PUE ${c.pue.toFixed(2)}, ${c.useColo ? `colocation $${c.coloUsdPerKwPerMonth}/kW-month` : `owned DC $${c.powerUsdPerKwh}/kWh`}`],
+    ['Facility', `${c.coolingType === 'liquid' ? 'Liquid' : 'Air'} cooling, ${c.rackPowerKw} kW per rack, PUE ${c.pue.toFixed(2)}, ${c.useColo ? `colocation $${c.coloUsdPerKwPerMonth}/kW-month` : `owned DC $${c.powerUsdPerKwh}/kWh`}${c.facilityPowerBudgetKw > 0 ? `; power budget ${c.facilityPowerBudgetKw.toLocaleString()} kW` : ''}`],
+    ['Grid carbon intensity', `${c.gridCarbonKgPerKwh} kg CO₂/kWh (${Math.round(s.energy.annualTco2).toLocaleString()} t CO₂ per year)`],
     ['Storage', `${s.storageTier.name}, ${s.durabilityScheme?.label || 'no durability scheme'}; KV offload ${on(c.enableKvOffload)}`],
     ['Add-ons', `RAG ${on(c.enableRag)}, guardrails ${on(c.enableGuardrails)}, ingress ${on(c.enableIngress)}, HA/DR ${on(c.enableHaDr)}, MLOps ${on(c.enableMlops)}, MIG ${on(c.enableMig)}`],
     ['GPU price / cloud rate', `$${c.gpuUnitPriceUsd.toLocaleString()} / $${c.cloudRateUsdPerHr}/GPU-hr`],

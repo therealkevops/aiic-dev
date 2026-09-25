@@ -281,7 +281,8 @@ describe('5. applyMigThroughputScaling() -- Throughput Penalty Propagation', () 
     // Tolerance widened from float-exact to 1e-3: both sides round to 2 decimal places
     // (toFixed(2)) before this ratio is taken, which is expected floating-point noise, not error.
     assert.ok(Math.abs(after.ttftMs / before.ttftMs - 1 / scale) < 1e-3);
-    assert.ok(Math.abs(after.tpotMs / before.tpotMs - 1 / scale) < 1e-3);
+    assert.ok(Math.abs(after.t_step / before.t_step - 1 / scale) < 1e-9);
+    assert.equal(after.tpotMs, Number((after.t_step * 1000).toFixed(2)));
     assert.ok(Math.abs(after.batchThroughputTps / before.batchThroughputTps - scale) < 1e-3);
     assert.ok(Math.abs(after.replicaThroughput / before.replicaThroughput - scale) < 1e-3);
     assert.ok(Math.abs(after.promptTokensPerSecPerReplica / before.promptTokensPerSecPerReplica - scale) < 1e-3);

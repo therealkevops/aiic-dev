@@ -9,7 +9,7 @@ export function StorageTab({ ctx }) {
     checkpointRetentionCount, checkpointTargetWriteTimeSec, corpusSizeGb, datasetSizeTb, enableKvOffload, modelRepoTargetLoadTimeSec,
     modelRepoVersionCount, selectedDurabilitySchemeId, selectedStorageTierId, setCheckpointRetentionCount, setCheckpointTargetWriteTimeSec, setCorpusSizeGb,
     setDatasetSizeTb, setEnableKvOffload, setModelRepoTargetLoadTimeSec, setModelRepoVersionCount, setSelectedDurabilitySchemeId, setSelectedStorageTierId,
-    storage, workloadType, kvActiveSessionPct, setKvActiveSessionPct, workloadShape,
+    storage, workloadType, traffic, kvActiveSessionPct, setKvActiveSessionPct, workloadShape,
   } = ctx;
   return (
     <>
@@ -131,7 +131,12 @@ export function StorageTab({ ctx }) {
               checked={enableKvOffload}
               onChange={setEnableKvOffload}
             />
-            {enableKvOffload && (
+            {enableKvOffload && traffic && (
+              <div className="text-[11px] text-zinc-400">
+                In traffic mode GPUs are sized for requests in flight, so idle-session offload doesn&apos;t reduce the GPU count; the offload tier is still sized.
+              </div>
+            )}
+            {enableKvOffload && !traffic && (
               <SliderField
                 label="Sessions actively generating at once:"
                 valueLabel={`${kvActiveSessionPct}% (${workloadShape.gpuResidentSessions.toLocaleString()} of ${workloadShape.totalSessions.toLocaleString()})`}

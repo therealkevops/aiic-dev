@@ -1,100 +1,140 @@
 import React from 'react';
-import { Compass, Server, Wand2 } from 'lucide-react';
+import { BookOpen, Check, ChevronDown, Compass, Copy, FileDown, Pin, Server } from 'lucide-react';
 import { USE_CASE_PRESETS } from '../data/presets';
+
+const PRESET_GROUPS = [
+  { id: 'enterprise', label: 'Enterprise' },
+  { id: 'agentic', label: 'Agentic' },
+  { id: 'neocloud', label: 'Neo-cloud' },
+];
+
+// Toolbar button: icon always, label on wide screens (the tooltip carries it below that).
+function ActionButton({ icon: Icon, label, title, onClick, active = false, testId }) {
+  return (
+    <button
+      type="button"
+      data-testid={testId}
+      onClick={onClick}
+      title={title}
+      aria-label={label}
+      className={`h-8 inline-flex items-center gap-1.5 px-2.5 rounded-md text-xs font-medium transition cursor-pointer ${
+        active ? 'text-emerald-300 bg-emerald-500/10' : 'text-zinc-300 hover:text-white hover:bg-zinc-800'
+      }`}
+    >
+      <Icon className="w-3.5 h-3.5 shrink-0" />
+      <span className="hidden 2xl:inline">{label}</span>
+    </button>
+  );
+}
+
+function Stat({ label, value, testId }) {
+  return (
+    <div className="flex items-baseline gap-1.5 whitespace-nowrap">
+      <span className="text-[11px] text-zinc-500">{label}</span>
+      <span data-testid={testId} className="text-[13px] font-semibold text-zinc-100 tabular-nums">{value}</span>
+    </div>
+  );
+}
 
 export function AppHeader({ ctx }) {
   const {
-    activePreset, applyPreset, facility, llmdDisaggregationMode, memory, platform, openGuidedSetup,
-    results, secondaryPlatform, selectedPresetId, servingArchitecture,
+    activePreset, applyPreset, facility, memory, results, selectedPresetId, currentLabel, openGuidedSetup,
+    pinned, pinCurrentScenario, handleExportReport, handleCopyBOM, copiedBOM, setPage,
   } = ctx;
+  const modified = !!activePreset && currentLabel.endsWith('(modified)');
+
   return (
-    <header className="px-4 py-2.5 bg-zinc-900/95 border-b border-zinc-800 shrink-0 z-10 flex flex-wrap items-center justify-between gap-3">
-      <div className="flex items-center gap-3 min-w-0 flex-1">
-        <div className="p-1.5 bg-sky-500/10 border border-sky-500/30 rounded-lg text-sky-400 shrink-0">
-          <Server className="w-5 h-5" />
+    <header className="h-14 px-4 bg-zinc-950 border-b border-zinc-800 shrink-0 z-10 flex items-center gap-4">
+      {/* Product */}
+      <div className="flex items-center gap-2.5 shrink-0">
+        <div className="w-7 h-7 rounded-md bg-sky-600 text-white flex items-center justify-center">
+          <Server className="w-4 h-4" />
         </div>
-        <div className="min-w-0">
-          <h1 className="text-sm md:text-base font-semibold tracking-tight text-white flex items-center gap-2">
-            <span>Private AI Infrastructure Sizing Calculator</span>
-            <span className="text-[10px] font-normal px-2 py-0.5 rounded-full bg-zinc-800 border border-zinc-700 text-zinc-300 shrink-0">
-              v2.0 · Cisco &amp; NVIDIA
-            </span>
-          </h1>
-          <p
-            className="text-[11px] text-zinc-400 hidden sm:block truncate"
-            title={activePreset ? `${activePreset.label}: ${activePreset.description}` : undefined}
-          >
-            {activePreset
-              ? <><strong className="text-sky-400 font-medium">{activePreset.label}:</strong> {activePreset.description}</>
-              : 'Compute, VRAM sharding, LLM-D disaggregation, and lossless RoCEv2/IB fabric sizing.'}
-          </p>
+        <div className="leading-tight">
+          <div className="text-sm font-semibold text-white whitespace-nowrap">AI Infrastructure Sizer</div>
+          <div className="text-[10.5px] text-zinc-500 whitespace-nowrap hidden 2xl:block">Private AI capacity, cost and power planning</div>
         </div>
       </div>
 
-      {/* Guided setup + use-case preset dropdown */}
-      <div className="flex items-center gap-1.5 shrink-0">
+      <div className="h-6 w-px bg-zinc-800 shrink-0" />
+
+      {/* Scenario */}
+      <div className="flex items-center gap-2 shrink-0">
+        <div className="relative">
+          <select
+            data-testid="preset-select"
+            aria-label="Scenario preset"
+            value={selectedPresetId}
+            onChange={(e) => applyPreset(e.target.value)}
+            title={activePreset ? `${activePreset.label}: ${activePreset.description}` : 'Custom configuration'}
+            className="appearance-none h-8 w-[13rem] xl:w-[16rem] 2xl:w-[18rem] bg-zinc-900 border border-zinc-700 hover:border-zinc-600 rounded-md pl-2.5 pr-8 text-xs text-zinc-100 truncate focus:outline-none focus:border-sky-500 cursor-pointer"
+          >
+            <option value="">Custom configuration</option>
+            {PRESET_GROUPS.map(g => (
+              <optgroup key={g.id} label={g.label}>
+                {USE_CASE_PRESETS.filter(p => p.category === g.id).map(p => (
+                  <option key={p.id} value={p.id}>{p.label}</option>
+                ))}
+              </optgroup>
+            ))}
+          </select>
+          <ChevronDown className="w-3.5 h-3.5 text-zinc-500 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+        </div>
+        {modified && (
+          <span className="text-[10.5px] text-zinc-400 border border-zinc-700 rounded px-1.5 py-0.5 whitespace-nowrap" title="Settings have changed since the preset was applied">
+            Modified
+          </span>
+        )}
         <button
           type="button"
           data-testid="guided-setup"
           onClick={openGuidedSetup}
-          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-sky-700 bg-sky-950/40 hover:bg-sky-900/50 text-xs text-sky-200 cursor-pointer"
+          title="Answer five questions to get a starting design"
+          aria-label="Guided setup"
+          className="h-8 inline-flex items-center gap-1.5 px-2.5 rounded-md border border-zinc-700 bg-zinc-900 hover:bg-zinc-800 text-xs font-medium text-zinc-200 whitespace-nowrap cursor-pointer"
         >
-          <Compass className="w-3.5 h-3.5" /> Guided setup
+          <Compass className="w-3.5 h-3.5 text-sky-400" />
+          <span className="hidden xl:inline">Guided setup</span>
         </button>
-        <Wand2 className="w-3.5 h-3.5 text-sky-400 hidden sm:block" />
-        <select
-          data-testid="preset-select"
-          value={selectedPresetId}
-          onChange={(e) => applyPreset(e.target.value)}
-          className="bg-zinc-950 border border-zinc-700 rounded-lg pl-2.5 pr-2 py-1.5 text-xs text-white focus:outline-none focus:border-sky-500 max-w-[220px]"
-        >
-          <option value="">Preset: Custom configuration</option>
-          <optgroup label="Enterprise">
-            {USE_CASE_PRESETS.filter(p => p.category === 'enterprise').map(p => (
-              <option key={p.id} value={p.id}>{p.label}</option>
-            ))}
-          </optgroup>
-          <optgroup label="Agentic">
-            {USE_CASE_PRESETS.filter(p => p.category === 'agentic').map(p => (
-              <option key={p.id} value={p.id}>{p.label}</option>
-            ))}
-          </optgroup>
-          <optgroup label="Neo-Cloud">
-            {USE_CASE_PRESETS.filter(p => p.category === 'neocloud').map(p => (
-              <option key={p.id} value={p.id}>{p.label}</option>
-            ))}
-          </optgroup>
-        </select>
       </div>
 
-      {/* Quick Status KPI Strip */}
-      <div className="flex items-stretch gap-px text-xs bg-zinc-800 border border-zinc-800 rounded-lg overflow-hidden">
-        <div className="px-3 py-1 bg-zinc-950/80 text-center min-w-0">
-          <div className="text-zinc-500 uppercase tracking-wider text-[9px]">Platform</div>
-          <div className="text-xs font-semibold text-white font-mono">
-            {servingArchitecture === 'llmd'
-              ? (llmdDisaggregationMode === 'heterogeneous' ? `${platform.shortName} + ${secondaryPlatform.shortName}` : `${platform.shortName} (LLM-D)`)
-              : platform.shortName}
-          </div>
+      {/* Sizing summary */}
+      <div className="ml-auto flex items-center gap-4 shrink-0">
+        <div className="hidden lg:flex items-center gap-4">
+          <Stat label="GPUs" value={results.totalGpus.toLocaleString()} testId="kpi-gpus" />
+          <Stat label="Nodes" value={results.nodes.toLocaleString()} testId="kpi-nodes" />
+          <Stat label="IT power" value={`${facility.totalItPowerKw.toFixed(1)} kW`} testId="kpi-power" />
         </div>
-        <div className="px-3 py-1 bg-zinc-950/80 text-center">
-          <div className="text-zinc-500 uppercase tracking-wider text-[9px]">GPUs</div>
-          <div data-testid="kpi-gpus" className="text-xs font-semibold text-sky-400 font-mono">{results.totalGpus}</div>
-        </div>
-        <div className="px-3 py-1 bg-zinc-950/80 text-center">
-          <div className="text-zinc-500 uppercase tracking-wider text-[9px]">Nodes</div>
-          <div data-testid="kpi-nodes" className="text-xs font-semibold text-sky-400 font-mono">{results.nodes}</div>
-        </div>
-        <div className="px-3 py-1 bg-zinc-950/80 text-center">
-          <div className="text-zinc-500 uppercase tracking-wider text-[9px]">IT Power</div>
-          <div data-testid="kpi-power" className="text-xs font-semibold text-amber-400 font-mono">{facility.totalItPowerKw.toFixed(1)} kW</div>
-        </div>
-        <div className="px-3 py-1 bg-zinc-950/80 text-center">
-          <div className="text-zinc-500 uppercase tracking-wider text-[9px]">Status</div>
-          <div data-testid="kpi-status" className={`text-xs font-semibold font-mono ${memory.isOOM ? 'text-amber-400' : 'text-emerald-400'}`}>
-            {memory.isOOM ? 'OOM' : 'Fits'}
-          </div>
-        </div>
+        <span
+          className={`inline-flex items-center gap-1.5 h-6 px-2.5 rounded-full text-[11px] leading-none font-medium whitespace-nowrap ${
+            memory.isOOM ? 'bg-amber-500/10 text-amber-300' : 'bg-emerald-500/10 text-emerald-300'
+          }`}
+        >
+          <span className={`w-1.5 h-1.5 rounded-full ${memory.isOOM ? 'bg-amber-400' : 'bg-emerald-400'}`} />
+          <span data-testid="kpi-status">{memory.isOOM ? 'Out of memory' : 'Fits'}</span>
+        </span>
+      </div>
+
+      <div className="h-6 w-px bg-zinc-800 shrink-0" />
+
+      {/* Actions */}
+      <div className="flex items-center gap-0.5 shrink-0">
+        <ActionButton
+          icon={Pin}
+          label={pinned ? 'Re-pin A' : 'Compare'}
+          title="Freeze this configuration as scenario A, then change settings to compare against it"
+          onClick={pinCurrentScenario}
+          testId="pin-scenario"
+        />
+        <ActionButton icon={FileDown} label="Report" title="Download a printable HTML report of this sizing" onClick={handleExportReport} testId="export-report" />
+        <ActionButton
+          icon={copiedBOM ? Check : Copy}
+          label={copiedBOM ? 'Copied' : 'Copy BOM'}
+          title="Copy the bill of materials as text"
+          onClick={handleCopyBOM}
+          active={copiedBOM}
+        />
+        <ActionButton icon={BookOpen} label="Guide" title="Architecture guide and glossary" onClick={() => setPage('glossary')} />
       </div>
     </header>
   );

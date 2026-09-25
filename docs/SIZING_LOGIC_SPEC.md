@@ -519,7 +519,7 @@ To eliminate cross-rail network congestion during all-reduce collective operatio
    $$N_{\text{racks}} = \left\lceil \frac{N_{\text{chassis}}}{\text{perRack}} \right\rceil + \text{networkRacks}$$
    $$\text{networkRacks} = \left\lceil \frac{(N_{\text{leaf}} + N_{\text{spine}}) \times 1\text{ RU}}{\text{CONFIG.rackRU}} \right\rceil \quad (\text{if switches are not placed in-row})$$
 
-   Configured with $\text{CONFIG.rackRU} = 40$ usable RU per 42U rack (2U for PDUs) and user-configurable $\text{rackKW}$ (default $28\text{ kW}$).
+   Configured with $\text{CONFIG.rackRU} = 40$ usable RU per 42U rack (2U for PDUs) and a user-configurable $\text{rackKW}$ (`rackPowerKw`): 28 kW by default, reset to 28 kW (air) or 80 kW (liquid) when the cooling type changes. Rack-scale systems (GB200/GB300 NVL72) use their own fixed rack power instead. An advisory is raised when a liquid-only platform is paired with air cooling, or when one chassis draws more than $\text{rackKW}$.
 
 *Documented Sources:*
 * **Cisco Systems (2024)**: *Cisco Nexus 9000 Series Switches Data Sheets & Architecture Whitepapers*.
@@ -527,7 +527,49 @@ To eliminate cross-rail network congestion during all-reduce collective operatio
 
 ---
 
-## 10. Verification Test Suite Matrix
+## 10. Serving, Training and Planning Extensions
+
+### 10.1 Speculative Decoding
+With draft length $k$ and per-token acceptance $\alpha$, one verification pass yields on average
+$$E = \frac{1 - \alpha^{k+1}}{1 - \alpha}$$
+tokens. The verify pass reads weights and KV once but computes $k+1$ positions per stream at `CONFIG.specVerifyMfu` (0.25), times `CONFIG.specVerifyOverhead` (1.25); the drafter adds $k$ sequential steps:
+$$t_{\text{spec}} = \frac{\left(\max(t_{\text{mem}}, t_{\text{verify,comp}}) + t_{\text{comm}}\right) \times 1.25 + k \times t_{\text{draft}}}{E}$$
+It replaces $t_{\text{step}}$ only when faster (large batches turn decode compute-bound, where speculation stops paying).
+
+### 10.2 Traffic-Driven Sizing
+Peak rate $\lambda$ = users × requests per user per hour ÷ 3600 (or entered directly). By Little's law, with service time $S = \text{TTFT} + \text{output tokens} \times \text{TPOT}$ and target utilization $\rho$:
+$$\text{concurrency} = \left\lceil \frac{\lambda \times S}{\rho} \right\rceil$$
+$S$ depends on the batch size, so this iterates to a fixed point.
+
+### 10.3 Latency-Target Solver
+When latency targets are on, the solver starts from the memory-sized layout and searches larger in-chassis TP and more DP replicas for the fewest GPUs meeting both TTFT (unloaded, including guardrail and ingress latency) and TPOT; if none do, it reports the closest layout.
+
+### 10.4 LLM-D Pool Auto-Sizing
+Decode nodes: the fewest whose instances hold every stream's KV. Prefill instances: $\lceil \lambda \times t_{\text{prefill}} / \rho \rceil$, where $\lambda$ is the traffic rate or concurrency ÷ service time.
+
+### 10.5 Wide Expert Parallelism and Rack-Scale NVLink
+MoE routed experts may be spread over several chassis (`expertParallelNodes`); all-to-all dispatch/combine traffic ($C_{\text{rep}} \times L_{\text{MoE}} \times k \times d \times 3 \times (1 - 1/EP)$ bytes) crosses the NICs, or NVLink when the whole replica sits inside one NVLink domain (GB200/GB300 NVL72, 72 GPUs, 8 scale-out NIC rails per rack). Rack-scale systems are billed per whole rack.
+
+### 10.6 Training Time, Failures and Goodput
+$$\text{FLOPs} = c \times P_{\text{active}} \times \text{tokens}, \quad c = 6 \text{ (full)}, 4 \text{ (LoRA)}$$
+$$\text{computeHours} = \frac{\text{FLOPs}}{N_{\text{GPU}} \times \text{peak} \times \text{MFU} \times 3600}$$
+Job MTBF $= \text{GPU MTBF} / N_{\text{GPU}}$ (default GPU MTBF 50,000 h, from Meta's Llama 3 report). Young/Daly interval $\tau = \sqrt{2 \times W \times \text{MTBF}_{\text{job}}}$ for checkpoint write time $W$:
+$$\text{goodput} = 1 - \frac{W}{\tau + W} - \frac{\tau/2 + R}{\text{MTBF}_{\text{job}}}, \qquad \text{wallClock} = \frac{\text{computeHours}}{\text{goodput}}$$
+Recommended spare nodes: the smallest $n$ with $P(\text{Poisson}(\mu) > n) < 2.5\%$, where $\mu = (N_{\text{GPU}} / \text{GPU MTBF}) \times$ node repair hours.
+
+### 10.7 Energy and Carbon
+Annual energy $= P_{\text{facility}} \times 8760$ (nameplate facility power, IT × PUE, including add-on pools); emissions $=$ energy $\times$ grid intensity (default 0.37 kg CO₂/kWh). Energy per 1M output tokens is reported at full load ($P_{\text{facility}} / \text{tok/s}$) and at the configured utilization (annual energy ÷ annual output tokens).
+
+### 10.8 Planning (`src/utils/planning.js`, `src/utils/whatIf.js`)
+* **Power budget:** binary search on a demand multiplier (streams, users, requests/s or training DP) for the largest demand whose facility power fits the budget, re-running the full scenario each step.
+* **Sensitivity:** each input is moved by a fixed relative swing each way (GPU price ±20%, electricity ±50%, colocation ±30%, PUE ±10%, support and network adder ±33%, context and demand ±50%, utilization ±40%) and the scenario re-sized; rows are ranked by the swing in TCO or cost per 1M output tokens.
+* **Rent vs buy:** owning (TCO) vs reserved cloud (on-demand × (1 − discount)), on-demand always-on, and (inference) on-demand × utilization, all using the per-pool cloud rates; storage and add-on pools are charged at owned cost on every option.
+* **Growth plan:** year $y$ is sized for demand $\times (1+g)^y$ at GPU price $\times (1+p)^y$; capex is the increase in total capex over the previous year's design at year-$y$ prices (the whole design in a refresh year); compared with buying the final year's design up front.
+* **Guided setup:** answers select a base preset, set traffic-mode demand, context (answer length held at the preset's), latency targets (TPOT 50 ms; TTFT 2-20 s by document length) or a training deadline, then size every platform of the chosen vendor and recommend the lowest-TCO design that meets the targets within the capex budget.
+
+---
+
+## 11. Verification Test Suite Matrix
 
 The entire sizing logic specified above is covered by the automated unit testing suite located in `tests/sizing-calculator.test.js`:
 
@@ -540,9 +582,13 @@ The entire sizing logic specified above is covered by the automated unit testing
 | `5. Performance Profile` | Memory bandwidth bound decode TPOT; FlashAttention MFU prefill TTFT with prefix cache reduction. |
 | `6. LLM-D Disaggregation` | Zero KV retention on Prefill pool; Decode pool KV bounds; RoCEv2 transfer payload and latency scaling. |
 | `7. Datacenter BOM & Network`| Cisco UCS X9508 modular chassis and 6536 Fabric Interconnects; Rail-optimized leaf-spine Clos switches and cabling; Power & Rack density. |
+| `tests/calibration.test.js` | Max-load throughput vs NVIDIA's published TensorRT-LLM results (fitted and held-out points, per-point bands). |
+| `tests/scenario.test.js` | End-to-end scenario pipeline: presets, traffic mode, latency solver, LLM-D auto-sizing, speculative decoding, NVL72, training time. |
+| `tests/planning.test.js` | Energy and carbon, rent vs buy, cooling and rack-power advisories, power-budget fit, sensitivity ordering, growth plan. |
+| `tests/guidedSetup.test.js` | Platform price sync, guided-setup configuration and recommendation ranking. |
 
 ---
 
 *Specification Authors:* AI Systems & Datacenter Infrastructure Architecture Team  
-*Version:* 2.1.0  
+*Version:* 2.2.0  
 *Design references:* Cisco Validated Designs (CVD), NVIDIA DGX BasePOD / SuperPOD, vLLM Production Standards.

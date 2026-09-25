@@ -150,7 +150,7 @@
       "mlops": "4de425f53b4e",
       "mig": "b5d8b480f2ee",
       "sla": "eaf296cec6ad",
-      "cost": "916158a1ac9e",
+      "cost": "4cca465c5cb0",
       "planning": "5336aab274fc"
     }
   },
@@ -303,7 +303,7 @@
       "mlops": "13b495698e8f",
       "mig": "b5d8b480f2ee",
       "sla": "d0c00d15b107",
-      "cost": "c357361c61ff",
+      "cost": "9a0aab1caa6f",
       "planning": "df7da9c7439f"
     }
   },
@@ -448,7 +448,7 @@
       "mlops": "6be903c1a150",
       "mig": "b5d8b480f2ee",
       "sla": "6568c9745ddf",
-      "cost": "aa78d424b597",
+      "cost": "5dcc7dacf33c",
       "planning": "521507f217f6"
     }
   },
@@ -603,7 +603,7 @@
       "mlops": "fab697d9e10b",
       "mig": "b5d8b480f2ee",
       "sla": "4f1ff97ec1c0",
-      "cost": "d11ed0efa071",
+      "cost": "d866cc99ccaf",
       "planning": "0470980f5f1b"
     }
   },
@@ -749,7 +749,7 @@
       "mlops": "5067b6453522",
       "mig": "b5d8b480f2ee",
       "sla": "630b3e0bbaed",
-      "cost": "a41cd8c2e172",
+      "cost": "53a16a51e9db",
       "planning": "f021a3e9590b"
     }
   },
@@ -895,7 +895,7 @@
       "mlops": "5067b6453522",
       "mig": "b5d8b480f2ee",
       "sla": "630b3e0bbaed",
-      "cost": "934ce84c013b",
+      "cost": "b898b380da5d",
       "planning": "bda396a99b84"
     }
   },
@@ -1036,7 +1036,7 @@
       "mlops": "5067b6453522",
       "mig": "b5d8b480f2ee",
       "sla": "1d05b8274ae1",
-      "cost": "5f0f142479f3",
+      "cost": "174fa7f87244",
       "planning": "d26ac8b7632a"
     }
   },
@@ -1191,7 +1191,7 @@
       "mlops": "fab697d9e10b",
       "mig": "b5d8b480f2ee",
       "sla": "af030382cecf",
-      "cost": "a3b37f272b40",
+      "cost": "8238a83fbc18",
       "planning": "de11e628a5a2"
     }
   },
@@ -1346,7 +1346,7 @@
       "mlops": "a9d707057224",
       "mig": "b5d8b480f2ee",
       "sla": "e1e28d190d35",
-      "cost": "038739f7e1c4",
+      "cost": "3c83792b5285",
       "planning": "ef9c7fbeddcf"
     }
   },
@@ -1503,7 +1503,7 @@
       "mlops": "fab697d9e10b",
       "mig": "b5d8b480f2ee",
       "sla": "460db3a0bfe8",
-      "cost": "664de85c1e0c",
+      "cost": "16f7fe0a0234",
       "planning": "e1b76ca5be00"
     }
   },
@@ -1651,7 +1651,7 @@
       "mlops": "d216b591e505",
       "mig": "b5d8b480f2ee",
       "sla": "20a8057b2e79",
-      "cost": "b54672c60a77",
+      "cost": "32ab1ea79eff",
       "planning": "c2f32adfdb79"
     }
   },
@@ -1796,7 +1796,7 @@
       "mlops": "5067b6453522",
       "mig": "b5d8b480f2ee",
       "sla": "d1de556baea8",
-      "cost": "138cc5cf281d",
+      "cost": "04c2b2eb220a",
       "planning": "88328224cb93"
     }
   },
@@ -1942,7 +1942,7 @@
       "platform": "abdb59984326",
       "sharding": "d60aaab1a272",
       "network": "3deab01902dc",
-      "facility": "7ebfdfa76a79",
+      "facility": "1bd3848bf9a0",
       "storage": "c77232e8c455",
       "rag": "f7cab449b282",
       "stack": "c65e3bdab78e",
@@ -1952,7 +1952,7 @@
       "mlops": "5067b6453522",
       "mig": "b5d8b480f2ee",
       "sla": "630b3e0bbaed",
-      "cost": "3a4aa0316532",
+      "cost": "9184b1695a2d",
       "planning": "49f956f87a25"
     }
   },
@@ -2101,7 +2101,7 @@
       "platform": "abdb59984326",
       "sharding": "6f28b16df9a8",
       "network": "8781c73dd6d7",
-      "facility": "30a346c6e3ac",
+      "facility": "161885be01b6",
       "storage": "4bd7c992c508",
       "rag": "f7cab449b282",
       "stack": "c65e3bdab78e",
@@ -2111,7 +2111,7 @@
       "mlops": "32dcdaa1e779",
       "mig": "b5d8b480f2ee",
       "sla": "8b6734489b2b",
-      "cost": "bd02c94a0f40",
+      "cost": "84e3f541c68e",
       "planning": "a4ddc1eb202c"
     }
   },
@@ -2263,7 +2263,7 @@
       "platform": "abdb59984326",
       "sharding": "63ad9c40cd17",
       "network": "1a4f321d2ae7",
-      "facility": "19dce92d4eb8",
+      "facility": "b85d8a71739c",
       "storage": "40efa98cf306",
       "rag": "f7cab449b282",
       "stack": "d19b1333536c",
@@ -2273,8 +2273,8 @@
       "mlops": "5067b6453522",
       "mig": "b5d8b480f2ee",
       "sla": "d74c63b6e907",
-      "cost": "ab3e1eeb43da",
-      "planning": "daf058d6a5b7"
+      "cost": "f91822b9a927",
+      "planning": "92a6bb93652d"
     }
   }
 }

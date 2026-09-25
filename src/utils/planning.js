@@ -42,11 +42,12 @@ export function calculateEnergy({ cost, throughput, tokenEconomics, trainingTime
  * servers; storage and add-on pools (RAG, guardrails, HA/DR ...) are charged at their owned cost
  * on every option, so the comparison is like for like.
  */
-export function calculateRentVsBuy({ cost, totalGpus, cloudRateUsdPerHr, reservedDiscountPct = 0, dutyCyclePct = 100, isInference }) {
+export function calculateRentVsBuy({ cost, reservedDiscountPct = 0, dutyCyclePct = 100, isInference }) {
   const years = cost.tcoYears;
   const servingTcoUsd = cost.servingCapexUsd + cost.servingAnnualOpexUsd * years;
   const nonGpuUsd = Math.max(0, cost.tcoUsd - servingTcoUsd);
-  const onDemandUsd = totalGpus * cloudRateUsdPerHr * HOURS_PER_YEAR * years;
+  // Cloud rate for every GPU pool (LLM-D prefill and decode pools can differ).
+  const onDemandUsd = cost.cloudEquivalentUsdPerHr * HOURS_PER_YEAR * years;
   const discount = Math.min(0.9, Math.max(0, reservedDiscountPct / 100));
   const options = [
     { id: 'own', label: 'Buy and run it', usd: cost.tcoUsd, note: 'Capex plus power, support and licensing' },

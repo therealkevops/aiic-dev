@@ -53,6 +53,7 @@ function LessonIndex({ navigate }) {
                   <span className="flex-1 min-w-0">
                     <span className={`block text-sm font-medium ${ready ? 'text-zinc-100' : 'text-zinc-500'}`}>{l.title}</span>
                     <span className="block text-[12.5px] text-zinc-500 mt-0.5">{l.summary}</span>
+                    {progress.quiz[l.id] && <span className="block text-[11.5px] text-zinc-400 mt-1 tabular-nums">Best quiz score: {progress.quiz[l.id].best}%</span>}
                   </span>
                   <span className="text-[11px] text-zinc-500 shrink-0 flex items-center gap-1 mt-0.5">
                     {ready ? <><Clock className="w-3 h-3" />{l.minutes} min</> : <><Lock className="w-3 h-3" />In preparation</>}

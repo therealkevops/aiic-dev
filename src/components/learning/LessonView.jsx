@@ -124,6 +124,99 @@ function TaskStep({ step, complete }) {
   );
 }
 
+function BriefStep({ step, config, scenario }) {
+  const [hint, setHint] = useState(false);
+  const results = step.requirements.map(r => ({ ...r, ok: r.check(config, scenario), value: r.show(scenario, config) }));
+  const allOk = results.every(r => r.ok);
+  return (
+    <div className="space-y-3">
+      <Paragraphs text={step.body} />
+      <ul className="rounded-md border border-zinc-800 divide-y divide-zinc-800" data-testid="brief-checklist">
+        {results.map((r, i) => (
+          <li key={i} className="flex items-center gap-2.5 px-3 py-2 text-[12.5px]">
+            {r.ok ? <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" /> : <X className="w-4 h-4 text-red-400 shrink-0" />}
+            <span className="text-zinc-200 flex-1">{r.label}</span>
+            <span className={`tabular-nums ${r.ok ? 'text-zinc-400' : 'text-red-300'}`}>{r.value}</span>
+          </li>
+        ))}
+      </ul>
+      {allOk ? (
+        <div className="rounded-md border border-emerald-700 bg-emerald-500/5 p-3 text-[12.5px] text-zinc-300 leading-relaxed" data-testid="brief-met">
+          <span className="font-medium text-emerald-300">Brief met. </span>{step.done}
+        </div>
+      ) : hint
+        ? <p className="text-[12px] text-zinc-400">{step.hint}</p>
+        : <button type="button" onClick={() => setHint(true)} className="text-[12px] text-sky-400 hover:underline cursor-pointer inline-flex items-center gap-1"><Lightbulb className="w-3.5 h-3.5" />Show a hint</button>}
+    </div>
+  );
+}
+
+function QuizStep({ step, state, onChange, onSubmit }) {
+  const picks = state?.picks || {};
+  const submitted = !!state?.submitted;
+  const answered = step.questions.every((_, i) => picks[i] != null);
+  const correct = step.questions.filter((q, i) => picks[i] === q.answer).length;
+  const pct = Math.round((correct / step.questions.length) * 100);
+  return (
+    <div className="space-y-4">
+      <Paragraphs text={step.body} />
+      {submitted && (
+        <div className={`rounded-md border p-3 ${pct >= step.passPct ? 'border-emerald-700 bg-emerald-500/5' : 'border-amber-700 bg-amber-500/5'}`} data-testid="quiz-score">
+          <div className="text-[15px] font-semibold text-zinc-50 tabular-nums">{correct} of {step.questions.length} ({pct}%)</div>
+          <div className={`text-[12.5px] ${pct >= step.passPct ? 'text-emerald-300' : 'text-amber-300'}`}>
+            {pct >= step.passPct ? 'Passed.' : `Not yet: ${step.passPct}% passes. Review the explanations and retake it.`}
+          </div>
+          <button type="button" data-testid="quiz-retake" onClick={() => onChange({ picks: {}, submitted: false })} className="mt-2 text-[12px] text-sky-400 hover:underline cursor-pointer inline-flex items-center gap-1">
+            <RotateCcw className="w-3 h-3" /> Retake
+          </button>
+        </div>
+      )}
+      <ol className="space-y-4" data-testid="quiz">
+        {step.questions.map((q, i) => (
+          <li key={i} className="space-y-1.5">
+            <div className="text-[13px] text-zinc-100"><span className="text-zinc-500 tabular-nums mr-1">{i + 1}.</span>{q.q}</div>
+            <div className="grid gap-1" role="radiogroup" aria-label={q.q}>
+              {q.options.map((o, j) => {
+                const chosen = picks[i] === j;
+                const tone = !submitted
+                  ? (chosen ? 'border-sky-500 bg-sky-500/10 text-zinc-50' : 'border-zinc-800 hover:border-zinc-600 text-zinc-300')
+                  : j === q.answer ? 'border-emerald-700 bg-emerald-500/10 text-emerald-200'
+                    : chosen ? 'border-red-800 bg-red-500/10 text-red-200' : 'border-zinc-800 text-zinc-500';
+                return (
+                  <button
+                    key={j}
+                    type="button"
+                    role="radio"
+                    aria-checked={chosen}
+                    data-testid={`quiz-${i}-${j}`}
+                    disabled={submitted}
+                    onClick={() => onChange({ picks: { ...picks, [i]: j }, submitted: false })}
+                    className={`text-left px-2.5 py-1.5 rounded-md border text-[12.5px] ${submitted ? 'cursor-default' : 'cursor-pointer'} ${tone}`}
+                  >
+                    {o}
+                  </button>
+                );
+              })}
+            </div>
+            {submitted && <p className="text-[11.5px] text-zinc-400">{q.explain}</p>}
+          </li>
+        ))}
+      </ol>
+      {!submitted && (
+        <button
+          type="button"
+          data-testid="quiz-submit"
+          disabled={!answered}
+          onClick={() => onSubmit({ picks, submitted: true }, pct)}
+          className="h-9 w-full rounded-md bg-sky-600 hover:bg-sky-500 text-sm font-medium text-white disabled:bg-zinc-800 disabled:text-zinc-500 disabled:cursor-default cursor-pointer"
+        >
+          {answered ? 'Submit answers' : `Answer all ${step.questions.length} questions to submit`}
+        </button>
+      )}
+    </div>
+  );
+}
+
 export function LessonView({ lessonId, navigate, onOpenInAdvanced }) {
   const lesson = LESSONS[lessonId];
   const meta = CATALOG.find(l => l.id === lessonId);
@@ -138,8 +231,16 @@ export function LessonView({ lessonId, navigate, onOpenInAdvanced }) {
   const config = useMemo(() => ({ ...base, ...values }), [base, values]);
   const scenario = useMemo(() => computeScenario(config), [config]);
   const step = lesson.steps[stepIdx];
-  const taskDone = step.kind === 'task' && step.check(config, scenario);
-  const canAdvance = step.kind === 'read' || step.kind === 'recap' || (step.kind === 'predict' && answers[stepIdx] != null) || taskDone;
+  const taskDone = (step.kind === 'task' && step.check(config, scenario))
+    || (step.kind === 'brief' && step.requirements.every(r => r.check(config, scenario)));
+  const canAdvance = step.kind === 'read' || step.kind === 'recap' || (step.kind === 'predict' && answers[stepIdx] != null)
+    || (step.kind === 'quiz' && answers[stepIdx]?.submitted) || taskDone;
+  const submitQuiz = (state, pct) => {
+    setAnswers(a => ({ ...a, [stepIdx]: state }));
+    const p = loadProgress();
+    const prev = p.quiz[lessonId] || {};
+    saveProgress({ ...p, quiz: { ...p.quiz, [lessonId]: { last: pct, best: Math.max(prev.best || 0, pct) } } });
+  };
   const highlight = new Set(step.highlight || []);
 
   useEffect(() => {
@@ -178,6 +279,10 @@ export function LessonView({ lessonId, navigate, onOpenInAdvanced }) {
             <PredictStep step={step} chosen={answers[stepIdx]} onChoose={(i) => setAnswers(a => ({ ...a, [stepIdx]: i }))} />
           )}
           {step.kind === 'task' && <TaskStep key={stepIdx} step={step} complete={taskDone} />}
+          {step.kind === 'brief' && <BriefStep key={stepIdx} step={step} config={config} scenario={scenario} />}
+          {step.kind === 'quiz' && (
+            <QuizStep step={step} state={answers[stepIdx]} onChange={(st) => setAnswers(a => ({ ...a, [stepIdx]: st }))} onSubmit={submitQuiz} />
+          )}
           {step.kind === 'recap' && (
             <>
               <ul className="space-y-2">
@@ -230,7 +335,7 @@ export function LessonView({ lessonId, navigate, onOpenInAdvanced }) {
               data-testid="next-step"
               onClick={() => setStepIdx(i => Math.min(lesson.steps.length - 1, i + 1))}
               disabled={!canAdvance}
-              title={canAdvance ? undefined : step.kind === 'task' ? 'Complete the task to continue' : 'Choose an answer to continue'}
+              title={canAdvance ? undefined : step.kind === 'task' || step.kind === 'brief' ? 'Complete the task to continue' : step.kind === 'quiz' ? 'Submit the quiz to continue' : 'Choose an answer to continue'}
               className="h-8 inline-flex items-center gap-1 px-3 rounded-md bg-sky-600 hover:bg-sky-500 text-xs font-medium text-white disabled:bg-zinc-800 disabled:text-zinc-500 disabled:cursor-default cursor-pointer"
             >
               Next <ArrowRight className="w-3.5 h-3.5" />

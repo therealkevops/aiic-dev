@@ -4,6 +4,8 @@
 // s) returns true for the lesson's live config `c` and computed scenario `s`.
 import { DEFAULT_CONFIG, applyPresetConfig } from '../state/config.js';
 import { USE_CASE_PRESETS } from '../data/presets.js';
+import { PLATFORM_SYSTEMS } from '../data/platforms.js';
+import { GPU_PRICING } from '../data/pricing.js';
 
 const sec = (v) => (v < 1 ? `${Math.round(v * 1000)} ms` : `${v.toFixed(2)} s`);
 const usd = (v) => `$${Math.round(v).toLocaleString()}`;
@@ -120,6 +122,13 @@ export const CONTROLS = {
       { value: 'cisco-c885a-h200', label: 'UCS C885A · 8× H200 141 GB' },
       { value: 'cisco-c885a-b200', label: 'UCS C885A · 8× B200 180 GB' },
     ],
+    // Switching server also switches to that GPU's catalog price, as in Advanced mode.
+    set: (v) => {
+      const pricing = GPU_PRICING[PLATFORM_SYSTEMS.find(p => p.id === v)?.gpuId];
+      return pricing
+        ? { selectedPlatformId: v, gpuUnitPriceUsd: pricing.estimatedUnitPriceUsd, cloudRateUsdPerHr: pricing.estimatedCloudRateUsdPerHr }
+        : { selectedPlatformId: v };
+    },
   },
   peakActiveUsers: {
     label: 'Active users in the busiest hour',
@@ -1065,6 +1074,81 @@ export const LESSONS = {
           'TCO = capex + years × opex; divide by GPU-hours or tokens for unit cost.',
           'Utilization and ownership horizon move unit cost the most; GPU price also lowers support.',
           'Compare owning with reserved cloud over the same horizon: the answer often flips between 3 and 5 years.',
+        ],
+      },
+    ],
+  },
+
+  capstone: {
+    id: 'capstone',
+    objective: 'Meet a customer brief on latency, capacity and budget using everything from lessons 1-9, then take the scored quiz.',
+    design: 'Llama 3.3 70B for a document assistant on Cisco UCS C885A M8 servers, sized from traffic with latency targets on (the solver adds GPUs until the targets are met).',
+    start: () => ({
+      ...lessonBase('ent-rag-assistant', {
+        selectedModelId: 'llama33-70b', selectedPrecisionId: 'fp16', kvPrecision: 'fp16', contextLength: 32768, promptTokenRatio: 0.95,
+        sizingInputMode: 'traffic', trafficInputType: 'users', peakActiveUsers: 800, requestsPerUserPerHour: 10, targetUtilization: 0.7,
+        latencyTargetsEnabled: true, targetTtftSec: 3, targetTpotMs: 50, isAutoSharding: true, isAutoDp: true,
+      }),
+      ...CONTROLS.selectedPlatformId.set('cisco-c885a-h100'),
+    }),
+    controls: ['selectedPlatformId', { id: 'selectedPrecisionId', only: ['fp16', 'fp8'] }, 'kvPrecision'],
+    metrics: ['inFlight', 'ttft', 'tpot', 'gpus', 'sharding', 'capex'],
+    math: (s, c) => [
+      { label: 'Request rate', expr: `${c.peakActiveUsers} users × ${c.requestsPerUserPerHour} per hour ÷ 3,600`, value: `${s.traffic.requestsPerSec.toFixed(2)} /s` },
+      { label: 'Sized for', expr: `rate × ${sec(s.traffic.serviceTimeSec)} per request ÷ ${Math.round(s.traffic.targetUtilization * 100)}%`, value: `${s.traffic.concurrency} requests` },
+      { label: 'Layout', expr: 'fewest GPUs that meet both latency targets', value: `${s.results.totalGpus} GPUs` },
+      { label: 'GPU capex', expr: `${s.results.totalGpus} × $${c.gpuUnitPriceUsd.toLocaleString()}`, value: usd(s.cost.computeCapexUsd) },
+      { label: 'Capex', expr: '+ network and storage', value: usd(s.cost.totalCapexUsd), strong: true },
+    ],
+    steps: [
+      {
+        kind: 'read',
+        title: 'The brief',
+        body: 'A regional bank wants a private document assistant for its analysts.\n\n• 800 analysts in the busiest hour, about 10 requests each per hour\n• Documents up to 32k tokens, answers of about 1,600 tokens\n• First token within 3 seconds and at least 20 tokens a second per user (50 ms per token)\n• A capex budget of $1,000,000, on Cisco UCS C885A M8 servers\n\nThe design starts on H100 servers at 16-bit precision. The calculator already sizes it to meet the latency targets; your job is to meet the budget.',
+      },
+      {
+        kind: 'brief',
+        title: 'Meet the brief',
+        body: 'Change the server and precisions until every requirement passes. There is more than one valid answer; think about which lessons apply before trying combinations.',
+        requirements: [
+          { label: 'Fits in GPU memory', check: (_c, s) => !s.memory.isOOM, show: (s) => (s.memory.isOOM ? 'Out of memory' : 'Fits') },
+          { label: 'First token ≤ 3 s', check: (_c, s) => (s.sla.ttftBaselineSec ?? s.throughput.ttftSec) <= 3, show: (s) => sec(s.sla.ttftBaselineSec ?? s.throughput.ttftSec) },
+          { label: 'Time per token ≤ 50 ms', check: (_c, s) => Number(s.throughput.tpotMs) <= 50, show: (s) => `${Number(s.throughput.tpotMs).toFixed(1)} ms` },
+          { label: 'Capex ≤ $1,000,000', check: (_c, s) => s.cost.totalCapexUsd <= 1000000, show: (s) => usd(s.cost.totalCapexUsd) },
+        ],
+        hint: 'Lessons 1 and 2: the KV cache for 32k-token documents dominates memory, and every GPU you save costs $27,500-$40,000.',
+        done: 'The design meets the brief. FP8 KV cache is the biggest lever here (it halves the memory that 32k-token conversations need); FP8 weights and a higher-memory GPU help further. On these illustrative prices the cheapest answer is B200 at FP8 (12 GPUs, about $622,000), and H200 with FP8 weights and KV (16 GPUs, about $714,000) is close behind.',
+        highlight: ['gpus', 'capex'],
+      },
+      {
+        kind: 'quiz',
+        title: 'Scored quiz',
+        body: 'Twelve questions across the whole path. Answer all of them, then submit; 75% (9 of 12) passes. You can retake it.',
+        passPct: 75,
+        questions: [
+          { q: 'About how much memory do the weights of a 70B-parameter model need at FP8?', options: ['~35 GB', '~70 GB', '~140 GB', '~280 GB'], answer: 1, explain: '70 billion × 1 byte ≈ 70 GB (lesson 1).' },
+          { q: 'Why don\'t 141 GB of FP16 weights fit on one 141 GB H200?', options: ['The H200 has no FP16 support', 'Runtime reserves leave only about 120 GB usable', 'Weights must be duplicated for NVLink', 'KV cache must live on the same GPU as the weights'], answer: 1, explain: 'Serving engines reserve ~10% and the calculator keeps a 5% margin (lesson 1).' },
+          { q: 'Switching the KV cache from FP16 to FP8 does what to KV memory?', options: ['Nothing', 'Halves it', 'Quarters it', 'Doubles it'], answer: 1, explain: 'One byte per element instead of two (lesson 2).' },
+          { q: 'Why is tensor parallelism kept inside one server?', options: ['Licensing limits', 'Every layer exchanges partial results, which needs NVLink bandwidth', 'PCIe slots run out', 'It only works on H200'], answer: 1, explain: 'TP communicates twice per layer; NVLink is ~18× faster than a 400G NIC (lesson 3).' },
+          { q: 'Time per output token is mostly limited by…', options: ['GPU compute (TFLOPS)', 'Memory bandwidth (TB/s)', 'Network latency', 'Storage throughput'], answer: 1, explain: 'Each decode step reads the weights and KV cache from memory (lesson 4).' },
+          { q: 'Moving from H200 to B200 improves which more?', options: ['Time to first token', 'Time per output token', 'Both equally', 'Neither'], answer: 0, explain: 'Compute grows 2.3×, bandwidth 1.7×; prefill is compute-bound (lesson 4).' },
+          { q: '1,800 users each send 20 requests an hour. What is the request rate?', options: ['1 per second', '10 per second', '36 per second', '600 per second'], answer: 1, explain: '1,800 × 20 ÷ 3,600 = 10 requests per second (lesson 5).' },
+          { q: 'At 10 requests per second, each taking 30 seconds, how many are in flight on average?', options: ['3', '30', '300', '3,000'], answer: 2, explain: 'Little\'s law: 10 × 30 = 300 (lesson 5).' },
+          { q: 'With one 400G port per GPU and 64-port switches, when does the fabric need a spine layer?', options: ['Above 8 GPUs', 'Above 32 GPUs', 'Above 64 GPUs', 'Above 512 GPUs'], answer: 2, explain: 'One leaf holds 64 GPU ports (lesson 6).' },
+          { q: 'How many 14.3 kW servers fit in a 28 kW air-cooled rack?', options: ['1', '2', '3', '5'], answer: 0, explain: 'Two would need 28.6 kW (lesson 7).' },
+          { q: 'Full training with AdamW holds about how many bytes per parameter?', options: ['2', '4', '8', '16'], answer: 3, explain: 'BF16 weights and gradients plus FP32 master weights and two moments (lesson 8).' },
+          { q: 'Which usually lowers the cost per token of owned infrastructure most?', options: ['A cheaper storage tier', 'Higher utilization', 'A shorter ownership horizon', 'More spine switches'], answer: 1, explain: 'Owned hardware costs the same busy or idle (lesson 9).' },
+        ],
+      },
+      {
+        kind: 'recap',
+        title: 'Path complete',
+        points: [
+          'Size memory first: weights, then KV cache for the real context and concurrency.',
+          'Choose the split (TP inside the server, DP across) and check both latency phases.',
+          'Convert users to requests in flight with Little\'s law and a utilization target.',
+          'Then fabric, power and cooling, and finally cost: capex, opex and utilization.',
+          'Advanced mode runs the same engine with every setting, presets and reports for real opportunities.',
         ],
       },
     ],

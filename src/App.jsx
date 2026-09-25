@@ -10,6 +10,7 @@ import { DEFAULT_CONFIG, applyPresetConfig, withPlatform } from './state/config'
 import { useRoute, rememberedMode } from './state/route';
 import { HomePage } from './components/HomePage';
 import { LearningPage } from './components/learning/LearningPage';
+import { LearnLink } from './components/learning/LearnLink';
 import { computeScenario } from './utils/scenario';
 import { buildBomText } from './utils/bomText';
 import { scenarioMetrics } from './utils/compare';
@@ -251,6 +252,8 @@ export default function App() {
 
         {/* PANE 2: Central Configuration Variables Pane (Independently Scrollable) */}
         <main data-testid="config-pane" className="flex-1 min-w-[380px] overflow-y-auto p-4 md:p-6 bg-zinc-950/70 border-r border-zinc-800 space-y-4">
+
+          <LearnLink tabId={activeInputTab} navigate={navigate} />
 
           {/* 1. Workload Mode & Model */}
           {activeInputTab === 'workload' && <WorkloadTab ctx={ctx} />}

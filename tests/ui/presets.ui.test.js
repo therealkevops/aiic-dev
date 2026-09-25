@@ -15,6 +15,7 @@ import { dirname, join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { chromium } from 'playwright';
 import { USE_CASE_PRESETS } from '../../src/data/presets.js';
+import { LESSONS } from '../../src/learning/lessons.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const GOLDEN = join(ROOT, 'tests', 'ui', 'preset-snapshot.json');
@@ -205,6 +206,38 @@ test('learning: complete lesson 1 and open the design in Advanced mode', async (
   // Progress shows on the home page and the next lesson is offered.
   await page.getByTestId('go-home').click();
   assert.match(await page.getByTestId('start-learning').innerText(), /Resume: lesson 2/);
+  assert.equal(errors.length, 0, errors.join('; '));
+  await context.close();
+});
+
+test('learning: capstone brief and scored quiz', async () => {
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const page = await context.newPage();
+  const errors = [];
+  page.on('pageerror', e => errors.push(e.message));
+  await page.goto(`${URL}#/learn/capstone`, { waitUntil: 'networkidle' });
+  const next = page.getByTestId('next-step');
+  await next.click();
+  assert.equal(await next.isDisabled(), true, 'the brief blocks Next until met');
+  assert.equal(await page.getByTestId('brief-met').count(), 0);
+  await page.getByTestId('control-selectedPlatformId-cisco-c885a-h200').click();
+  await page.getByTestId('control-selectedPrecisionId-fp8').click();
+  await page.getByTestId('control-kvPrecision-fp8').click();
+  assert.equal(await page.getByTestId('brief-met').count(), 1);
+  await next.click();
+
+  const quiz = LESSONS.capstone.steps.find(s => s.kind === 'quiz');
+  // Two wrong answers, the rest right: 10/12 = 83%, a pass.
+  for (const [i, q] of quiz.questions.entries()) {
+    const pick = i < 2 ? (q.answer + 1) % q.options.length : q.answer;
+    await page.getByTestId(`quiz-${i}-${pick}`).click();
+  }
+  await page.getByTestId('quiz-submit').click();
+  assert.match(await page.getByTestId('quiz-score').innerText(), /10 of 12 \(83%\)[\s\S]*Passed/);
+  await next.click();
+  await page.getByTestId('finish-lesson').click();
+  await page.getByTestId('all-lessons').click();
+  assert.match(await page.getByTestId('lesson-list').innerText(), /Best quiz score: 83%/);
   assert.equal(errors.length, 0, errors.join('; '));
   await context.close();
 });

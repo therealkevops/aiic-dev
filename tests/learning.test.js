@@ -59,6 +59,21 @@ for (const [id, lesson] of Object.entries(LESSONS)) {
         assert.ok(solved, `task "${step.title}" has no solution`);
         assert.ok(step.hint && step.done, `task "${step.title}" needs a hint and a done message`);
       }
+      if (step.kind === 'brief') {
+        let solved = false;
+        for (const values of combinations(lesson.controls)) {
+          const c = { ...base, ...values };
+          const sc = computeScenario(c);
+          if (step.requirements.every(r => r.check(c, sc))) { solved = true; break; }
+        }
+        assert.ok(solved, `brief "${step.title}" has no solution`);
+        const sc0 = computeScenario(base);
+        assert.ok(!step.requirements.every(r => r.check(base, sc0)), 'the brief is not already met at the start');
+      }
+      if (step.kind === 'quiz') {
+        assert.ok(step.questions.length >= 10 && step.passPct > 0);
+        for (const q of step.questions) assert.ok(q.answer >= 0 && q.answer < q.options.length && q.explain, q.q);
+      }
       if (step.kind === 'predict') {
         assert.ok(step.answer >= 0 && step.answer < step.options.length, `"${step.title}" answer index`);
         assert.ok(step.explain);
@@ -200,4 +215,19 @@ test('lesson facts: cost', () => {
   const five = lessonAt('cost', { tcoYears: 5 });
   assert.ok(five.cost.tcoUsd < reserved(five), 'owning cheaper over 5 years');
   near(five.cost.effectiveUsdPerGpuHour, 2.72, 0.02, '5-year $/GPU-h');
+});
+
+test('lesson facts: capstone brief', () => {
+  const start = lessonAt('capstone');
+  assert.ok(start.cost.totalCapexUsd > 1_500_000, 'the starting design is well over budget');
+  const set = (id, v) => CONTROLS[id].set ? CONTROLS[id].set(v) : { [id]: v };
+  const b200 = lessonAt('capstone', { ...set('selectedPlatformId', 'cisco-c885a-b200'), selectedPrecisionId: 'fp8', kvPrecision: 'fp8' });
+  assert.equal(b200.results.totalGpus, 12); near(b200.cost.totalCapexUsd, 622000, 5000, 'B200 capex');
+  const h200 = lessonAt('capstone', { ...set('selectedPlatformId', 'cisco-c885a-h200'), selectedPrecisionId: 'fp8', kvPrecision: 'fp8' });
+  assert.equal(h200.results.totalGpus, 16); near(h200.cost.totalCapexUsd, 714000, 5000, 'H200 capex');
+  const cheapest = [];
+  for (const pl of ['cisco-c885a-h100', 'cisco-c885a-h200', 'cisco-c885a-b200']) for (const pr of ['fp16', 'fp8']) for (const kv of ['fp16', 'fp8']) {
+    cheapest.push(lessonAt('capstone', { ...set('selectedPlatformId', pl), selectedPrecisionId: pr, kvPrecision: kv }).cost.totalCapexUsd);
+  }
+  near(Math.min(...cheapest), 622000, 5000, 'cheapest answer');
 });

@@ -42,7 +42,7 @@ import { GUARDRAIL_MODELS, DEFAULT_GUARDRAIL_MODEL_ID } from './data/guardrails'
 import { INGRESS_TIERS, DEFAULT_INGRESS_TIER_ID, DEFAULT_EGRESS_USD_PER_GB } from './data/ingress';
 import { HA_DR_TIERS, DEFAULT_HA_DR_TIER_ID } from './data/hadr';
 import { MLOPS_STRATEGIES, DEFAULT_MLOPS_STRATEGY_ID, DEFAULT_CANARY_TRAFFIC_PCT } from './data/mlops';
-import { calculateInfra, calculateStorage, calculateCost, calculateMigConsolidation, applyMigThroughputScaling, calculateSla, calculateRag, calculateGuardrails, calculateIngress, calculateHaDr, calculateMlops, recommendSharding } from './utils/calculator';
+import { calculateInfra, calculateStorage, calculateCost, calculateMigConsolidation, applyMigThroughputScaling, calculateSla, calculateRag, calculateGuardrails, calculateIngress, calculateHaDr, calculateTrainingRedundancy, calculateMlops, recommendSharding } from './utils/calculator';
 import { InfoHelper } from './components/InfoHelper';
 import { TopologyDiagram } from './components/TopologyDiagram';
 import { GlossaryPage } from './components/GlossaryPage';
@@ -183,9 +183,13 @@ export default function App() {
   const [selectedIngressTierId, setSelectedIngressTierId] = useState(DEFAULT_INGRESS_TIER_ID);
   const [egressUsdPerGb, setEgressUsdPerGb] = useState(DEFAULT_EGRESS_USD_PER_GB);
 
-  // --- High Availability / Disaster Recovery State ---
+  // --- High Availability / Disaster Recovery State (inference) ---
   const [enableHaDr, setEnableHaDr] = useState(false);
   const [selectedHaDrTierId, setSelectedHaDrTierId] = useState(DEFAULT_HA_DR_TIER_ID);
+
+  // --- Training Spare Node Capacity State (training) ---
+  const [enableTrainingRedundancy, setEnableTrainingRedundancy] = useState(false);
+  const [spareNodePct, setSpareNodePct] = useState(2);
 
   // --- MLOps Lifecycle (Model Rollout Validation) State ---
   const [enableMlops, setEnableMlops] = useState(false);
@@ -272,6 +276,8 @@ export default function App() {
     setEgressUsdPerGb(c.egressUsdPerGb);
     setEnableHaDr(c.enableHaDr);
     setSelectedHaDrTierId(c.selectedHaDrTierId);
+    setEnableTrainingRedundancy(c.enableTrainingRedundancy ?? false);
+    setSpareNodePct(c.spareNodePct ?? 2);
     setEnableMlops(c.enableMlops ?? false);
     setSelectedMlopsStrategyId(c.selectedMlopsStrategyId ?? DEFAULT_MLOPS_STRATEGY_ID);
     setCanaryTrafficPct(c.canaryTrafficPct ?? DEFAULT_CANARY_TRAFFIC_PCT);
@@ -586,6 +592,18 @@ export default function App() {
     });
   }, [enableHaDr, results, storage, haDrTier, gpuUnitPriceUsd, decodeGpuPricing, storageTier, migComputeGpuCountOverride, migItPowerKwOverride]);
 
+  // 10b. Training Spare Node Capacity -- the compute-level redundancy equivalent for training,
+  // where HA/DR (a live-replica concern) doesn't apply. Standing spare/hot-standby nodes sized
+  // as a % of the training cluster's own node count.
+  const trainingRedundancy = useMemo(() => {
+    return calculateTrainingRedundancy({
+      enabled: enableTrainingRedundancy,
+      infraResults: results,
+      spareNodePct,
+      gpuUnitPriceUsd,
+    });
+  }, [enableTrainingRedundancy, results, spareNodePct, gpuUnitPriceUsd]);
+
   // 10b. MLOps Lifecycle -- additive compute pool for canary/shadow/blue-green model-rollout
   // validation, sized off the same primary compute pool and MIG-consolidated GPU count as HA/DR.
   const mlopsStrategy = MLOPS_STRATEGIES.find(s => s.id === selectedMlopsStrategyId) || MLOPS_STRATEGIES[0];
@@ -637,6 +655,8 @@ export default function App() {
       haDrItPowerKw: haDr.eligible ? haDr.haDrItPowerKw : 0,
       mlopsComputeCapexUsd: mlops.eligible ? mlops.mlopsComputeCapexUsd : 0,
       mlopsItPowerKw: mlops.eligible ? mlops.mlopsItPowerKw : 0,
+      trainingRedundancyComputeCapexUsd: trainingRedundancy.eligible ? trainingRedundancy.spareComputeCapexUsd : 0,
+      trainingRedundancyItPowerKw: trainingRedundancy.eligible ? trainingRedundancy.spareItPowerKw : 0,
     });
   }, [
     results,
@@ -656,6 +676,7 @@ export default function App() {
     ingress,
     haDr,
     mlops,
+    trainingRedundancy,
     migComputeGpuCountOverride,
     migItPowerKwOverride,
     rag,
@@ -740,7 +761,12 @@ ${guardrails.eligible ? `
 - RTO / RPO: ${haDrTier.rtoDescription} / ${haDrTier.rpoDescription}
 - Primary Site GPUs: ${haDr.baseGpuCount}
 - Incremental Compute + Storage Capex: $${Math.round(haDr.haDrComputeCapexUsd).toLocaleString()} (included in Cost & TCO below)
-- HA/DR IT Power Draw: ${haDr.haDrItPowerKw.toFixed(2)} kW\n` : ''}${mlops.eligible ? `
+- HA/DR IT Power Draw: ${haDr.haDrItPowerKw.toFixed(2)} kW\n` : ''}${trainingRedundancy.eligible ? `
+9. TRAINING SPARE NODE CAPACITY
+- Primary Cluster Nodes: ${trainingRedundancy.baseNodes} (${trainingRedundancy.gpusPerNode} GPUs/node)
+- Spare Node Capacity: ${trainingRedundancy.spareNodePct}% -> ${trainingRedundancy.spareNodeCount} spare nodes (${trainingRedundancy.spareGpuCount} GPUs)
+- Spare Node Capex: $${Math.round(trainingRedundancy.spareComputeCapexUsd).toLocaleString()} (included in Cost & TCO below)
+- Spare Node IT Power Draw: ${trainingRedundancy.spareItPowerKw.toFixed(2)} kW\n` : ''}${mlops.eligible ? `
 10. MLOPS LIFECYCLE (MODEL ROLLOUT VALIDATION)
 - Strategy: ${mlopsStrategy.name} (${mlopsStrategy.scope})
 - Rollback Speed: ${mlopsStrategy.rollbackSpeed}
@@ -755,7 +781,7 @@ ${mlopsStrategy.id === 'canary-release' ? `- Canary Traffic Share: ${canaryTraff
 - Datacenter Racks: ~${facility.totalRacks} standard 42U Racks (${facility.totalRuNeeded} RU)
 
 12. COST & TCO (ILLUSTRATIVE ESTIMATE -- NOT A VENDOR QUOTE)
-- Total Capex: $${Math.round(cost.totalCapexUsd).toLocaleString()} (Compute $${Math.round(cost.computeCapexUsd).toLocaleString()} + Network/Storage $${Math.round(cost.networkHardwareCapexUsd + cost.storageCapexUsd).toLocaleString()}${rag.eligible ? ` + RAG $${Math.round(cost.ragCapexUsd).toLocaleString()}` : ''}${guardrails.eligible ? ` + Guardrails $${Math.round(cost.guardrailsCapexUsd).toLocaleString()}` : ''}${ingress.eligible ? ` + Ingress $${Math.round(cost.ingressCapexUsd).toLocaleString()}` : ''}${haDr.eligible ? ` + HA/DR $${Math.round(cost.haDrCapexUsd).toLocaleString()}` : ''}${mlops.eligible ? ` + MLOps $${Math.round(cost.mlopsCapexUsd).toLocaleString()}` : ''})
+- Total Capex: $${Math.round(cost.totalCapexUsd).toLocaleString()} (Compute $${Math.round(cost.computeCapexUsd).toLocaleString()} + Network/Storage $${Math.round(cost.networkHardwareCapexUsd + cost.storageCapexUsd).toLocaleString()}${rag.eligible ? ` + RAG $${Math.round(cost.ragCapexUsd).toLocaleString()}` : ''}${guardrails.eligible ? ` + Guardrails $${Math.round(cost.guardrailsCapexUsd).toLocaleString()}` : ''}${ingress.eligible ? ` + Ingress $${Math.round(cost.ingressCapexUsd).toLocaleString()}` : ''}${haDr.eligible ? ` + HA/DR $${Math.round(cost.haDrCapexUsd).toLocaleString()}` : ''}${trainingRedundancy.eligible ? ` + Spare Nodes $${Math.round(cost.trainingRedundancyCapexUsd).toLocaleString()}` : ''}${mlops.eligible ? ` + MLOps $${Math.round(cost.mlopsCapexUsd).toLocaleString()}` : ''})
 - Annual Opex: $${Math.round(cost.annualOpexUsd).toLocaleString()}/yr (Power $${Math.round(cost.annualPowerCostUsd).toLocaleString()} + Licensing $${Math.round(cost.annualLicensingCostUsd).toLocaleString()} + Support $${Math.round(cost.annualSupportCostUsd).toLocaleString()}${ingress.eligible ? ` + Ingress Egress/Fees $${Math.round(cost.ingressAnnualOpexUsd).toLocaleString()}` : ''})
 - ${cost.tcoYears}-Year TCO: $${Math.round(cost.tcoUsd).toLocaleString()} (~$${cost.effectiveUsdPerGpuHour.toFixed(2)}/GPU-hr effective)
 - vs. ${cost.tcoYears}-Yr Cloud Rental ($${cost.cloudEquivalentUsdPerHr.toFixed(2)}/hr cluster-wide): ${cost.buildVsBuySavingsUsd >= 0 ? `Owning saves $${Math.round(cost.buildVsBuySavingsUsd).toLocaleString()}` : `Cloud saves $${Math.round(-cost.buildVsBuySavingsUsd).toLocaleString()}`}
@@ -795,7 +821,14 @@ ${workloadType === 'inference' && throughput ? `
     { id: 'stack', label: 'Serving Stack', icon: Workflow, meta: orchestrator.toUpperCase() },
     { id: 'guardrails', label: 'Guardrails', icon: Shield, meta: guardrails.eligible ? `${guardrails.guardGpusNeeded}x ${guardModel.name}` : (enableGuardrails ? 'N/A' : 'Off') },
     { id: 'ingress', label: 'Ingress & Edge', icon: Globe, meta: ingress.eligible ? `${ingress.nodesNeeded}x ${ingressTier.name}` : (enableIngress ? 'N/A' : 'Off') },
-    { id: 'hadr', label: 'HA / DR', icon: LifeBuoy, meta: haDr.eligible ? haDrTier.name : (enableHaDr ? 'N/A' : 'Off') },
+    {
+      id: 'hadr',
+      label: 'Resilience & DR',
+      icon: LifeBuoy,
+      meta: workloadType === 'training'
+        ? (trainingRedundancy.eligible ? `${trainingRedundancy.spareNodeCount} spare node${trainingRedundancy.spareNodeCount === 1 ? '' : 's'}` : (enableTrainingRedundancy ? 'N/A' : 'Off'))
+        : (haDr.eligible ? haDrTier.name : (enableHaDr ? 'N/A' : 'Off')),
+    },
     { id: 'mlops', label: 'MLOps Lifecycle', icon: GitBranch, meta: mlops.eligible ? mlopsStrategy.name : (enableMlops ? 'N/A' : 'Off') },
     { id: 'mig', label: 'MIG Partitioning', icon: Grid2x2, meta: mig.eligible ? mig.selectedProfile.id : (enableMig ? 'N/A' : 'Off') },
   ];
@@ -2494,10 +2527,10 @@ ${workloadType === 'inference' && throughput ? `
           )}
 
           {/* 11. High Availability / Disaster Recovery: replica multipliers, RTO/RPO */}
-          {activeInputTab === 'hadr' && (
+          {activeInputTab === 'hadr' && workloadType === 'inference' && (
             <Card
               icon={LifeBuoy}
-              title="11. HA / DR"
+              title="11. Resilience & DR"
               right={haDr.enabled ? <Tag tone={haDr.eligible ? 'good' : 'warn'}>{haDr.eligible ? 'Eligible' : 'Not eligible'}</Tag> : <Tag>Off</Tag>}
               className="space-y-4"
             >
@@ -2557,6 +2590,66 @@ ${workloadType === 'inference' && throughput ? `
                       <Row k="Incremental storage capex" v={`$${Math.round(haDr.incrementalStorageCapexUsd).toLocaleString()}`} tone="accent" />
                       <Row k="Total HA/DR capex" v={`$${Math.round(haDr.haDrComputeCapexUsd).toLocaleString()}`} tone="good" />
                       <Row k="HA/DR IT power draw" v={`${haDr.haDrItPowerKw.toFixed(2)} kW`} mono={false} />
+                    </Rows>
+                  </div>
+                </>
+              )}
+            </Card>
+          )}
+
+          {/* 11. Resilience & DR (training branch): spare/hot-standby node capacity, since HA/DR's
+              live-replica redundancy doesn't apply to a training run -- see calculateTrainingRedundancy(). */}
+          {activeInputTab === 'hadr' && workloadType === 'training' && (
+            <Card
+              icon={LifeBuoy}
+              title="11. Resilience & DR"
+              right={trainingRedundancy.enabled ? <Tag tone={trainingRedundancy.eligible ? 'good' : 'warn'}>{trainingRedundancy.eligible ? 'Eligible' : 'Not eligible'}</Tag> : <Tag>Off</Tag>}
+              className="space-y-4"
+            >
+              <Banner tone="info" icon={AlertTriangle}>
+                Training's primary resilience mechanism is checkpoint/resume, already sized on the Storage tab. Separately, at hyperscale (hundreds-to-thousands of GPUs, weeks-long jobs) it's standard practice to keep a small buffer of already-racked, powered spare nodes on the floor -- ready to swap in for a failed node without stalling the run while a replacement is procured. Below the rounding threshold for your current cluster size, this naturally sizes to zero -- a support contract's RMA turnaround is fine for small, short jobs.
+              </Banner>
+
+              <ToggleRow
+                label="Training Spare Node Capacity"
+                description={enableTrainingRedundancy ? 'Sizing standing spare/hot-standby nodes as a % of the training cluster.' : 'No additional spare node capacity sized.'}
+                checked={enableTrainingRedundancy}
+                onChange={setEnableTrainingRedundancy}
+              />
+
+              {enableTrainingRedundancy && !trainingRedundancy.eligible && (
+                <Banner tone="warn" icon={AlertTriangle}>
+                  {trainingRedundancy.reason}
+                </Banner>
+              )}
+
+              {enableTrainingRedundancy && trainingRedundancy.eligible && (
+                <>
+                  <SliderField
+                    label="Spare Node Capacity:"
+                    valueLabel={`${trainingRedundancy.spareNodePct}%`}
+                    min="0" max="10" step="0.5"
+                    value={spareNodePct}
+                    onChange={(e) => setSpareNodePct(Number(e.target.value))}
+                    marks={['0% (No Buffer)', '2% (Typical Hyperscale)', '10% (Aggressive)']}
+                    helper={
+                      <InfoHelper
+                        title="Spare Node Capacity"
+                        text="Standing spare compute nodes, already racked and powered, kept idle and ready to swap in for a failed node mid-run. Sized as a percentage of the training cluster's own node count, rounded to the nearest whole node -- small clusters naturally round to zero spares."
+                        whyItMatters="A multi-week pretraining run across thousands of GPUs will see hardware failures often enough that waiting on a replacement node's procurement lead time is a real, costly risk to the run's wall-clock schedule. This is purely additive spend -- there's no 'already counted' base to subtract, unlike HA/DR's tier multipliers."
+                      />
+                    }
+                  />
+
+                  <div className="pt-3 border-t border-zinc-800/70">
+                    <SectionLabel>SPARE NODE SIZING</SectionLabel>
+                    <Rows>
+                      <Row k="Primary cluster nodes" v={`${trainingRedundancy.baseNodes}`} mono={false} />
+                      <Row k="GPUs per node" v={`${trainingRedundancy.gpusPerNode}`} mono={false} />
+                      <Row k="Spare nodes" v={`${trainingRedundancy.spareNodeCount}`} tone="accent" />
+                      <Row k="Spare GPUs" v={`${trainingRedundancy.spareGpuCount}`} tone="accent" />
+                      <Row k="Spare node capex" v={`$${Math.round(trainingRedundancy.spareComputeCapexUsd).toLocaleString()}`} tone="good" />
+                      <Row k="Spare node IT power draw" v={`${trainingRedundancy.spareItPowerKw.toFixed(2)} kW`} mono={false} />
                     </Rows>
                   </div>
                 </>
@@ -2895,6 +2988,9 @@ ${workloadType === 'inference' && throughput ? `
                   {mlops.eligible && (
                     <Row k="MLOps capex" v={`$${Math.round(cost.mlopsCapexUsd).toLocaleString()}`} mono={false} />
                   )}
+                  {trainingRedundancy.eligible && (
+                    <Row k="Training redundancy capex" v={`$${Math.round(cost.trainingRedundancyCapexUsd).toLocaleString()}`} mono={false} />
+                  )}
                   <Row k="Total capex" v={`$${Math.round(cost.totalCapexUsd).toLocaleString()}`} tone="accent" />
                   <Row k="Annual opex" v={`$${Math.round(cost.annualOpexUsd).toLocaleString()}/yr`} mono={false} />
                   {ingress.eligible && (
@@ -3201,6 +3297,17 @@ ${workloadType === 'inference' && throughput ? `
                     <Row k="Validation pool GPUs" v={`${mlops.validationGpuCount} (of ${mlops.baseGpuCount} primary)`} mono={false} />
                     <Row k="MLOps capex" v={`$${Math.round(mlops.mlopsComputeCapexUsd).toLocaleString()}`} tone="good" />
                     <Row k="MLOps IT power draw" v={`${mlops.mlopsItPowerKw.toFixed(2)} kW`} mono={false} />
+                  </Rows>
+                </Disclosure>
+              )}
+
+              {trainingRedundancy.eligible && (
+                <Disclosure icon={LifeBuoy} title="Training spare node capacity" right={`${trainingRedundancy.spareNodeCount} spare node${trainingRedundancy.spareNodeCount === 1 ? '' : 's'}`}>
+                  <Rows>
+                    <Row k="Spare node capacity" v={`${trainingRedundancy.spareNodePct}% of ${trainingRedundancy.baseNodes} primary cluster nodes`} tone="accent" />
+                    <Row k="Spare nodes / GPUs" v={`${trainingRedundancy.spareNodeCount} / ${trainingRedundancy.spareGpuCount}`} mono={false} />
+                    <Row k="Spare node capex" v={`$${Math.round(trainingRedundancy.spareComputeCapexUsd).toLocaleString()}`} tone="good" />
+                    <Row k="Spare node IT power draw" v={`${trainingRedundancy.spareItPowerKw.toFixed(2)} kW`} mono={false} />
                   </Rows>
                 </Disclosure>
               )}

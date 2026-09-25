@@ -316,7 +316,7 @@ const PRESET_CONTENT = {
         title: 'Inter-Node Tensor Parallelism Trap',
         mistake: 'Configuring TP=16 across two 8-GPU nodes over RoCEv2 or InfiniBand instead of keeping TP=8 inside a single chassis.',
         impact: 'Every transformer layer performs all-reduces on the critical path. Moving them from NVLink (900 GB/s per GPU) to a 400G NIC (~50 GB/s) plus switch hops makes each one many times slower, and decode throughput drops sharply.',
-        remediation: 'Keep TP inside one chassis (TP of 8 or less on an 8-GPU NVLink node) and use the smallest TP that fits the model. Scale concurrency with Data Parallel (DP) replicas across nodes, which do not communicate during inference.'
+        remediation: 'Keep TP inside one chassis (TP of 8 or less on an 8-GPU NVLink node). Scale concurrency with Data Parallel (DP) replicas across nodes, which do not communicate during inference.'
       },
       {
         title: 'Neglecting Automatic Prefix Caching (APC)',
@@ -357,10 +357,10 @@ const PRESET_CONTENT = {
       model: 'Qwen 2.5 72B',
       precision: 'FP8 Weights / FP8 KV',
       platform: 'Cisco UCS C885A',
-      gpus: '4x NVIDIA H200 (141GB), 1 chassis',
+      gpus: '2x NVIDIA H200 (141GB), 1 chassis',
       context: '65,536',
       concurrency: '16',
-      sharding: 'TP=1, PP=1, DP=4 (Auto)',
+      sharding: 'TP=2, PP=1, DP=1 (Auto)',
       engine: 'vLLM (Speculative Decoding)',
       apc: '20% Cache Ratio',
       promptRatio: '80% Prompt / 20% Gen',
@@ -384,10 +384,10 @@ const PRESET_CONTENT = {
       mlopsStrategyId: 'canary-release',
     },
     rationale: {
-      silicon: 'Qwen 2.5 72B at FP8 needs ~75GB of weights, which fits on a single H200, so the solver picks TP=1 and scales to 16 concurrent 64k-token streams with four independent replicas (DP=4) inside one C885A chassis. Latency is the tension in this design: a cold 52k-token prompt (80% of a 64k context) takes ~10s to prefill on one H200 in the calculator, far from the sub-second feel IDE users expect. Real copilots get there two ways: (1) prefix caching, so only the few hundred tokens that changed since the last request are prefilled, and (2) keeping inline completions on short contexts while reserving the full 64k window for chat and refactoring requests. If cold long-context latency matters, raise TP to 4 or 8; prefill time drops roughly in proportion, at the cost of more GPUs per replica.',
+      silicon: 'Qwen 2.5 72B at FP8 needs ~75GB of weights. It would fit on a single H200, but serving 16 concurrent 64k-token streams that way takes four one-GPU replicas (4 GPUs), each holding its own copy of the weights. The solver instead picks one TP=2 replica on 2 GPUs: the weights are stored once (~38GB per GPU) and the remaining ~73GB per GPU holds KV cache for all 16 streams. Latency is the tension in this design: a cold 52k-token prompt (80% of a 64k context) takes ~5s to prefill at TP=2 in the calculator, far from the sub-second feel IDE users expect. Real copilots get there two ways: (1) prefix caching, so only the few hundred tokens that changed since the last request are prefilled, and (2) keeping inline completions on short contexts while reserving the full 64k window for chat and refactoring requests. If cold long-context latency matters, turn on latency targets on the Sharding tab; the solver then raises TP (e.g. TP=4 on 4 GPUs gives ~2.8s).',
       memory: 'Coding copilots require massive context (64k tokens) to swallow open file buffers, imported header definitions, and language server protocol (LSP) symbol tables. Qwen 2.5 72B has 80 layers and 8 KV heads, so a full 64k-token sequence needs ~21.5GB of KV at FP16 and ~10.7GB at FP8. Speculative decoding is enabled with a small draft model from the same family (it must share the target\'s tokenizer, e.g. Qwen 2.5 0.5B or 1.5B). Typical speedups are 1.5x to 2x on predictable code, but they depend on the draft acceptance rate and shrink as batch size grows.',
       ancillary: 'Guardrail models are explicitly disabled in this preset. A guard classifier has to read the same long prompt the main model reads, so on 50k-token code contexts it would add seconds, not milliseconds, to every request (even on the RAG preset\'s 8k prompts the calculator adds ~0.7s). RAG uses GTE-Large-EN v1.5, whose 8,192-token input limit lets it embed whole functions or files when needed (the preset sizes 256-token chunks), with a Qdrant vector database at 15 QPS. New model versions roll out via a Canary Release validating against 10% of live traffic before full promotion.',
-      tradeoff: 'Sacrifices safety guardrail filtering and concurrency depth (capped at 16 streams) in order to support 64k context windows. Cold long-context requests are slow at TP=1; the design relies on prefix-cache hits for interactive latency.',
+      tradeoff: 'Sacrifices safety guardrail filtering and concurrency depth (capped at 16 streams) in order to support 64k context windows on just two GPUs. Cold long-context requests take seconds; the design relies on prefix-cache hits for interactive latency.',
       modelSelection: 'Qwen 2.5 72B Instruct is a strong general model that is also good at code (HumanEval 86.6 per Qwen\'s report) while staying useful for explanations, design discussion and documentation. If the workload is almost entirely code, the smaller Qwen 2.5 Coder 32B (below) scores higher on code benchmarks at less than half the memory.',
       modelAlternatives: [
         {
@@ -435,15 +435,15 @@ const PRESET_CONTENT = {
       commandTitle: 'Production Speculative vLLM Service Command',
       command: `vllm serve Qwen/Qwen2.5-72B-Instruct \\
   --quantization fp8 \\
-  --tensor-parallel-size 1 \\
+  --tensor-parallel-size 2 \\
   --kv-cache-dtype fp8 \\
   --speculative-config '{"model": "Qwen/Qwen2.5-0.5B-Instruct", "num_speculative_tokens": 5}' \\
   --enable-prefix-caching \\
   --max-model-len 65536 \\
-  --max-num-seqs 4 \\
+  --max-num-seqs 16 \\
   --gpu-memory-utilization 0.90 \\
   --port 8000`,
-      notes: 'One H200 per replica, four replicas behind the load balancer (TP=1, DP=4 as in the calculator). There is no 72B Qwen 2.5 Coder model; the 72B general Instruct model is used here. Qwen 2.5 checkpoints default to a 32k window; enable YaRN rope scaling per the model card to serve 64k. The draft model shares the target\'s tokenizer and adds ~1GB. Older vLLM releases used --speculative-model / --num-speculative-tokens instead of --speculative-config.'
+      notes: 'One TP=2 replica on 2 H200s, matching the calculator. There is no 72B Qwen 2.5 Coder model; the 72B general Instruct model is used here. Qwen 2.5 checkpoints default to a 32k window; enable YaRN rope scaling per the model card to serve 64k. The draft model shares the target\'s tokenizer and adds ~1GB. Older vLLM releases used --speculative-model / --num-speculative-tokens instead of --speculative-config.'
     }
   },
   'ent-customer-support': {
@@ -586,7 +586,7 @@ CUDA_VISIBLE_DEVICES=0 vllm serve meta-llama/Llama-3.1-8B-Instruct \\
     rationale: {
       silicon: 'Prefill cost grows with prompt length: the linear layers scale linearly with the number of tokens and attention scales quadratically, so a ~118k-token prompt (90% of 131k) is expensive. The solver fits the FP8 70B model plus two full 131k-token sequences on each H200, so it chooses TP=1 with four replicas (DP=4) for 8 concurrent documents. At TP=1 the calculator estimates ~37s to first token for a full-length document -- acceptable for this asynchronous batch workload, but not interactive. If analysts wait on results, raise TP to 4 or 8: prefill time falls roughly in proportion to TP (to well under ten seconds at TP=8), at the cost of more GPUs per replica.',
       memory: 'KV cache at 131,072 tokens is punishing: LLaMA 70B needs 163,840 bytes per token at FP8, so a single full-length sequence holds ~21.5GB of KV (~43GB at FP16). Eight concurrent documents need ~172GB of KV in total, which is why the work is split across four GPUs (two documents each, ~117GB used of ~127GB usable). KV cache offload to storage is enabled so inactive sessions can page out of HBM instead of being recomputed. Automatic Prefix Caching is set to 0% because each contract is unique; only the short shared instruction prompt would ever be reused.',
-      ancillary: 'RAG embedding uses NV-Embed-v2, a 7.8B model that accepts inputs of up to 32,768 tokens, so long clauses can be embedded without splitting. Note that NV-Embed-v2 is licensed CC-BY-NC 4.0 (non-commercial); commercial deployments need a different embedding model or a license from NVIDIA. A 7.8B embedder is also expensive: for the preset\'s 5TB corpus the calculator sizes over 100 L40S GPUs just to meet the ingestion window. Storage uses NetApp AFF with 3x replication to satisfy audit retention and immutable-snapshot requirements. Guardrails use Granite Guardian 3 8B; because the guard must also read the ~118k-token prompt, the calculator adds ~13s to time-to-first-token -- consider running it asynchronously or only on outputs for this workload. New model versions roll out via a Canary Release validating against 10% of live traffic before full promotion.',
+      ancillary: 'RAG embedding uses Qwen3-Embedding 0.6B, which accepts inputs of up to 32,768 tokens, so long clauses can be embedded without splitting, under a commercial-friendly Apache 2.0 license. For the preset\'s 5TB corpus the calculator sizes 9 L40S GPUs to meet the ingestion window. (NV-Embed-v2 offers similar input length at higher benchmark quality but is licensed CC-BY-NC, non-commercial, and at 7.8B parameters would need over 100 L40S GPUs here.) Storage uses NetApp AFF with 3x replication to satisfy audit retention and immutable-snapshot requirements. Guardrails use Granite Guardian 3 8B; because the guard must also read the ~118k-token prompt, the calculator adds ~13s to time-to-first-token -- consider running it asynchronously or only on outputs for this workload. New model versions roll out via a Canary Release validating against 10% of live traffic before full promotion.',
       tradeoff: 'Trades interactive concurrency (capped at 8 streams) and prefix cache optimization for maximum context length (131k tokens) and extreme prefill batching throughput.',
       modelSelection: 'LLaMA 3.3 70B supports a native 128k (131,072-token) context, and Meta reports strong long-context retrieval results for this model family. Needle-in-a-haystack recall does not guarantee reasoning across a whole contract, so validate on your own documents. The 70B parameter count is what gives it the capacity to follow nested cross-references, indemnity clauses and financial tables.',
       modelAlternatives: [
@@ -627,7 +627,7 @@ CUDA_VISIBLE_DEVICES=0 vllm serve meta-llama/Llama-3.1-8B-Instruct \\
         title: 'Small Context Embeddings for Complex Contracts',
         mistake: 'Using standard 512-token embedding models (e.g. standard BERT) to index 200-page loan agreements.',
         impact: 'Slices interconnected indemnity and covenant clauses across arbitrary chunk boundaries, destroying cross-clause semantic understanding.',
-        remediation: 'Chunk along document structure (section and clause boundaries) and use a long-input embedding model -- NV-Embed-v2 (32k, non-commercial license), or commercially licensed options such as BGE-M3 (8k) or GTE-Large-EN v1.5 (8k).'
+        remediation: 'Chunk along document structure (section and clause boundaries) and use a long-input embedding model -- Qwen3-Embedding (32k, Apache 2.0, used in this preset), BGE-M3 (8k, MIT) or GTE-Large-EN v1.5 (8k). NV-Embed-v2 (32k) is non-commercial.'
       }
     ],
     engineRecipe: {
@@ -963,10 +963,10 @@ docker run -d --gpus '"device=0"' \\
       model: 'LLaMA 3.3 70B',
       precision: 'FP8 Weights / FP8 KV',
       platform: 'Cisco UCS C885A',
-      gpus: '6x NVIDIA H200 (141GB), 1 chassis',
+      gpus: '4x NVIDIA H200 (141GB), 1 chassis',
       context: '32,768',
       concurrency: '64',
-      sharding: 'TP=1, PP=1, DP=6 (Auto)',
+      sharding: 'TP=2, PP=1, DP=2 (Auto)',
       engine: 'vLLM (Speculative Decoding)',
       apc: '60% Cache Ratio',
       promptRatio: '40% Prompt / 60% Gen',
@@ -990,7 +990,7 @@ docker run -d --gpus '"device=0"' \\
       mlopsStrategyId: 'canary-release',
     },
     rationale: {
-      silicon: 'Multi-step agent loops emit extensive hidden reasoning tokens before executing tool calls. The prompt/generation split is inverted: 40% prompt, 60% generation. This heavy autoregressive decode phase is memory-bandwidth bound, which is why H200 (4.8 TB/s HBM3e) is used. The FP8 70B model fits on one GPU, so the solver runs TP=1 and spreads the 64 concurrent agents over six replicas (DP=6) in one Cisco C885A chassis; the calculator estimates ~36ms per output token (~28 tokens/s per agent) at that batch size. Raising TP to 2 or more would speed up each agent\'s decode at the cost of more GPUs.',
+      silicon: 'Multi-step agent loops emit extensive hidden reasoning tokens before executing tool calls. The prompt/generation split is inverted: 40% prompt, 60% generation. This heavy autoregressive decode phase is memory-bandwidth bound, which is why H200 (4.8 TB/s HBM3e) is used. The FP8 70B model would fit on one GPU, but six one-GPU replicas would each hold a copy of the weights; two TP=2 replicas (4 GPUs in one Cisco C885A) hold the same 64 concurrent agents with the weights stored twice instead of six times. The calculator estimates ~0.5s to first token and ~36ms per output token (~28 tokens/s per agent) at that batch size.',
       memory: 'Agent workflows maintain constant system instructions, API function descriptions, and JSON schemas across all turns. Automatic Prefix Caching (APC) is configured at 60%: the shared tool catalog and instructions are computed and stored once and reused by every agent turn, saving both memory and prefill time. Speculative decoding is enabled because JSON and bracket syntax is highly predictable; gains depend on the draft acceptance rate and shrink at high batch sizes.',
       ancillary: 'Ingress employs an enterprise API Gateway (Kong/Apigee class) with rate-limiting, mTLS authentication, and token quota enforcement. RAG uses Qdrant (10 QPS) with BGE-Large embeddings. Guardrails enforce both input prompt sanitization and output tool-execution safety via Llama Guard 3 8B. Because the guard reads the full 32k-token context, the calculator adds ~1.4s to time-to-first-token and ~3.6s end to end -- per agent step, so consider checking only tool-call outputs or using a smaller guard model. New model versions roll out via a Canary Release validating against 10% of live traffic before full promotion.',
       tradeoff: 'Prioritizes high prefix caching hit rates and memory bandwidth over raw batch throughput, optimizing for multi-turn agent response latency.',
@@ -1047,16 +1047,16 @@ docker run -d --gpus '"device=0"' \\
       commandTitle: 'Production Tool-Calling Serving Command',
       command: `vllm serve meta-llama/Llama-3.3-70B-Instruct \\
   --quantization fp8 \\
-  --tensor-parallel-size 1 \\
+  --tensor-parallel-size 2 \\
   --kv-cache-dtype fp8 \\
   --enable-prefix-caching \\
   --enable-auto-tool-choice \\
   --tool-call-parser llama3_json \\
   --max-model-len 32768 \\
-  --max-num-seqs 11 \\
+  --max-num-seqs 32 \\
   --gpu-memory-utilization 0.90 \\
   --port 8000`,
-      notes: 'One H200 per replica, six replicas (TP=1, DP=6 as in the calculator). With tool_choice="auto" the parser extracts calls from the model\'s text, so malformed calls are still possible; request tool_choice="required" or a named tool when the next step must be a valid call.'
+      notes: 'Two TP=2 replicas on 4 H200s, matching the calculator. With tool_choice="auto" the parser extracts calls from the model\'s text, so malformed calls are still possible; request tool_choice="required" or a named tool when the next step must be a valid call.'
     }
   },
   'ent-agent-swe': {
@@ -1070,10 +1070,10 @@ docker run -d --gpus '"device=0"' \\
       model: 'Qwen 2.5 72B',
       precision: 'FP8 Weights / FP8 KV',
       platform: 'Cisco UCS C885A',
-      gpus: '12x NVIDIA H200 (141GB), 2 chassis',
+      gpus: '6x NVIDIA H200 (141GB), 1 chassis',
       context: '131,072',
       concurrency: '24',
-      sharding: 'TP=1, PP=1, DP=12 (Auto)',
+      sharding: 'TP=2, PP=1, DP=3 (Auto)',
       engine: 'vLLM + Chunked Prefill',
       apc: '50% Cache Ratio',
       promptRatio: '35% Prompt / 65% Gen',
@@ -1097,10 +1097,10 @@ docker run -d --gpus '"device=0"' \\
       mlopsStrategyId: 'canary-release',
     },
     rationale: {
-      silicon: 'Autonomous coding agents maintain multi-hour stateful sessions while reading stack traces, running unit tests, and rewriting files. Context window expands continuously toward 131k tokens. Qwen 2.5 72B at FP8 (~75GB) fits on one H200 with room for two long sessions, so the solver uses TP=1 and twelve replicas (DP=12) for 24 concurrent agents -- 12 GPUs across two Cisco C885A chassis. Replicas are independent, so the second chassis needs only ordinary front-end networking, not a GPU fabric. The calculator estimates ~7s to first token when a turn has to prefill a large new block (for example a long test log); turns that mostly extend a cached history are much faster.',
+      silicon: 'Autonomous coding agents maintain multi-hour stateful sessions while reading stack traces, running unit tests, and rewriting files. Context window expands continuously toward 131k tokens. Qwen 2.5 72B at FP8 (~75GB) would fit on one H200 with room for two long sessions (12 one-GPU replicas for 24 agents), but three TP=2 replicas do the job on 6 GPUs in one Cisco C885A: each replica stores the weights once across two GPUs and uses the rest for eight sessions\' KV. The calculator estimates ~3.8s to first token when a turn has to prefill a large new block (for example a long test log); turns that mostly extend a cached history are much faster.',
       memory: 'A full 131k-token session needs ~21.5GB of KV at FP8 (Qwen 2.5 72B: 80 layers × 8 KV heads × 128 dims × 2 for K and V = 163,840 bytes per token), double that at FP16. The preset uses FP8 KV and enables KV cache offload to VAST storage, so dormant agent sessions can be paged out while external test suites run. The 50% APC ratio reflects the stable repository context and history reused across iterations.',
       ancillary: 'RAG uses GTE-Large-EN v1.5 with 256-token chunking and Qdrant (12 QPS) for fast semantic symbol retrieval. Ingress uses Envoy software load balancing. Guardrails (Llama Guard 3 8B) are active for code security and secret leakage prevention; on these long contexts the calculator adds ~5s to time-to-first-token and ~14s end to end per turn, so many teams check only the final patch and shell commands instead. New model versions roll out via a Canary Release validating against 10% of live traffic before full promotion.',
-      tradeoff: 'Requires massive 141GB HBM3e GPUs and NVMe KV offload to tolerate multi-hour 131k context ballooning without dropping concurrent developer sessions.',
+      tradeoff: 'Relies on 141GB HBM3e GPUs and KV offload to tolerate multi-hour 131k-token sessions without dropping concurrent developer sessions, trading some time-to-first-token on large new context for a small GPU count.',
       modelSelection: 'Qwen 2.5 72B is a capable open model for agentic coding and handles long codebase contexts well during multi-file editing. SWE-bench Verified results depend heavily on the agent harness (tools, retries, test feedback), so benchmark the model inside your own harness before committing.',
       modelAlternatives: [
         {
@@ -1148,16 +1148,16 @@ docker run -d --gpus '"device=0"' \\
       commandTitle: 'Production Long-Context SWE Command',
       command: `vllm serve Qwen/Qwen2.5-72B-Instruct \\
   --quantization fp8 \\
-  --tensor-parallel-size 1 \\
+  --tensor-parallel-size 2 \\
   --kv-cache-dtype fp8 \\
   --enable-prefix-caching \\
   --enable-chunked-prefill \\
   --max-num-batched-tokens 8192 \\
   --max-model-len 131072 \\
-  --max-num-seqs 2 \\
+  --max-num-seqs 8 \\
   --gpu-memory-utilization 0.90 \\
   --port 8000`,
-      notes: 'One H200 per replica, twelve replicas over two chassis (TP=1, DP=12 as in the calculator). Qwen 2.5 checkpoints default to a 32k window; enable YaRN rope scaling (factor 4) per the model card to reach 131k. Chunked prefill keeps long diffs and logs from stalling other sessions.'
+      notes: 'Three TP=2 replicas on 6 H200s, matching the calculator. Qwen 2.5 checkpoints default to a 32k window; enable YaRN rope scaling (factor 4) per the model card to reach 131k. Chunked prefill keeps long diffs and logs from stalling other sessions.'
     }
   },
   'ent-agent-deep-research': {
@@ -1171,10 +1171,10 @@ docker run -d --gpus '"device=0"' \\
       model: 'Mistral Large 2 (123B)',
       precision: 'FP8 Weights / FP8 KV',
       platform: 'Cisco UCS C885A',
-      gpus: '6x NVIDIA H200 (141GB), 1 chassis',
+      gpus: '4x NVIDIA H200 (141GB), 1 chassis',
       context: '131,072',
       concurrency: '16',
-      sharding: 'TP=2, PP=1, DP=3 (Auto)',
+      sharding: 'TP=4, PP=1, DP=1 (Auto)',
       engine: 'vLLM (Chunked Prefill)',
       apc: '15% Cache Ratio (Low Reuse)',
       promptRatio: '85% Prompt / 15% Gen',
@@ -1198,9 +1198,9 @@ docker run -d --gpus '"device=0"' \\
       mlopsStrategyId: 'canary-release',
     },
     rationale: {
-      silicon: 'Deep research requires strong reasoning to synthesize conflicting source material, so Mistral Large 2 (123B dense) is used. At FP8 its weights need ~124GB, more than one H200 can hold alongside any KV cache, so the solver picks TP=2 (~62GB of weights per GPU) and three replicas (DP=3) for 16 concurrent research sessions -- six GPUs in one chassis. This configuration is tight: the calculator shows ~126GB used of ~127GB usable per GPU, so in practice either lower max concurrency per replica or add a fourth replica. Prefill of a ~111k-token prompt takes ~26s at TP=2 in the calculator; higher TP shortens it.',
+      silicon: 'Deep research requires strong reasoning to synthesize conflicting source material, so Mistral Large 2 (123B dense) is used. At FP8 its weights need ~124GB, more than one H200 can hold alongside any KV cache. The smallest fitting layout (TP=2) would need four replicas -- 8 GPUs -- for 16 long sessions; a single TP=4 replica on 4 GPUs stores the weights once (~31GB per GPU) and leaves ~83GB per GPU for KV, serving all 16 sessions with ~12GB per GPU still free. Prefill of a ~111k-token prompt takes ~14s at TP=4 in the calculator; higher TP or latency targets shorten it.',
       memory: 'Web research is prefill-dominated (85% prompt, 15% synthesis). Mistral Large 2 has 88 layers and 8 KV heads, so a full 131k-token session holds ~23.6GB of FP8 KV. Because each search hop pulls in new, unpredictable pages, Automatic Prefix Caching is set to only 15% (mostly the system prompt and earlier turns). Chunked prefill (on by default in current vLLM) keeps 100k-token web dumps from stalling other sessions\' decode.',
-      ancillary: 'RAG uses NV-Embed-v2 (Mistral-7B based) with 1,024-token chunks backed by Milvus. NV-Embed-v2 is licensed CC-BY-NC (non-commercial), and at 7.8B parameters it is costly to run: for the preset\'s 3TB corpus the calculator sizes well over 100 L40S GPUs to meet the ingestion window, so a smaller commercially licensed embedder is often the better trade. Storage uses VAST Universal with 8+3 erasure coding. Granite Guardian 3 8B checks inputs and outputs for harm and groundedness; on 111k-token prompts it adds ~12s to time-to-first-token in the calculator. New model versions roll out via a Canary Release validating against 10% of live traffic before full promotion.',
+      ancillary: 'RAG uses Qwen3-Embedding 0.6B (32k-token inputs, Apache 2.0) with 1,024-token chunks backed by Milvus; for the preset\'s 3TB corpus the calculator sizes 15 L40S GPUs to meet the ingestion window. (NV-Embed-v2 would add quality but is non-commercial and ~13x the compute.) Storage uses VAST Universal with 8+3 erasure coding. Granite Guardian 3 8B checks inputs and outputs for harm and groundedness; on 111k-token prompts it adds ~12s to time-to-first-token in the calculator. New model versions roll out via a Canary Release validating against 10% of live traffic before full promotion.',
       tradeoff: 'Employs a frontier 123B model with low cache hit rates, prioritizing multi-source synthesis quality over high stream concurrency.',
       modelSelection: 'Mistral Large 2 (123B) has the capacity to synthesize conflicting source material, resolve ambiguity, and write long, structured reports. Licensing matters here: the open weights are released under the Mistral Research License, which does not permit commercial production use without a separate commercial license from Mistral.',
       modelAlternatives: [
@@ -1249,15 +1249,15 @@ docker run -d --gpus '"device=0"' \\
       commandTitle: 'Production Frontier 123B Serving Command',
       command: `vllm serve mistralai/Mistral-Large-Instruct-2407 \\
   --quantization fp8 \\
-  --tensor-parallel-size 2 \\
+  --tensor-parallel-size 4 \\
   --kv-cache-dtype fp8 \\
   --enable-chunked-prefill \\
   --max-num-batched-tokens 8192 \\
   --max-model-len 131072 \\
-  --max-num-seqs 6 \\
+  --max-num-seqs 16 \\
   --gpu-memory-utilization 0.90 \\
   --port 8000`,
-      notes: 'Two H200s per replica, three replicas (TP=2, DP=3 as in the calculator). Memory is nearly full at 6 long sessions per replica; watch for preemptions and add a replica if they appear. Check the Mistral Research License before production use.'
+      notes: 'One TP=4 replica on 4 H200s holding 16 long sessions, matching the calculator. Check the Mistral Research License before production use.'
     }
   },
   'ent-agent-multi-orchestration': {
@@ -1271,10 +1271,10 @@ docker run -d --gpus '"device=0"' \\
       model: 'LLaMA 3.1 8B (Worker Swarm)',
       precision: 'FP8 Weights / FP8 KV',
       platform: 'Cisco UCS C245 M8',
-      gpus: '13x NVIDIA L40S PCIe across 4 chassis',
+      gpus: '14x NVIDIA L40S PCIe across 4 chassis',
       context: '8,192',
       concurrency: '1,024 (Swarm Concurrency)',
-      sharding: 'TP=1, PP=1, DP=13 (Auto)',
+      sharding: 'TP=1, PP=1, DP=14 (Auto)',
       engine: 'vLLM + Ray Core',
       apc: '50% Cache Ratio',
       promptRatio: '50% Prompt / 50% Gen',
@@ -1298,11 +1298,11 @@ docker run -d --gpus '"device=0"' \\
       mlopsStrategyId: 'canary-release',
     },
     rationale: {
-      silicon: 'In planner-worker architectures the worker swarm, not the planner, drives most of the infrastructure. Each worker call is small and independent, so the 8B model runs at TP=1 and the pool scales purely by replication: the calculator needs 13 L40S GPUs (DP=13, spread over four Cisco C245 chassis) to hold the KV cache for 1,024 concurrent 8k-token workers. The case for L40S is cost per GB of memory, not speed: at the calculator\'s prices 13 L40S cost about as much in GPU capex as 4 H200s would for similar KV capacity, and TP=1 workers never use NVLink, so paying for it buys nothing. H200s would, however, give each worker faster decode.',
-      memory: 'Worker tasks are concise (8k context) with 50% prefix caching (shared role instructions). LLaMA 3.1 8B needs 65,536 bytes of FP8 KV per token, so auto-DP sizes the replica count by KV capacity: each L40S ends up serving ~79 streams with ~32GB of KV beside ~9GB of weights, close to its ~43GB usable limit.',
+      silicon: 'In planner-worker architectures the worker swarm, not the planner, drives most of the infrastructure. Each worker call is small and independent, so the 8B model runs at TP=1 and the pool scales purely by replication: the calculator needs 14 L40S GPUs (DP=14, spread over four Cisco C245 chassis) to hold the KV cache for 1,024 concurrent 8k-token workers while keeping a 5% memory margin. The case for L40S is cost per GB of memory, not speed: at the calculator\'s prices 14 L40S cost less in GPU capex than the 4 H200s that would hold similar KV, and TP=1 workers never use NVLink, so paying for it buys nothing. H200s would, however, give each worker faster decode.',
+      memory: 'Worker tasks are concise (8k context) with 50% prefix caching (shared role instructions). LLaMA 3.1 8B needs 65,536 bytes of FP8 KV per token, so auto-DP sizes the replica count by KV capacity: each L40S ends up serving ~73 streams with ~30GB of KV beside ~9GB of weights.',
       ancillary: 'Orchestration runs on Ray cluster management. Ingress requires an enterprise API Gateway to manage the sudden burst of 1,000+ internal micro-agent requests. Llama Guard 3 8B screens worker traffic on three dedicated GPUs, adding ~0.45s to time-to-first-token per call in the calculator; for purely internal subtasks, guarding only the planner\'s external inputs and final outputs is often enough. Storage uses VAST with a 30-second model load target to support dynamic worker autoscaling. New model versions roll out via a Canary Release validating against 10% of live traffic before full promotion.',
       tradeoff: 'Decouples orchestration into a two-tier hardware strategy: cheap, dense L40S GPUs handle the 1,024-worker swarm, leaving complex planning to an isolated high-end instance.',
-      modelSelection: 'LLaMA 3.1 8B handles high-volume, simple subtasks (summarize a snippet, extract a date, validate an email) well. At ~79 streams per L40S the calculator estimates ~78ms per output token (~13 tokens/s per worker) but ~13,000 tokens/s across the pool: the design deliberately trades per-worker speed for aggregate throughput.',
+      modelSelection: 'LLaMA 3.1 8B handles high-volume, simple subtasks (summarize a snippet, extract a date, validate an email) well. At ~73 streams per L40S the calculator estimates ~74ms per output token (~13 tokens/s per worker) but ~14,000 tokens/s across the pool: the design deliberately trades per-worker speed for aggregate throughput.',
       modelAlternatives: [
         {
           name: 'Alibaba Qwen 2.5 (7B)',
@@ -1353,10 +1353,10 @@ docker run -d --gpus '"device=0"' \\
   --kv-cache-dtype fp8 \\
   --enable-prefix-caching \\
   --max-model-len 8192 \\
-  --max-num-seqs 80 \\
+  --max-num-seqs 74 \\
   --gpu-memory-utilization 0.90 \\
   --port 8000`,
-      notes: 'One instance per L40S (TP=1), thirteen in total (DP=13 as in the calculator). Ray workers call the local instance on each node; bound the planner\'s fan-out to the pool\'s ~1,000-stream capacity.'
+      notes: 'One instance per L40S (TP=1), fourteen in total (DP=14 as in the calculator). Ray workers call the local instance on each node; bound the planner\'s fan-out to the pool\'s ~1,000-stream capacity.'
     }
   },
   'ent-agent-sql-analysis': {
@@ -1370,10 +1370,10 @@ docker run -d --gpus '"device=0"' \\
       model: 'LLaMA 3.3 70B',
       precision: 'FP8 Weights / FP8 KV',
       platform: 'Cisco UCS C885A',
-      gpus: '3x NVIDIA H200 (141GB), 1 chassis',
+      gpus: '2x NVIDIA H200 (141GB), 1 chassis',
       context: '16,384',
       concurrency: '48',
-      sharding: 'TP=1, PP=1, DP=3 (Auto)',
+      sharding: 'TP=2, PP=1, DP=1 (Auto)',
       engine: 'vLLM + KServe',
       apc: '30% Cache Ratio',
       promptRatio: '60% Prompt / 40% Gen',
@@ -1397,10 +1397,10 @@ docker run -d --gpus '"device=0"' \\
       mlopsStrategyId: 'canary-release',
     },
     rationale: {
-      silicon: 'Generating production SQL over 50-table schemas requires 70B-class reasoning to prevent hallucinated joins and syntax errors. The FP8 70B model fits on one H200, so the solver uses TP=1 and three replicas (DP=3) for 48 concurrent analysts -- three GPUs of one Cisco C885A. The calculator estimates ~1.1s to first token and ~32ms per output token; raise TP if analysts need faster responses.',
+      silicon: 'Generating production SQL over 50-table schemas requires 70B-class reasoning to prevent hallucinated joins and syntax errors. The FP8 70B model fits on one H200, but three one-GPU replicas would be needed for 48 analysts; a single TP=2 replica on 2 GPUs stores the weights once and serves all 48 from the freed memory. The calculator estimates ~0.6s to first token and ~30ms per output token.',
       memory: '16k context window comfortably holds DDL table schemas, column foreign-key relationships, and sample query rows. 30% APC ratio caches the enterprise data catalog schema across iterative user query refinements.',
       ancillary: 'Storage uses NetApp AFF with 8+3 erasure coding. Guardrails are disabled because database access is governed strictly by relational database row-level security (RLS) and database permissions rather than LLM text filters. MLOps validation pools are disabled as this internal tool has no live-traffic rollout process.',
-      tradeoff: 'Balances schema context capacity (16k) and 48-stream concurrency against a small three-GPU footprint, accepting TP=1 decode speed.',
+      tradeoff: 'Balances schema context capacity (16k) and 48-stream concurrency against a two-GPU footprint.',
       modelSelection: 'LLaMA 3.3 70B demonstrates deep semantic comprehension of SQL joins, subqueries, dialect specifics (PostgreSQL, Snowflake, BigQuery), and schema ambiguity, preventing costly Cartesian products.',
       modelAlternatives: [
         {
@@ -1448,14 +1448,14 @@ docker run -d --gpus '"device=0"' \\
       commandTitle: 'Production Text-to-SQL Serving Command',
       command: `vllm serve meta-llama/Llama-3.3-70B-Instruct \\
   --quantization fp8 \\
-  --tensor-parallel-size 1 \\
+  --tensor-parallel-size 2 \\
   --kv-cache-dtype fp8 \\
   --enable-prefix-caching \\
   --max-model-len 16384 \\
-  --max-num-seqs 16 \\
+  --max-num-seqs 48 \\
   --gpu-memory-utilization 0.90 \\
   --port 8000`,
-      notes: 'One H200 per replica, three replicas (TP=1, DP=3 as in the calculator). Prefix caching keeps the warehouse schema resident so repeated questions skip its prefill.'
+      notes: 'One TP=2 replica on 2 H200s, matching the calculator. Prefix caching keeps the warehouse schema resident so repeated questions skip its prefill.'
     }
   },
   'neo-frontier-pretrain': {
@@ -1583,10 +1583,10 @@ docker run -d --gpus '"device=0"' \\
       model: 'DeepSeek R1 671B MoE',
       precision: 'FP8 Weights / FP8 KV',
       platform: 'NVIDIA HGX B200',
-      gpus: '456x B200 (57 chassis × 8)',
+      gpus: '512x B200 (64 chassis × 8)',
       context: '32,768',
       concurrency: '4,096 Concurrent Streams',
-      sharding: 'TP=8, PP=1, DP=57 (Auto)',
+      sharding: 'TP=8, PP=1, DP=64 (Auto)',
       engine: 'TensorRT-LLM + Ray',
       apc: '10% Cache Ratio',
       promptRatio: '70% Prompt / 30% Gen',
@@ -1610,9 +1610,9 @@ docker run -d --gpus '"device=0"' \\
       mlopsStrategyId: 'blue-green-cutover',
     },
     rationale: {
-      silicon: 'DeepSeek R1 has 671B total parameters but only 37B active per token. At FP8 all ~671GB of weights must stay resident in HBM. An HGX B200 node offers 8 × 180GB = 1,440GB (~1,296GB usable), so one replica fits in a single 8-GPU chassis at TP=8 with no pipeline parallelism. The calculator then scales to 4,096 streams with 57 replicas (456 GPUs). Replicas do not exchange traffic during inference, which is why a 2:1 oversubscribed fabric is acceptable here when it would not be for training. Note that the calculator shows ~161GB used of ~162GB usable per GPU, so there is essentially no headroom; one or two extra replicas would be prudent.',
+      silicon: 'DeepSeek R1 has 671B total parameters but only 37B active per token. At FP8 all ~671GB of weights must stay resident in HBM. An HGX B200 node offers 8 × 180GB = 1,440GB (~1,296GB usable), so one replica fits in a single 8-GPU chassis at TP=8 with no pipeline parallelism. With the default 5% memory margin the calculator scales to 4,096 streams with 64 replicas (512 GPUs, 64 per replica). Replicas do not exchange traffic during inference, which is why a 2:1 oversubscribed fabric is acceptable here when it would not be for training. At this scale, wide expert parallelism (Sharding tab: spread each replica over 2-4 chassis) frees much more memory per GPU for KV cache and can cut the GPU count substantially, at the cost of all-to-all traffic that needs a non-blocking fabric.',
       memory: 'Multi-Head Latent Attention (MLA) is what makes 4,096 concurrent streams practical. It caches a 512-element compressed latent plus a 64-element positional key per token per layer (576 elements), so DeepSeek R1 needs 35,136 bytes per token at FP8 across 61 layers -- ~4.7x less than LLaMA 70B\'s GQA cache (163,840 bytes). A 32k-token stream therefore needs ~1.2GB of KV instead of ~5.4GB.',
-      ancillary: 'Ingress uses a Global CDN Edge network to terminate TLS and TCP handshakes at edge PoPs close to users worldwide, slashing initial connection overhead. Storage uses WekaFS with a 60-second model-load target so a replaced or rescheduled node is serving again quickly. HA/DR uses Multi-Site Active-Active so the service survives the loss of a whole site. Llama Guard 3 8B screens tenant traffic on its own pool (93 GPUs in the calculator) and adds ~2.5s to time-to-first-token on 23k-token prompts, a large share of the SLA budget for an API product. Model updates use a Blue/Green Cutover, validating a full-scale duplicate pool before an instant traffic flip -- the partial-rollout risk of a canary is unacceptable for a multi-tenant MaaS platform serving thousands of API consumers.',
+      ancillary: 'Ingress uses a Global CDN Edge network to terminate TLS and TCP handshakes at edge PoPs close to users worldwide, slashing initial connection overhead. Storage uses WekaFS with a 60-second model-load target so a replaced or rescheduled node is serving again quickly. HA/DR uses Multi-Site Active-Active so the service survives the loss of a whole site. Llama Guard 3 8B screens tenant traffic on its own pool (96 GPUs in the calculator) and adds ~2.5s to time-to-first-token on 23k-token prompts, a large share of the SLA budget for an API product. Model updates use a Blue/Green Cutover, validating a full-scale duplicate pool before an instant traffic flip -- the partial-rollout risk of a canary is unacceptable for a multi-tenant MaaS platform serving thousands of API consumers.',
       tradeoff: 'Accepts massive cluster VRAM commitment (holding 671B weights per replica) to unlock the low per-token compute and cost of a sparse MoE model.',
       modelSelection: 'DeepSeek R1 / V3 changed open-model serving economics: with 37B of its 671B parameters active per token, it needs roughly a tenth of the per-token compute of a 405B dense model while offering frontier-class reasoning. Its weights are MIT-licensed.',
       modelAlternatives: [
@@ -1664,10 +1664,10 @@ docker run -d --gpus '"device=0"' \\
   --kv-cache-dtype fp8 \\
   --trust-remote-code \\
   --max-model-len 32768 \\
-  --max-num-seqs 72 \\
+  --max-num-seqs 64 \\
   --gpu-memory-utilization 0.90 \\
   --port 8000`,
-      notes: 'One 8x B200 node per replica (TP=8, PP=1); run 57 replicas to match the calculator (4,096 streams ≈ 72 per replica). The preset\'s engine is TensorRT-LLM; the vLLM command is shown because it is shorter, and the sizing is the same.'
+      notes: 'One 8x B200 node per replica (TP=8, PP=1); run 64 replicas to match the calculator (4,096 streams = 64 per replica). The preset\'s engine is TensorRT-LLM; the vLLM command is shown because it is shorter, and the sizing is the same.'
     }
   },
   'neo-llmd-disaggregated': {
@@ -1793,6 +1793,7 @@ const CORE_CONTENT = {
           <li><strong>FP16 / BF16 (16-bit):</strong> 2.0 bytes/parameter. Baseline gold standard for training and unquantized inference.</li>
           <li><strong>FP8 (8-bit, usually E4M3 for inference):</strong> 1.0 byte/parameter. Halves weight memory; for large models the benchmark loss is typically small (often well under a point), but check your own evaluations. Native FP8 Tensor Cores need Hopper, Ada Lovelace (L40S) or Blackwell.</li>
           <li><strong>NVFP4 (NVIDIA Blackwell 4-bit):</strong> 0.5625 bytes/parameter (4-bit values plus one 8-bit scale per block of 16 = 4.5 bits). Native acceleration requires Blackwell.</li>
+          <li><strong>MXFP4 (OCP microscaling 4-bit):</strong> ~0.53 bytes/parameter (4-bit values plus one 8-bit scale per block of 32 = 4.25 bits). The format gpt-oss ships its expert weights in; native on Blackwell and MI355X, emulated through 16-bit math elsewhere.</li>
           <li><strong>INT4 (AWQ / GPTQ):</strong> ~0.53 bytes/parameter (4-bit values plus a 16-bit scale and zero-point per group of 128 ≈ 4.25 bits). Weight-only: activations stay 16-bit, so INT4 mainly saves memory and speeds up memory-bound decode.</li>
         </ul>
         <DecisionCallout title="Unquantized Embedding & LM Head Overhead">
@@ -1837,6 +1838,9 @@ const CORE_CONTENT = {
             This stores only 576 elements per token per layer (61 layers for DeepSeek R1/V3), or 35,136 bytes per token at FP8 -- <strong>~4.7x less KV than a LLaMA 70B-class GQA model</strong> at the same precision.
           </li>
         </ul>
+        <p>
+          Some newer models only attend to a recent window on most layers: Gemma 3 uses a 1,024-token sliding window on five of every six layers, gpt-oss a 128-token window on every other layer, and Llama 4 an 8k chunked window on three of every four. Those layers never cache more than their window, so the calculator counts each one as <span className="font-mono">min(1, window / context)</span> of a layer. At long contexts this cuts KV memory several-fold compared with a full-attention model of the same size.
+        </p>
         <DecisionCallout title="Automatic Prefix Caching (APC)">
           APC reuses KV blocks for identical prompt prefixes. vLLM hashes fixed-size blocks of tokens (each block&apos;s hash covers everything before it), while SGLang organizes the same idea as a radix tree; either way, a system prompt, few-shot examples or shared document shared by many requests is computed and stored <em>once</em>. Reuse only works for an exact prefix match, so put stable content first. The calculator models the APC ratio as the fraction of each prompt that is stored once for all streams; the rest is stored per stream. Reusing a single user&apos;s own chat history does not save memory across users, but it does skip that history&apos;s prefill on later turns, cutting TTFT.
         </DecisionCallout>
@@ -1871,12 +1875,17 @@ const CORE_CONTENT = {
         </p>
         <ol className="list-decimal pl-5 space-y-2 text-sm text-zinc-300">
           <li>Estimates one replica&apos;s base memory: weights + the KV cache for a single full-length stream + activations (for training: weights, gradients, optimizer state and activations).</li>
-          <li>Picks the <strong>smallest</strong> TP from 1, 2, 4, 8 whose GPUs hold that base within 90% of their memory (the usable-memory factor, matching vLLM&apos;s default <span className="font-mono">--gpu-memory-utilization 0.90</span>), stepping down if TP doesn&apos;t divide the query heads (<span className="font-mono">H_q</span>).</li>
+          <li>Finds the <strong>smallest</strong> TP from 1, 2, 4, 8 whose GPUs hold that base within 90% of their memory (the usable-memory factor, matching vLLM&apos;s default <span className="font-mono">--gpu-memory-utilization 0.90</span>) minus the memory headroom margin (default 5%), stepping down if TP doesn&apos;t divide the query heads (<span className="font-mono">H_q</span>).</li>
           <li>If the replica exceeds a whole chassis, sets TP to the chassis size (8) and adds pipeline stages across nodes (<span className="font-mono">PP = ceil(ReplicaMemory / NodeCapacity)</span>, max 8).</li>
           <li>For inference, the memory left on each replica&apos;s GPUs becomes its KV capacity, and DP is the number of replicas needed to hold the KV for all concurrent streams (<span className="font-mono">DP ≈ ceil(RequiredKV / ReplicaKVCapacity)</span>).</li>
+          <li>For inference on NVLink platforms, it then repeats step 4 with every larger in-chassis TP and keeps the layout with the <strong>fewest total GPUs</strong> (ties go to the smaller TP). PCIe-only GPUs keep the smallest TP, because their all-reduces would cross PCIe.</li>
+          <li>If latency targets are on, it searches larger TP and more replicas for the cheapest layout that meets both the time-to-first-token and time-per-output-token targets, or reports the closest layout and why the targets are out of reach.</li>
         </ol>
-        <DecisionCallout title="Why the Solver Usually Picks TP=1">
-          Choosing the smallest TP that fits minimizes GPUs per replica and leaves concurrency to DP, which is why most presets with a 70B FP8 model on 141GB H200s come out at TP=1 with several replicas. The trade-off is latency: TP=4 splits each layer&apos;s work (and weight reads) across four GPUs, cutting time-to-first-token and time-per-output-token roughly 3-4x per stream. Use manual sharding when per-stream latency matters more than GPU count. Two caveats: TP beyond the number of KV heads no longer shrinks the per-GPU KV cache, and on PCIe platforms without NVLink (e.g. L40S) TP all-reduces cross PCIe, so keep TP low there.
+        <DecisionCallout title="Smallest TP vs. Fewest GPUs">
+          The smallest TP that fits is not always the cheapest layout. Each TP=1 replica stores a full copy of the weights, so six one-GPU replicas of a 70B FP8 model hold ~440GB of duplicate weights; two TP=2 replicas hold the same streams on four GPUs because the weights are stored only twice. That is why several presets come out at TP=2 or TP=4 even though the model fits on one H200. Larger TP also cuts latency: TP=4 splits each layer&apos;s work (and weight reads) across four GPUs, cutting time-to-first-token and time-per-output-token roughly 3-4x per stream. Two caveats: TP beyond the number of KV heads no longer shrinks the per-GPU KV cache, and on PCIe platforms without NVLink (e.g. L40S) TP all-reduces cross PCIe, so the solver keeps TP low there.
+        </DecisionCallout>
+        <DecisionCallout title="Wide Expert Parallelism for MoE Models">
+          For MoE models you can spread each replica across several chassis. Attention and shared weights stay tensor-parallel inside each chassis, each chassis serves its own share of the streams, and the routed experts are divided across every GPU in the group. Per-GPU weight memory falls sharply, leaving room for KV cache, and models larger than one chassis (e.g. Kimi K2 on H200) no longer need pipeline stages. The cost is an all-to-all exchange at every MoE layer, which the calculator adds to time per output token and which needs a non-blocking fabric.
         </DecisionCallout>
         <DecisionCallout title="Pipeline Bubble Fraction Warning">
           When PP &gt; 1, pipeline stages must fill and drain, leaving GPUs idle: Bubble ≈ (PP − 1) / (m + PP − 1), where m is the number of micro-batches (or concurrent requests) in flight. The calculator warns when concurrency is below 4 × PP.
@@ -2001,7 +2010,7 @@ const CORE_CONTENT = {
         </div>
         <p>
           This is the sustained bandwidth to page conversation KV blocks out to storage and back without slowing token generation.
-          The calculator reserves twice the cluster&apos;s total KV cache as offload capacity. Engines implement offload through connectors such as LMCache (vLLM) or tiered KV caches in TensorRT-LLM and SGLang.
+          Offload also changes GPU sizing: when many open sessions sit idle (an agent waiting on a tool, a user reading), only the share actively generating needs its KV on the GPU. The Storage tab sets that share; GPUs are sized for the active sessions, and the offload tier holds every session&apos;s KV plus the same again as paging room. Engines implement offload through connectors such as LMCache (vLLM) or tiered KV caches in TensorRT-LLM and SGLang.
         </p>
 
         <h3 className="text-sm font-semibold text-zinc-100 mt-6 mb-2">3. Storage Durability Overheads: Erasure Coding vs 3x Replication</h3>
@@ -2084,6 +2093,22 @@ const CORE_CONTENT = {
                 <td className="p-3 text-zinc-400">Frontier pretraining, NVFP4 inference, MoE models</td>
               </tr>
               <tr>
+                <td className="p-3 font-semibold text-zinc-200">NVIDIA B300 (Blackwell Ultra)</td>
+                <td className="p-3 text-zinc-300">288 GB HBM3e</td>
+                <td className="p-3 text-zinc-300">8.00 TB/s</td>
+                <td className="p-3 text-zinc-400">1,800 GB/s NVLink 5</td>
+                <td className="p-3 text-zinc-400">~1,100W</td>
+                <td className="p-3 text-zinc-400">Reasoning inference, trillion-parameter MoE serving (~1.5x B200 FP4)</td>
+              </tr>
+              <tr>
+                <td className="p-3 font-semibold text-zinc-200">NVIDIA RTX PRO 6000 Blackwell Server</td>
+                <td className="p-3 text-zinc-300">96 GB GDDR7</td>
+                <td className="p-3 text-zinc-300">1.6 TB/s</td>
+                <td className="p-3 text-zinc-400">PCIe Gen5 x16, no NVLink</td>
+                <td className="p-3 text-zinc-400">600W</td>
+                <td className="p-3 text-zinc-400">Air-cooled enterprise inference where each model fits on one card; L40S successor</td>
+              </tr>
+              <tr>
                 <td className="p-3 font-semibold text-zinc-200">NVIDIA A100 SXM4</td>
                 <td className="p-3 text-zinc-300">80 GB HBM2e</td>
                 <td className="p-3 text-zinc-300">2.04 TB/s</td>
@@ -2113,7 +2138,23 @@ const CORE_CONTENT = {
                 <td className="p-3 text-zinc-300">5.30 TB/s</td>
                 <td className="p-3 text-zinc-400">896 GB/s Infinity Fabric</td>
                 <td className="p-3 text-zinc-400">750W</td>
-                <td className="p-3 text-zinc-400">Single-GPU 70B FP16 &amp; large-model inference (not in this calculator&apos;s GPU catalog)</td>
+                <td className="p-3 text-zinc-400">Single-GPU 70B FP16 &amp; large-model inference (ROCm: vLLM / SGLang)</td>
+              </tr>
+              <tr>
+                <td className="p-3 font-semibold text-zinc-200">AMD Instinct MI325X</td>
+                <td className="p-3 text-zinc-300">256 GB HBM3e</td>
+                <td className="p-3 text-zinc-300">6.0 TB/s</td>
+                <td className="p-3 text-zinc-400">896 GB/s Infinity Fabric</td>
+                <td className="p-3 text-zinc-400">1000W</td>
+                <td className="p-3 text-zinc-400">MI300X compute with more KV capacity per GPU</td>
+              </tr>
+              <tr>
+                <td className="p-3 font-semibold text-zinc-200">AMD Instinct MI355X</td>
+                <td className="p-3 text-zinc-300">288 GB HBM3e</td>
+                <td className="p-3 text-zinc-300">8.0 TB/s</td>
+                <td className="p-3 text-zinc-400">~1,075 GB/s Infinity Fabric</td>
+                <td className="p-3 text-zinc-400">1400W (liquid)</td>
+                <td className="p-3 text-zinc-400">Native FP4/FP6 inference and training</td>
               </tr>
             </tbody>
           </table>
@@ -2172,20 +2213,21 @@ const CORE_CONTENT = {
           <li><strong>Effective $/GPU-hour</strong> = TCO ÷ (GPUs × 8,760 × years), assuming the hardware is available around the clock.</li>
           <li><strong>Cloud comparison</strong> = GPUs × your dedicated-cloud $/GPU-hour × 8,760 × years -- renting the same GPU count, not paying per token.</li>
           <li><strong>Break-even</strong> = CapEx ÷ (monthly cloud rental − monthly on-prem OpEx). If on-prem OpEx alone exceeds the rental, there is no break-even.</li>
+          <li><strong>Cost per 1M tokens</strong> (inference) at a utilization you set, and the same requests priced on a per-token API -- see below.</li>
         </ul>
         <h3 className="text-sm font-semibold text-zinc-100 mt-6 mb-2">4. Unit Economics: Cost per 1M Tokens</h3>
         <p>
-          The calculator does not compute this directly, because it depends on how busy the cluster really is. To compare against per-token cloud APIs, convert monthly cost into an effective <strong>cost per 1 million tokens</strong> yourself:
+          The Cost &amp; TCO tab converts monthly cost into an effective <strong>cost per 1 million tokens</strong> at a utilization you choose (the share of hours the cluster runs at its sized load). It compares the serving cluster alone -- GPUs, fabric, power, support and licensing -- because RAG, guardrails, storage and HA/DR are usually still needed alongside an API; the fully loaded figure is shown as well. Reasoning tokens count as output tokens, as API providers bill them:
         </p>
         <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4 font-mono text-xs text-sky-300">
           Cost_per_1M_Tokens = [ Fully_Loaded_Monthly_TCO / (Monthly_Tokens_Generated) ] × 1,000,000
         </div>
         <p>
-          Where <span className="font-mono text-sky-400">Monthly_Tokens_Generated = Cluster_Tok_Per_Sec × 3,600 × 730 × Duty_Cycle</span>, using the cluster throughput from the calculator&apos;s inference performance profile and the fraction of hours the cluster is actually busy.
+          Where <span className="font-mono text-sky-400">Monthly_Tokens_Generated = Cluster_Tok_Per_Sec × 3,600 × 730 × Duty_Cycle</span>, using the cluster throughput from the calculator&apos;s inference performance profile and the utilization you set. The break-even utilization is where owning and the API cost the same for the same requests; above 100% the API is cheaper at any load.
         </p>
 
         <DecisionCallout title="The Public Cloud Break-Even Crossover">
-          Per-token APIs win for light or bursty traffic: you pay nothing while idle, whereas owned hardware costs the same whether it is busy or not. As sustained utilization rises, the fixed cost is spread over more tokens and on-prem cost per token falls roughly in proportion to the duty cycle, so there is a crossover point. Where it lands depends on your model size, throughput, hardware prices and the API price you would otherwise pay, and API prices for open models have fallen quickly -- so compute it with current numbers rather than rules of thumb. On-prem also brings data control and no per-token markup (raw egress bandwidth still costs money; see the Ingress &amp; Edge tab).
+          Per-token APIs win for light or bursty traffic: you pay nothing while idle, whereas owned hardware costs the same whether it is busy or not. As sustained utilization rises, the fixed cost is spread over more tokens and on-prem cost per token falls roughly in proportion to the duty cycle, so there is a crossover point. Where it lands depends on your model size, throughput, hardware prices and the API price you would otherwise pay, and API prices for open models have fallen quickly -- so enter current prices rather than relying on rules of thumb. On-prem also brings data control and no per-token markup (raw egress bandwidth still costs money; see the Ingress &amp; Edge tab).
         </DecisionCallout>
       </div>
     )
@@ -2504,7 +2546,7 @@ export function GlossaryPage({ onBack }) {
                     <li><strong>Ancillary Infrastructure:</strong> How RAG vector databases, safety guardrails, storage tiers, and HA/DR are integrated.</li>
                     <li><strong>Model Selection &amp; Alternatives:</strong> In-depth comparative evaluation of the primary model vs. 2–3 factual alternatives with parameter metrics and trade-offs.</li>
                     <li><strong>Binding Constraints &amp; Trade-offs:</strong> What engineering compromises were made for that workload.</li>
-                    <li><strong>Calculator-consistent figures:</strong> GPU counts, sharding, memory and latency figures quoted on preset pages are what the calculator produces when that preset is loaded. The auto-solver picks the smallest tensor-parallel degree that fits and scales concurrency with replicas, so many presets run at TP=1 -- see <em>Sharding &amp; Auto-Parallelism Logic</em> for the trade-off.</li>
+                    <li><strong>Calculator-consistent figures:</strong> GPU counts, sharding, memory and latency figures quoted on preset pages are what the calculator produces when that preset is loaded. The auto-solver chooses the layout with the fewest GPUs (which is often TP=2 or TP=4 rather than the smallest TP that fits) and can optionally size for latency targets -- see <em>Sharding &amp; Auto-Parallelism Logic</em>.</li>
                     <li><strong>Point in time:</strong> Model benchmarks, licenses and engine flags change quickly. Figures cite the vendor&apos;s own reports where given; confirm license terms and CLI flags against current documentation before deploying.</li>
                   </ul>
                 </div>

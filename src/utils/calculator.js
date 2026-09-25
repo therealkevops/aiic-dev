@@ -822,7 +822,10 @@ export function calculateInfra(config) {
   const usableGpuCapacityGb      = gpuCapacityGb * usableFactor;
   const memoryUtilizationPercent = Math.min(100, Math.round((perGpuTotalUsedGb / gpuCapacityGb) * 100));
   const isOOM     = isLlmd ? (prefillIsOOM || decodeIsOOM) : (perGpuTotalUsedGb > usableGpuCapacityGb);
-  const headroomGb = usableGpuCapacityGb - perGpuTotalUsedGb;
+  // Free memory is reported against the runtime limit (90% of physical), so the headroom margin
+  // the sizing deliberately left shows up as free space rather than being hidden.
+  const physicalUsableGb = gpuCapacityGb * VRAM_USABLE_FACTOR;
+  const headroomGb = physicalUsableGb - perGpuTotalUsedGb;
 
   // ── 3. Validation Warnings & Architecture Checks ───────────────────────────
   const warnings        = [];
@@ -884,8 +887,8 @@ export function calculateInfra(config) {
   }
 
   // Near-limit notice: fits, but with almost nothing spare for longer-than-planned prompts.
-  if (!isOOM && !isLlmd && workloadType === 'inference' && headroomGb < 0.03 * usableGpuCapacityGb) {
-    warnings.push(`Tight fit: only ${headroomGb.toFixed(1)} GB of ${usableGpuCapacityGb.toFixed(0)} GB usable per GPU is left. Longer prompts or a traffic spike will cause preemptions; raise the memory headroom margin, add a replica, or use more TP.`);
+  if (!isOOM && !isLlmd && workloadType === 'inference' && headroomGb < 0.03 * physicalUsableGb) {
+    warnings.push(`Tight fit: only ${headroomGb.toFixed(1)} GB of ${physicalUsableGb.toFixed(0)} GB usable per GPU is left. Longer prompts or a traffic spike will cause preemptions; raise the memory headroom margin, add a replica, or use more TP.`);
   }
 
   if (isOOM && !isLlmd) {

@@ -322,6 +322,7 @@ export function Tag({ tone = 'neutral', children, mono = true }) {
     accent: 'bg-sky-950 text-sky-300 border-sky-800/60',
     good: 'bg-emerald-950 text-emerald-300 border-emerald-800/60',
     warn: 'bg-amber-950 text-amber-300 border-amber-800/60',
+    danger: 'bg-red-950 text-red-300 border-red-800/60',
   };
   return (
     <span className={`text-[10.5px] px-1.5 py-0.5 rounded border ${mono ? 'font-mono' : ''} ${tones[tone]}`}>

@@ -2206,20 +2206,29 @@ const STATUS_STYLES = {
 function ComplianceChecklist({ facts }) {
   const results = evaluateControlDomains(facts);
   return (
-    <div className="grid grid-cols-1 gap-2.5">
-      {results.map((r) => {
-        const domain = CONTROL_DOMAINS.find(d => d.id === r.domainId);
-        const style = STATUS_STYLES[r.status] || STATUS_STYLES[STATUS.GAP];
-        return (
-          <div key={r.domainId} className="p-3.5 bg-zinc-900 border border-zinc-800 rounded-xl text-xs space-y-1.5">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <span className="font-semibold text-zinc-200 text-sm">{domain?.name || r.domainId}</span>
-              <Tag tone={style.tone} mono={false}>{style.label}</Tag>
-            </div>
-            <p className="text-zinc-400 leading-relaxed">{r.note}</p>
-          </div>
-        );
-      })}
+    <div className="overflow-x-auto rounded-lg border border-zinc-800">
+      <table className="w-full text-xs text-left border-collapse">
+        <thead className="bg-zinc-900 text-zinc-400 uppercase text-[11px] tracking-wide">
+          <tr>
+            <th className="p-3">Control Domain</th>
+            <th className="p-3">Status</th>
+            <th className="p-3">Note</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-zinc-800/70">
+          {results.map((r) => {
+            const domain = CONTROL_DOMAINS.find(d => d.id === r.domainId);
+            const style = STATUS_STYLES[r.status] || STATUS_STYLES[STATUS.GAP];
+            return (
+              <tr key={r.domainId}>
+                <td className="p-3 align-top font-semibold text-zinc-200 whitespace-nowrap">{domain?.name || r.domainId}</td>
+                <td className="p-3 align-top"><Tag tone={style.tone} mono={false}>{style.label}</Tag></td>
+                <td className="p-3 align-top text-zinc-400">{r.note}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
     </div>
   );
 }
@@ -2580,23 +2589,28 @@ export function GlossaryPage({ onBack }) {
                           {preset.rationale.modelAlternatives && (
                             <div className="space-y-2 mt-3">
                               <SectionLabel>Architectural Alternatives Comparison</SectionLabel>
-                              <div className="grid grid-cols-1 gap-3">
-                                {preset.rationale.modelAlternatives.map((alt, idx) => (
-                                  <div key={idx} className="p-4 bg-zinc-900 border border-zinc-800 rounded-xl text-xs space-y-2">
-                                    <div className="flex flex-wrap items-center justify-between gap-2 pb-1 border-b border-zinc-800/60">
-                                      <strong className="text-sky-300 font-semibold text-sm">{alt.name}</strong>
-                                      <span className="font-mono text-zinc-400 text-[11px] bg-zinc-800/80 px-2 py-0.5 rounded">{alt.specs}</span>
-                                    </div>
-                                    <div>
-                                      <strong className="text-emerald-400 font-medium">When to choose: </strong>
-                                      <span className="text-zinc-300 leading-relaxed">{alt.pros}</span>
-                                    </div>
-                                    <div>
-                                      <strong className="text-amber-400 font-medium">Trade-off vs Default: </strong>
-                                      <span className="text-zinc-400 leading-relaxed">{alt.cons}</span>
-                                    </div>
-                                  </div>
-                                ))}
+                              <div className="overflow-x-auto rounded-lg border border-zinc-800">
+                                <table className="w-full text-xs text-left border-collapse">
+                                  <thead className="bg-zinc-900 text-zinc-400 uppercase text-[11px] tracking-wide">
+                                    <tr>
+                                      <th className="p-3">Model</th>
+                                      <th className="p-3">When to Choose</th>
+                                      <th className="p-3">Trade-off vs Default</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody className="divide-y divide-zinc-800/70">
+                                    {preset.rationale.modelAlternatives.map((alt, idx) => (
+                                      <tr key={idx}>
+                                        <td className="p-3 align-top">
+                                          <span className="font-semibold text-zinc-200 block">{alt.name}</span>
+                                          <span className="font-mono text-zinc-500 text-[11px]">{alt.specs}</span>
+                                        </td>
+                                        <td className="p-3 align-top text-zinc-400">{alt.pros}</td>
+                                        <td className="p-3 align-top text-zinc-400">{alt.cons}</td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
                               </div>
                             </div>
                           )}
@@ -2624,12 +2638,10 @@ export function GlossaryPage({ onBack }) {
                               <AlertTriangle className="w-4 h-4 text-amber-400" />
                               6. Common Anti-Patterns &amp; &quot;What Breaks First&quot;
                             </h3>
-                            <div className="grid grid-cols-1 gap-3">
+                            <div className="divide-y divide-zinc-800/70 border-t border-b border-zinc-800/70">
                               {preset.antiPatterns.map((item, idx) => (
-                                <div key={idx} className="p-4 bg-amber-950/40 border border-amber-800 rounded-xl text-xs space-y-1.5">
-                                  <div className="flex items-center gap-2">
-                                    <span className="font-semibold text-amber-300 text-sm">{item.title}</span>
-                                  </div>
+                                <div key={idx} className="py-3 pl-3 border-l-2 border-amber-700/60 text-xs space-y-1">
+                                  <span className="font-semibold text-amber-400 text-sm block">{item.title}</span>
                                   <p className="text-zinc-300 leading-relaxed"><strong className="text-zinc-400">The Anti-Pattern: </strong>{item.mistake}</p>
                                   <p className="text-zinc-400 leading-relaxed"><strong className="text-amber-400">The Failure Mode: </strong>{item.impact}</p>
                                   <p className="text-zinc-300 leading-relaxed"><strong className="text-emerald-400">Production Fix: </strong>{item.remediation}</p>

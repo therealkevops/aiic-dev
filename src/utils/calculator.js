@@ -1373,6 +1373,10 @@ export function calculateCost(config) {
     // pool's capex/power, same additive pattern as RAG/guardrails/ingress/HA-DR.
     mlopsComputeCapexUsd = 0,
     mlopsItPowerKw = 0,
+    // Training spare node capacity overlay (see calculateTrainingRedundancy()): standing
+    // spare/hot-standby nodes for a training run, same additive pattern as the others.
+    trainingRedundancyComputeCapexUsd = 0,
+    trainingRedundancyItPowerKw = 0,
   } = config;
 
   const isLlmd = !!infraResults.memory.llmd;
@@ -1395,11 +1399,11 @@ export function calculateCost(config) {
 
   const networkHardwareCapexUsd = computeCapexUsd * (networkHardwareAdderPct / 100);
   const storageCapexUsd = storageResults ? (storageResults.achievedCapacityTb * storageUsdPerTbRaw) : 0;
-  const totalCapexUsd = computeCapexUsd + networkHardwareCapexUsd + storageCapexUsd + ragComputeCapexUsd + guardrailsComputeCapexUsd + ingressComputeCapexUsd + haDrComputeCapexUsd + mlopsComputeCapexUsd;
+  const totalCapexUsd = computeCapexUsd + networkHardwareCapexUsd + storageCapexUsd + ragComputeCapexUsd + guardrailsComputeCapexUsd + ingressComputeCapexUsd + haDrComputeCapexUsd + mlopsComputeCapexUsd + trainingRedundancyComputeCapexUsd;
 
   const hoursPerYear = 24 * 365;
   const baseItPowerKw = itPowerKwOverride != null ? itPowerKwOverride : infraResults.facility.totalItPowerKw;
-  const billedItPowerKw = baseItPowerKw + ragItPowerKw + guardrailsItPowerKw + ingressItPowerKw + haDrItPowerKw + mlopsItPowerKw;
+  const billedItPowerKw = baseItPowerKw + ragItPowerKw + guardrailsItPowerKw + ingressItPowerKw + haDrItPowerKw + mlopsItPowerKw + trainingRedundancyItPowerKw;
   // Colo bills $/kW/month on IT load (the colo provider's own facility overhead/cooling is
   // baked into their rate); an owned DC bills the utility $/kWh on the PUE-adjusted total load.
   // The MIG IT-power override has no PUE figure of its own, so the owned-DC branch applies the
@@ -1410,7 +1414,7 @@ export function calculateCost(config) {
     ? infraResults.facility.totalFacilityPowerKw / infraResults.facility.totalItPowerKw
     : 1;
   const baseFacilityPowerKw = itPowerKwOverride != null ? baseItPowerKw * impliedPue : infraResults.facility.totalFacilityPowerKw;
-  const billedFacilityPowerKw = baseFacilityPowerKw + ((ragItPowerKw + guardrailsItPowerKw + ingressItPowerKw + haDrItPowerKw + mlopsItPowerKw) * impliedPue);
+  const billedFacilityPowerKw = baseFacilityPowerKw + ((ragItPowerKw + guardrailsItPowerKw + ingressItPowerKw + haDrItPowerKw + mlopsItPowerKw + trainingRedundancyItPowerKw) * impliedPue);
   const annualPowerCostUsd = useColo
     ? billedItPowerKw * coloUsdPerKwPerMonth * 12
     : billedFacilityPowerKw * hoursPerYear * powerUsdPerKwh;
@@ -1448,6 +1452,7 @@ export function calculateCost(config) {
     ingressCapexUsd: ingressComputeCapexUsd,
     haDrCapexUsd: haDrComputeCapexUsd,
     mlopsCapexUsd: mlopsComputeCapexUsd,
+    trainingRedundancyCapexUsd: trainingRedundancyComputeCapexUsd,
     ingressAnnualOpexUsd,
     totalCapexUsd,
     annualPowerCostUsd,
@@ -2082,6 +2087,58 @@ export function calculateHaDr(config) {
     incrementalStorageCapexUsd,
     haDrComputeCapexUsd,
     haDrItPowerKw,
+  };
+}
+
+// ─── Training Spare Node Capacity ───────────────────────────────────────────────────────────────
+/**
+ * Sizes standing spare/hot-standby compute nodes for a training run -- the compute-level
+ * redundancy that actually matters for training, as distinct from HA/DR's live-replica
+ * redundancy (which applies only to inference; see calculateHaDr()). At hyperscale (hundreds to
+ * thousands of GPUs, weeks-to-months-long jobs), hardware failures are frequent enough and
+ * procurement lead times long enough that keeping a small buffer of already-racked, powered
+ * spare nodes on the floor -- ready to swap in for a failed node without stalling the run -- is
+ * standard practice; at small scale it isn't (a support contract's RMA turnaround is fine when a
+ * job is hours-to-days long). Training's other resilience mechanism, checkpoint/resume, is
+ * already modeled in calculateStorage() and is unaffected by this overlay. Same additive capex/
+ * power pattern as HA/DR/RAG/guardrails/ingress/MLOps, feeding into calculateCost().
+ */
+export function calculateTrainingRedundancy(config) {
+  const {
+    enabled = false,
+    infraResults,
+    spareNodePct = 0, // 0-10%: spare/hot-standby nodes as a percentage of the training cluster's own node count
+    gpuUnitPriceUsd = 0,
+  } = config;
+
+  if (!enabled) {
+    return { enabled: false, eligible: false, reason: "Training spare node capacity is disabled." };
+  }
+
+  if (infraResults.workloadType !== "training") {
+    return { enabled: true, eligible: false, reason: "Spare node capacity applies to training workloads -- inference resilience is a live-replica concern (see HA/DR)." };
+  }
+
+  const baseNodes = infraResults.nodes;
+  const gpusPerNode = baseNodes > 0 ? infraResults.gpusAllocated / baseNodes : 0;
+  const baseItPowerKwPerNode = baseNodes > 0 ? infraResults.facility.chassisPowerKw / baseNodes : 0;
+
+  const spareNodeCount = Math.round(baseNodes * (Math.max(0, spareNodePct) / 100));
+  const spareGpuCount = spareNodeCount * gpusPerNode;
+  const spareComputeCapexUsd = spareGpuCount * gpuUnitPriceUsd;
+  const spareItPowerKw = spareNodeCount * baseItPowerKwPerNode;
+
+  return {
+    enabled: true,
+    eligible: true,
+    reason: null,
+    baseNodes,
+    gpusPerNode,
+    spareNodePct: Math.max(0, spareNodePct),
+    spareNodeCount,
+    spareGpuCount,
+    spareComputeCapexUsd,
+    spareItPowerKw,
   };
 }
 

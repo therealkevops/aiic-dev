@@ -870,6 +870,7 @@ ${workloadType === 'inference' && throughput ? `
         <div className="flex items-center gap-1.5 shrink-0">
           <Wand2 className="w-3.5 h-3.5 text-sky-400 hidden sm:block" />
           <select
+            data-testid="preset-select"
             value={selectedPresetId}
             onChange={(e) => applyPreset(e.target.value)}
             className="bg-zinc-950 border border-zinc-700 rounded-lg pl-2.5 pr-2 py-1.5 text-xs text-white focus:outline-none focus:border-sky-500 max-w-[220px]"
@@ -905,19 +906,19 @@ ${workloadType === 'inference' && throughput ? `
           </div>
           <div className="px-3 py-1 bg-zinc-950/80 text-center">
             <div className="text-zinc-500 uppercase tracking-wider text-[9px]">GPUs</div>
-            <div className="text-xs font-semibold text-sky-400 font-mono">{results.totalGpus}</div>
+            <div data-testid="kpi-gpus" className="text-xs font-semibold text-sky-400 font-mono">{results.totalGpus}</div>
           </div>
           <div className="px-3 py-1 bg-zinc-950/80 text-center">
             <div className="text-zinc-500 uppercase tracking-wider text-[9px]">Nodes</div>
-            <div className="text-xs font-semibold text-sky-400 font-mono">{results.nodes}</div>
+            <div data-testid="kpi-nodes" className="text-xs font-semibold text-sky-400 font-mono">{results.nodes}</div>
           </div>
           <div className="px-3 py-1 bg-zinc-950/80 text-center">
             <div className="text-zinc-500 uppercase tracking-wider text-[9px]">IT Power</div>
-            <div className="text-xs font-semibold text-amber-400 font-mono">{facility.totalItPowerKw.toFixed(1)} kW</div>
+            <div data-testid="kpi-power" className="text-xs font-semibold text-amber-400 font-mono">{facility.totalItPowerKw.toFixed(1)} kW</div>
           </div>
           <div className="px-3 py-1 bg-zinc-950/80 text-center">
             <div className="text-zinc-500 uppercase tracking-wider text-[9px]">Status</div>
-            <div className={`text-xs font-semibold font-mono ${memory.isOOM ? 'text-amber-400' : 'text-emerald-400'}`}>
+            <div data-testid="kpi-status" className={`text-xs font-semibold font-mono ${memory.isOOM ? 'text-amber-400' : 'text-emerald-400'}`}>
               {memory.isOOM ? 'OOM' : 'Fits'}
             </div>
           </div>
@@ -941,6 +942,7 @@ ${workloadType === 'inference' && throughput ? `
                 <button
                   key={t.id}
                   type="button"
+                  data-testid={`nav-${t.id}`}
                   onClick={() => setActiveInputTab(t.id)}
                   className={`w-full text-left px-2 py-1 rounded-lg border transition cursor-pointer flex items-center gap-2 ${
                     active
@@ -970,6 +972,7 @@ ${workloadType === 'inference' && throughput ? `
                 <button
                   key={t.id}
                   type="button"
+                  data-testid={`nav-${t.id}`}
                   onClick={() => setActiveInputTab(t.id)}
                   className={`w-full text-left px-2 py-1 rounded-lg border transition cursor-pointer flex items-center gap-2 ${
                     active
@@ -1027,7 +1030,7 @@ ${workloadType === 'inference' && throughput ? `
         </nav>
 
         {/* PANE 2: Central Configuration Variables Pane (Independently Scrollable) */}
-        <main className="flex-1 min-w-[380px] overflow-y-auto p-4 md:p-6 bg-zinc-950/70 border-r border-zinc-800 space-y-4">
+        <main data-testid="config-pane" className="flex-1 min-w-[380px] overflow-y-auto p-4 md:p-6 bg-zinc-950/70 border-r border-zinc-800 space-y-4">
 
           {/* 1. Workload Mode & Model */}
           {activeInputTab === 'workload' && (
@@ -3017,7 +3020,7 @@ ${workloadType === 'inference' && throughput ? `
         </main>
 
         {/* PANE 3: Right Results Pane (Independently Scrollable) */}
-        <aside className="w-[44%] xl:w-[42%] min-w-[420px] max-w-[760px] shrink-0 overflow-y-auto p-4 md:p-6 bg-zinc-900/30 space-y-4">
+        <aside data-testid="results-pane" className="w-[44%] xl:w-[42%] min-w-[420px] max-w-[760px] shrink-0 overflow-y-auto p-4 md:p-6 bg-zinc-900/30 space-y-4">
 
           {/* Status Banner */}
           {isLlmd ? (

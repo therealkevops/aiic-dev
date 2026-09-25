@@ -9,7 +9,7 @@ export function StorageTab({ ctx }) {
     checkpointRetentionCount, checkpointTargetWriteTimeSec, corpusSizeGb, datasetSizeTb, enableKvOffload, modelRepoTargetLoadTimeSec,
     modelRepoVersionCount, selectedDurabilitySchemeId, selectedStorageTierId, setCheckpointRetentionCount, setCheckpointTargetWriteTimeSec, setCorpusSizeGb,
     setDatasetSizeTb, setEnableKvOffload, setModelRepoTargetLoadTimeSec, setModelRepoVersionCount, setSelectedDurabilitySchemeId, setSelectedStorageTierId,
-    storage, workloadType,
+    storage, workloadType, kvActiveSessionPct, setKvActiveSessionPct, workloadShape,
   } = ctx;
   return (
     <>
@@ -131,6 +131,23 @@ export function StorageTab({ ctx }) {
               checked={enableKvOffload}
               onChange={setEnableKvOffload}
             />
+            {enableKvOffload && (
+              <SliderField
+                label="Sessions actively generating at once:"
+                valueLabel={`${kvActiveSessionPct}% (${workloadShape.gpuResidentSessions.toLocaleString()} of ${workloadShape.totalSessions.toLocaleString()})`}
+                min="10" max="100" step="5"
+                value={kvActiveSessionPct}
+                onChange={(e) => setKvActiveSessionPct(Number(e.target.value))}
+                marks={['10% (mostly idle agents / readers)', '100% (all active)']}
+                helper={
+                  <InfoHelper
+                    title="Active vs. Offloaded Sessions"
+                    text="Open sessions that are waiting (an agent running a tool, a user reading the last answer) don't need their KV cache on the GPU. With offload, their KV moves to CPU memory or NVMe and returns when they resume, so GPUs are sized only for the sessions generating right now."
+                    whyItMatters="For agent and chat workloads where many sessions sit idle, this can cut GPU count substantially. The offload tier must then hold every session's KV and page it back fast enough; its size and throughput appear in the storage breakdown."
+                  />
+                }
+              />
+            )}
           </>
         )}
 

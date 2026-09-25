@@ -22,6 +22,11 @@ export const DEFAULT_CONFIG = {
   promptTokenRatio: 0.8, // 0.8 = 80% prompt / 20% gen
   contextLength: 16384,
   concurrency: 8,
+  reasoningTokensPerOutputToken: 0, // hidden thinking tokens per visible output token (reasoning models)
+  requestMixEnabled: false, // size KV for a mix of short and full-length requests
+  shortRequestPct: 70, // share of requests that are short
+  shortRequestTokens: 2048, // length of a short request (prompt + visible output)
+  kvActiveSessionPct: 100, // with KV offload on: share of sessions actively generating (rest offloaded)
   microBatchSize: 2, // training micro-batch
   pue: 1.35,
   trainingType: 'pretrain_sft', // 'pretrain_sft' | 'lora'
@@ -104,6 +109,11 @@ const PRESET_FALLBACKS = {
   oversubscriptionRatio: 1,
   memoryHeadroomPct: 5,
   expertParallelNodes: 1,
+  reasoningTokensPerOutputToken: 0,
+  requestMixEnabled: false,
+  shortRequestPct: 70,
+  shortRequestTokens: 2048,
+  kvActiveSessionPct: 100,
   latencyTargetsEnabled: false,
   targetTtftSec: 2,
   targetTpotMs: 50,

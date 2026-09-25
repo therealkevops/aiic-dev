@@ -19,6 +19,42 @@ import {
   calculateTrainingRedundancy, calculateMlops, recommendSharding,
 } from './calculator.js';
 
+/**
+ * Turns the workload inputs into what the GPUs actually hold and process:
+ *  - reasoning models generate hidden "thinking" tokens on top of the visible answer, which
+ *    lengthen every sequence (KV cache) and every response (decode time);
+ *  - a request-length mix lowers the mean sequence length the KV cache must hold, while the
+ *    longest request still sets the single-stream fit and time to first token;
+ *  - with KV offload on, idle sessions wait in CPU/NVMe memory, so only the active share of
+ *    sessions needs GPU-resident KV and decode batch slots.
+ */
+export function shapeWorkload(c, maxContextLength) {
+  const window = Math.min(c.contextLength, maxContextLength);
+  if (c.workloadType !== 'inference') {
+    return { sequenceTokens: window, promptTokenRatio: c.promptTokenRatio, avgSequenceTokens: null, gpuResidentSessions: c.concurrency, totalSessions: c.concurrency, activeFraction: 1, thinkingTokens: 0, visibleOutputTokens: 0, promptTokens: 0, clamped: false };
+  }
+  const promptTokens = Math.round(window * c.promptTokenRatio);
+  const visibleOutputTokens = window - promptTokens;
+  const thinkingTokens = Math.round(visibleOutputTokens * Math.max(0, Number(c.reasoningTokensPerOutputToken) || 0));
+  const requested = promptTokens + visibleOutputTokens + thinkingTokens;
+  const sequenceTokens = Math.min(requested, maxContextLength);
+  // Unchanged when there are no reasoning tokens, so non-reasoning sizing is exactly as entered.
+  const promptTokenRatio = requested === window ? c.promptTokenRatio : Math.min(0.99, promptTokens / sequenceTokens);
+  let avgSequenceTokens = null;
+  if (c.requestMixEnabled) {
+    const shortShare = Math.min(1, Math.max(0, (Number(c.shortRequestPct) || 0) / 100));
+    // Short requests scale by the same reasoning overhead as long ones.
+    const shortTokens = Math.min(sequenceTokens, Math.round((Number(c.shortRequestTokens) || 0) * (requested / window)));
+    avgSequenceTokens = Math.round(shortShare * shortTokens + (1 - shortShare) * sequenceTokens);
+  }
+  const activeFraction = c.enableKvOffload ? Math.min(1, Math.max(0.05, (Number(c.kvActiveSessionPct) || 100) / 100)) : 1;
+  const gpuResidentSessions = Math.max(1, Math.ceil(c.concurrency * activeFraction));
+  return {
+    sequenceTokens, promptTokenRatio, avgSequenceTokens, gpuResidentSessions, totalSessions: c.concurrency,
+    activeFraction, thinkingTokens, visibleOutputTokens, promptTokens, clamped: requested > maxContextLength,
+  };
+}
+
 /** Resolves the model object, applying custom-model overrides. */
 export function resolveModel(config) {
   const base = MODEL_PRESETS.find(m => m.id === config.selectedModelId) || MODEL_PRESETS[1];
@@ -50,11 +86,14 @@ function computeScenarioCore(config) {
   const secondaryGpu = GPU_CATALOG.find(g => g.id === secondaryPlatform.gpuId) || GPU_CATALOG[0];
   const model = resolveModel(c);
   const maxContextLength = model.maxContextLength || 131072;
-  // App.jsx also clamps the stored value; clamping here keeps the pure pipeline self-consistent.
-  const contextLength = Math.min(c.contextLength, maxContextLength);
   const precision = PRECISION_OPTIONS.find(p => p.id === c.selectedPrecisionId) || PRECISION_OPTIONS[1];
   const protocol = NETWORK_PROTOCOLS.find(p => p.id === c.selectedProtocolId) || NETWORK_PROTOCOLS[0];
-  const effectiveConcurrency = c.workloadType === 'inference' ? c.concurrency : c.microBatchSize;
+  // Reasoning tokens, request-length mix and offloaded idle sessions reshape what the GPUs see.
+  const workloadShape = shapeWorkload(c, maxContextLength);
+  const contextLength = workloadShape.sequenceTokens;
+  const promptTokenRatio = workloadShape.promptTokenRatio;
+  const avgContextLength = workloadShape.avgSequenceTokens;
+  const effectiveConcurrency = c.workloadType === 'inference' ? workloadShape.gpuResidentSessions : c.microBatchSize;
 
   // ── 1. Auto-sharding solver ──────────────────────────────────────────────────
   const autoRecommendation = recommendSharding({
@@ -64,7 +103,8 @@ function computeScenarioCore(config) {
     precision,
     kvPrecision: c.kvPrecision,
     prefixCacheRatio: c.prefixCacheRatio,
-    promptTokenRatio: c.promptTokenRatio,
+    promptTokenRatio,
+    avgContextLength,
     contextLength,
     concurrency: effectiveConcurrency,
     gpu,
@@ -90,7 +130,8 @@ function computeScenarioCore(config) {
     precision,
     kvPrecision: c.kvPrecision,
     prefixCacheRatio: c.prefixCacheRatio,
-    promptTokenRatio: c.promptTokenRatio,
+    promptTokenRatio,
+    avgContextLength,
     contextLength,
     concurrency: effectiveConcurrency,
     gpu,
@@ -136,6 +177,7 @@ function computeScenarioCore(config) {
     modelRepoTargetLoadTimeSec: c.modelRepoTargetLoadTimeSec,
     corpusSizeGb: c.corpusSizeGb,
     enableKvOffload: c.enableKvOffload,
+    kvOffloadActiveFraction: workloadShape.activeFraction,
     durabilityScheme,
   });
 
@@ -288,9 +330,13 @@ function computeScenarioCore(config) {
   if (c.enableNvidiaAiEnterprise && gpu.vendor !== 'NVIDIA') {
     advisories.push('NVIDIA AI Enterprise is licensed for NVIDIA GPUs only; its per-GPU cost is still included in Cost & TCO. Turn it off for an AMD Instinct deployment.');
   }
+  if (workloadShape.clamped) {
+    advisories.push(`Prompt + answer + reasoning tokens (${(workloadShape.promptTokens + workloadShape.visibleOutputTokens + workloadShape.thinkingTokens).toLocaleString()}) exceed ${model.name}'s ${maxContextLength.toLocaleString()}-token window; sequences are capped at the window, so long reasoning chains would be truncated.`);
+  }
   const warnings = [...(results.warnings || []), ...advisories];
 
   return {
+    workloadShape,
     warnings,
     vendor, availablePlatforms, platform, gpu, availableProtocols, secondaryPlatform, secondaryGpu,
     model, maxContextLength, precision, protocol, effectiveConcurrency,

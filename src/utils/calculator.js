@@ -201,7 +201,11 @@ export function recommendSharding(params) {
     // Wide expert parallelism (MoE inference): spread each replica's routed experts across this
     // many chassis, with TP = the chassis size inside each one.
     expertParallelNodes = 1,
+    // Mean tokens per stream when requests vary in length (null = every stream at contextLength).
+    // contextLength stays the per-request maximum (single-stream fit, max-model-len).
+    avgContextLength = null,
   } = params;
+  const meanSeqTokens = avgContextLength ? Math.min(contextLength, Math.max(1, avgContextLength)) : contextLength;
   const epNodes = (workloadType === 'inference' && model.isMoe) ? Math.max(1, Math.floor(expertParallelNodes) || 1) : 1;
 
   const totalParams    = model.id === "custom" ? (Number(customParams) || 32) : model.params;
@@ -393,7 +397,7 @@ export function recommendSharding(params) {
     const effectiveGlobalPrefixTokens = globalPrefixTokens != null
       ? Math.min(promptTokens, Math.max(0, globalPrefixTokens))
       : Math.round(promptTokens * prefixCacheRatio);
-    const privateTokensPerStream = contextLength - effectiveGlobalPrefixTokens;
+    const privateTokensPerStream = Math.max(1, meanSeqTokens - effectiveGlobalPrefixTokens);
     const effectiveTotalTokens = concurrency > 1
       ? (privateTokensPerStream * concurrency) + (effectiveGlobalPrefixTokens * 1)
       : contextLength;
@@ -482,7 +486,9 @@ export function calculateInfra(config) {
     servingConfig = null, // { servingEngine, orchestrator, servingArchitecture, enableChunkedPrefill, enablePrefixCaching }
     memoryHeadroomPct = 0, // extra % of usable memory kept free (see recommendSharding)
     expertParallelNodes = 1, // wide expert parallelism span in chassis (MoE, colocated inference)
+    avgContextLength = null, // mean tokens per stream for a mixed request-length workload (see recommendSharding)
   } = config;
+  const meanSeqTokens = avgContextLength ? Math.min(contextLength, Math.max(1, avgContextLength)) : contextLength;
 
   const totalParams = model.id === "custom" ? (Number(customParams) || 32) : model.params;
   const layers      = model.layers  || 32;
@@ -590,13 +596,13 @@ export function calculateInfra(config) {
 
     // Baseline unoptimized KV cache (standard FP16 with 0% prefix caching)
     const baselineBytesPerTokenSeq = kvBytesPerToken(model, 2.0, contextLength);
-    baselineKvGb = (baselineBytesPerTokenSeq * contextLength * concurrencyPerReplica) / 1e9;
+    baselineKvGb = (baselineBytesPerTokenSeq * meanSeqTokens * concurrencyPerReplica) / 1e9;
 
     // Prefix Caching: Shared prompt tokens stored ONCE in VRAM across streams;
     // unique tokens stored per stream (session reuse tokens are stored per stream).
     // Both counted per replica: prefix caching is a per-instance radix tree, not shared
     // cluster-wide across independent DP replicas.
-    const privateTokensPerStream = contextLength - effectiveGlobalPrefixTokens;
+    const privateTokensPerStream = Math.max(1, meanSeqTokens - effectiveGlobalPrefixTokens);
     const effectiveTotalTokens = concurrencyPerReplica > 1
       ? (privateTokensPerStream * concurrencyPerReplica) + (effectiveGlobalPrefixTokens * 1)
       : contextLength;
@@ -1143,7 +1149,7 @@ export function calculateInfra(config) {
     const decodeTpCount = isLlmd ? decodeTp : tp;
     const decodeDp = replicaDp;
     const C_rep = concurrencyPerReplica;
-    const S_avg = model.avgContextLength || contextLength;
+    const S_avg = meanSeqTokens;
 
     const BW_mem = (targetDecodeGpu.memBandwidthTbps || 4.8) * 1e12; // bytes/s
     const decodePeakDenseFlops = peakDenseFlops(targetDecodeGpu, precision);
@@ -1327,6 +1333,7 @@ export function calculateStorage(config) {
     modelRepoTargetLoadTimeSec = 120,
     corpusSizeGb = 0,
     enableKvOffload = false,
+    kvOffloadActiveFraction = 1, // share of sessions whose KV stays in GPU memory; the rest wait offloaded
     durabilityScheme = null, // one entry from DURABILITY_SCHEMES; null = RF 1.0 (no redundancy modeled -- not recommended)
   } = config;
 
@@ -1373,7 +1380,13 @@ export function calculateStorage(config) {
       // Size the offload tier at 2x the modeled in-VRAM KV footprint to give room for
       // paging beyond what fits on-GPU, and require enough throughput to page at the
       // cluster's aggregate decode token rate.
-      kvOffloadCapacityTb = ((memory.kvCacheTotalGb || 0) * 2) / 1000;
+      // kvCacheTotalGb is per replica; the offload tier serves the whole cluster. It holds every
+      // session's KV (resident ones included, so they can be evicted) plus the same again as
+      // paging room -- 2x the cluster's GPU-resident KV when every session is active.
+      const replicas = Math.max(1, Math.round((totalGpus || 1) / (infraResults.modelParallelSize || 1)));
+      const clusterResidentKvGb = (memory.kvCacheTotalGb || 0) * replicas;
+      const activeFraction = Math.min(1, Math.max(0.01, kvOffloadActiveFraction));
+      kvOffloadCapacityTb = (clusterResidentKvGb * (1 / activeFraction + 1)) / 1000;
       const clusterGenTokPerSec = throughput?.batchThroughputTps || throughput?.tokensPerSecPerReplica || 0;
       // bytesPerTokenSeq (K+V bytes for one token, one full sequence's worth of layers/heads)
       // is exported directly from calculateInfra -- use it as-is rather than reverse-deriving

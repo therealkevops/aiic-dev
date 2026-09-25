@@ -1,7 +1,7 @@
 import React from 'react';
 import { Activity, Database } from 'lucide-react';
 import { InfoHelper } from '../InfoHelper';
-import { Card, ChoiceCard, Field, ScaleField, SegmentedToggle, SliderField, Tag } from '../ui';
+import { Card, ChoiceCard, Field, ScaleField, SegmentedToggle, SliderField, Tag, ToggleRow } from '../ui';
 import { MODEL_PRESETS, PRECISION_OPTIONS } from '../../data/models';
 
 export function WorkloadTab({ ctx }) {
@@ -12,6 +12,8 @@ export function WorkloadTab({ ctx }) {
     setCustomLayers, setCustomNumHeads, setCustomParams, setKvPrecision, setMicroBatchSize, setPrefixCacheRatio,
     setPromptTokenRatio, setSelectedModelId, setSelectedPrecisionId, setTrainingType, setWorkloadType, setZeroStage,
     trainingType, workloadType, zeroStage,
+    reasoningTokensPerOutputToken, setReasoningTokensPerOutputToken, workloadShape,
+    requestMixEnabled, setRequestMixEnabled, shortRequestPct, setShortRequestPct, shortRequestTokens, setShortRequestTokens,
   } = ctx;
   return (
     <>
@@ -243,6 +245,63 @@ export function WorkloadTab({ ctx }) {
                   />
                 }
               />
+
+              {/* Reasoning (thinking) tokens */}
+              <SliderField
+                label="Reasoning tokens per visible output token:"
+                valueLabel={reasoningTokensPerOutputToken === 0 ? 'None' : `${reasoningTokensPerOutputToken}×`}
+                min="0" max="20" step="1"
+                value={reasoningTokensPerOutputToken}
+                onChange={(e) => setReasoningTokensPerOutputToken(Number(e.target.value))}
+                marks={['0 (standard)', '5×', '10×', '20× (long thinking)']}
+                helper={
+                  <>
+                    {workloadShape.thinkingTokens > 0 && (
+                      <div className="text-[11px] text-zinc-400 mt-1.5">
+                        Each request: {workloadShape.promptTokens.toLocaleString()} prompt + {workloadShape.visibleOutputTokens.toLocaleString()} answer + {workloadShape.thinkingTokens.toLocaleString()} thinking = {workloadShape.sequenceTokens.toLocaleString()} tokens held in KV cache{workloadShape.clamped ? ' (capped at the model window)' : ''}.
+                      </div>
+                    )}
+                    <InfoHelper
+                      title="Reasoning Tokens"
+                      text="Reasoning models (DeepSeek R1, gpt-oss, Qwen3 in thinking mode) generate hidden chain-of-thought before the visible answer. Those tokens are decoded like any other and stay in the KV cache for the rest of the response."
+                      whyItMatters="Thinking typically adds 3-20x the visible output. That multiplies decode time per answer, lengthens every sequence in the KV cache, and lowers how many answers each GPU completes per second."
+                    />
+                  </>
+                }
+              />
+
+              {/* Request length mix */}
+              <div className="space-y-2.5 pt-1">
+                <ToggleRow
+                  label="Mixed request lengths"
+                  description="Size the KV cache for a mix of short and full-length requests instead of every stream at the full window."
+                  checked={requestMixEnabled}
+                  onChange={setRequestMixEnabled}
+                />
+                {requestMixEnabled && (
+                  <div className="grid grid-cols-2 gap-3">
+                    <Field label={`Short requests: ${shortRequestPct}%`}>
+                      <input
+                        type="range" min="0" max="95" step="5"
+                        value={shortRequestPct}
+                        onChange={(e) => setShortRequestPct(Number(e.target.value))}
+                        className="w-full accent-sky-500 bg-zinc-800 h-1.5 rounded-lg cursor-pointer"
+                      />
+                    </Field>
+                    <Field label="Short request length (tokens)">
+                      <input
+                        type="number" min="128" max={contextLength} step="256"
+                        value={shortRequestTokens}
+                        onChange={(e) => setShortRequestTokens(Math.max(128, Math.min(contextLength, Number(e.target.value) || 128)))}
+                        className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-2 py-1.5 text-xs text-white font-mono focus:outline-none focus:border-sky-500"
+                      />
+                    </Field>
+                    <div className="col-span-2 text-[11px] text-zinc-400">
+                      Mean sequence: {workloadShape.avgSequenceTokens?.toLocaleString()} tokens vs {workloadShape.sequenceTokens.toLocaleString()} maximum. The longest request still sets the single-stream fit and time to first token.
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
           </>
         ) : (

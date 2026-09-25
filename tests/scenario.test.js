@@ -75,3 +75,29 @@ test('wide expert parallelism spreads experts and removes pipeline stages', () =
   const dense = computeScenario({ ...DEFAULT_CONFIG, expertParallelNodes: 4 });
   assert.equal(dense.results.epNodes, 1);
 });
+
+test('reasoning tokens lengthen sequences and slow answers', () => {
+  const base = applyPresetConfig(DEFAULT_CONFIG, USE_CASE_PRESETS.find(p => p.id === 'ent-agent-sql-analysis').config);
+  const plain = computeScenario(base);
+  const thinking = computeScenario({ ...base, reasoningTokensPerOutputToken: 5 });
+  assert.equal(thinking.workloadShape.thinkingTokens, thinking.workloadShape.visibleOutputTokens * 5);
+  assert.ok(thinking.workloadShape.sequenceTokens > plain.workloadShape.sequenceTokens);
+  assert.ok(thinking.results.totalGpus >= plain.results.totalGpus);
+  assert.ok(thinking.memory.kvCacheTotalGb * thinking.dp > plain.memory.kvCacheTotalGb * plain.dp);
+});
+
+test('a short/long request mix needs no more KV than all-long requests', () => {
+  const base = applyPresetConfig(DEFAULT_CONFIG, USE_CASE_PRESETS.find(p => p.id === 'ent-agent-swe').config);
+  const allLong = computeScenario(base);
+  const mixed = computeScenario({ ...base, requestMixEnabled: true, shortRequestPct: 80, shortRequestTokens: 8192 });
+  assert.ok(mixed.workloadShape.avgSequenceTokens < mixed.workloadShape.sequenceTokens);
+  assert.ok(mixed.results.totalGpus <= allLong.results.totalGpus);
+});
+
+test('offloading idle sessions sizes GPUs for active sessions only', () => {
+  const base = applyPresetConfig(DEFAULT_CONFIG, USE_CASE_PRESETS.find(p => p.id === 'ent-agent-swe').config);
+  const all = computeScenario({ ...base, enableKvOffload: true, kvActiveSessionPct: 100 });
+  const quarter = computeScenario({ ...base, enableKvOffload: true, kvActiveSessionPct: 25 });
+  assert.equal(quarter.workloadShape.gpuResidentSessions, Math.ceil(base.concurrency * 0.25));
+  assert.ok(quarter.results.totalGpus < all.results.totalGpus);
+});

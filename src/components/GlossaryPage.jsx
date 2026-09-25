@@ -2426,8 +2426,8 @@ function ComplianceChecklist({ facts }) {
 
 // ──────────────────────────────── MAIN COMPONENT ────────────────────────────────
 
-export function GlossaryPage({ onBack }) {
-  const [activeDocId, setActiveDocId] = useState('overview');
+export function GlossaryPage({ onBack, initialDocId }) {
+  const [activeDocId, setActiveDocId] = useState(initialDocId || 'overview');
   const [searchQuery, setSearchQuery] = useState('');
   
   // Collapsible section groups state (default all open)

@@ -8,6 +8,10 @@ Built for infrastructure architects and systems engineers designing clusters for
 
 ## Features
 
+- **Two modes, chosen on the home page** (first visit; later visits open the last-used mode, switchable from the header):
+  - **Learning**: a ten-lesson path for solutions architects on validated reference designs. Each lesson exposes a few controls on a real design, highlights the metrics to watch, shows the math with live values from the sizing engine, and mixes predict-then-check questions with tasks that complete automatically. Progress is kept in the browser; any lesson's design opens in Advanced mode.
+  - **Advanced**: the full calculator described below.
+
 - **Model Weight & Architecture Modeling**:
   - Dense models (LLaMA 3.1 8B, 70B, 405B, Gemma 2, Mistral).
   - Mixture-of-Experts (MoE) with exact VRAM loading across all expert weights and active parameter decode routing (DeepSeek-V3 / R1, Mixtral 8x7B).

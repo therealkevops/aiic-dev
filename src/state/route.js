@@ -2,7 +2,7 @@
 //   #/            home (mode chooser)
 //   #/learn       learning mode (lesson list); #/learn/<lessonId> opens a lesson
 //   #/advanced    the full calculator
-//   #/guide       architecture guide
+//   #/guide       architecture guide; #/guide/<docId> opens a chapter
 import { useEffect, useState } from 'react';
 
 const MODE_KEY = 'aiic.mode';
@@ -12,7 +12,7 @@ export function parseRoute(hash) {
   switch (parts[0]) {
     case 'learn': return { page: 'learn', lessonId: parts[1] || null };
     case 'advanced': return { page: 'advanced' };
-    case 'guide': return { page: 'guide' };
+    case 'guide': return { page: 'guide', docId: parts[1] || null };
     default: return { page: 'home' };
   }
 }
@@ -20,6 +20,7 @@ export function parseRoute(hash) {
 export function routeHash(route) {
   if (route.page === 'learn') return route.lessonId ? `#/learn/${route.lessonId}` : '#/learn';
   if (route.page === 'home') return '#/';
+  if (route.page === 'guide' && route.docId) return `#/guide/${route.docId}`;
   return `#/${route.page}`;
 }
 

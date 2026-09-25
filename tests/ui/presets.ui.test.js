@@ -167,3 +167,44 @@ test('home page on first visit, then the last-used mode', async () => {
   assert.equal(errors.length, 0, errors.join('; '));
   await context.close();
 });
+
+test('learning: complete lesson 1 and open the design in Advanced mode', async () => {
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const page = await context.newPage();
+  const errors = [];
+  page.on('pageerror', e => errors.push(e.message));
+  await page.goto(URL, { waitUntil: 'networkidle' });
+  await page.getByTestId('start-learning').click();
+  await page.getByTestId('lesson-memory').click();
+  const next = page.getByTestId('next-step');
+  const control = (id, v) => page.getByTestId(`control-${id}-${v}`).click();
+
+  await next.click();                                   // read
+  await page.getByTestId('predict-option-2').click();   // ~141 GB
+  await next.click();
+  await next.click();                                   // read
+  assert.equal(await next.isDisabled(), true, 'a task blocks Next until it is done');
+  await control('selectedPrecisionId', 'fp8');
+  assert.equal(await page.getByTestId('metric-gpus').innerText().then(t => t.includes('1')), true);
+  await next.click();
+  await page.getByTestId('predict-option-1').click();   // ~405 GB
+  await next.click();
+  await control('selectedModelId', 'llama3-405b');
+  assert.match(await page.getByTestId('metric-gpus').innerText(), /\b4\b/);
+  await next.click();
+  await control('selectedModelId', 'llama33-70b');
+  await control('selectedPrecisionId', 'int4');
+  await next.click();
+  await page.getByTestId('finish-lesson').click();
+  assert.equal(await page.getByTestId('lesson-complete').count(), 1);
+
+  await page.getByTestId('open-in-advanced').click();
+  assert.match(page.url(), /#\/advanced$/);
+  assert.equal(await page.getByTestId('kpi-gpus').innerText(), '1');
+
+  // Progress shows on the home page and the next lesson is offered.
+  await page.getByTestId('go-home').click();
+  assert.match(await page.getByTestId('start-learning').innerText(), /Resume: lesson 2/);
+  assert.equal(errors.length, 0, errors.join('; '));
+  await context.close();
+});

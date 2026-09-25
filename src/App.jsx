@@ -198,7 +198,7 @@ export default function App() {
   };
 
   if (route.page === 'guide') {
-    return <GlossaryPage onBack={() => navigate({ page: rememberedMode() || 'home' })} />;
+    return <GlossaryPage key={route.docId || 'overview'} initialDocId={route.docId} onBack={() => (window.history.length > 1 ? window.history.back() : navigate({ page: rememberedMode() || 'home' }))} />;
   }
   if (route.page === 'home') {
     return (

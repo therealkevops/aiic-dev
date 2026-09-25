@@ -3,8 +3,10 @@ import { BookOpen, CheckCircle2, Clock, GraduationCap, Lock } from 'lucide-react
 import { CATALOG } from '../../learning/catalog';
 import { loadProgress } from '../../learning/progress';
 import { ModeSwitch, ProductMark } from '../ModeSwitch';
+import { LESSONS } from '../../learning/lessons';
+import { LessonView } from './LessonView';
 
-const READY = new Set(); // lessons whose steps are written
+const READY = new Set(Object.keys(LESSONS)); // lessons whose steps are written
 
 export function LearningHeader({ navigate, children }) {
   return (
@@ -65,11 +67,22 @@ function LessonIndex({ navigate }) {
   );
 }
 
-export function LearningPage({ navigate }) {
+export function LearningPage({ lessonId, navigate, onOpenInAdvanced }) {
+  const lesson = lessonId && LESSONS[lessonId] ? CATALOG.find(l => l.id === lessonId) : null;
   return (
     <div className="h-screen w-screen flex flex-col bg-zinc-950 text-zinc-100 antialiased overflow-hidden">
-      <LearningHeader navigate={navigate} />
-      <LessonIndex navigate={navigate} />
+      <LearningHeader navigate={navigate}>
+        {lesson && (
+          <nav aria-label="Breadcrumb" className="flex items-center gap-2 text-xs text-zinc-500 min-w-0">
+            <button type="button" data-testid="all-lessons" onClick={() => navigate({ page: 'learn', lessonId: null })} className="hover:text-zinc-200 cursor-pointer whitespace-nowrap">All lessons</button>
+            <span>/</span>
+            <span className="text-zinc-300 truncate">{lesson.number}. {lesson.title}</span>
+          </nav>
+        )}
+      </LearningHeader>
+      {lesson
+        ? <LessonView key={lesson.id} lessonId={lesson.id} navigate={navigate} onOpenInAdvanced={onOpenInAdvanced} />
+        : <LessonIndex navigate={navigate} />}
     </div>
   );
 }

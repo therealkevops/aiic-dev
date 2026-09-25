@@ -1,6 +1,7 @@
 import React from 'react';
 import { Activity, AlertTriangle, BookOpen, Boxes, Check, CheckCircle2, Copy, Database, DollarSign, Gauge, GitBranch, Globe, Grid2x2, HardDrive, LifeBuoy, Network, Search, Server, Shield, Timer, Zap } from 'lucide-react';
 import { TopologyDiagram } from './TopologyDiagram';
+import { ScenarioCompare } from './ScenarioCompare';
 import { Banner, Card, Disclosure, Kpi, KpiRow, Meter, Row, Rows, SectionLabel, Tag } from './ui';
 
 export function ResultsPane({ ctx }) {
@@ -16,6 +17,8 @@ export function ResultsPane({ ctx }) {
   } = ctx;
   return (
     <aside data-testid="results-pane" className="w-[44%] xl:w-[42%] min-w-[420px] max-w-[760px] shrink-0 overflow-y-auto p-4 md:p-6 bg-zinc-900/30 space-y-4">
+
+      <ScenarioCompare ctx={ctx} />
 
       {/* Status Banner */}
       {isLlmd ? (

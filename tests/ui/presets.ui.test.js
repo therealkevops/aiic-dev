@@ -102,3 +102,25 @@ test('every preset renders every tab and matches the golden snapshot', async () 
     assert.deepEqual(snapshot[preset.id], golden[preset.id], `UI output changed for preset ${preset.id}`);
   }
 });
+
+test('pin a scenario, compare it with another, and export a report', async () => {
+  const page = await browser.newPage({ viewport: { width: 1600, height: 1000 }, acceptDownloads: true });
+  const errors = [];
+  page.on('pageerror', e => errors.push(e.message));
+  await page.goto(URL, { waitUntil: 'networkidle' });
+  await page.getByTestId('preset-select').selectOption('ent-rag-assistant');
+  await page.getByTestId('pin-scenario').click();
+  await page.getByTestId('preset-select').selectOption('ent-agent-sql-analysis');
+  const table = page.getByTestId('scenario-compare');
+  const text = await table.innerText();
+  assert.match(text, /Departmental RAG/i);
+  assert.match(text, /SQL Analysis Agent/i);
+  const [download] = await Promise.all([page.waitForEvent('download'), page.getByTestId('export-report').click()]);
+  const path = await download.path();
+  const html = readFileSync(path, 'utf8');
+  assert.match(html, /AI Infrastructure Sizing Report/);
+  assert.match(html, /Comparison with scenario A/);
+  assert.match(html, /Bill of materials/);
+  assert.equal(errors.length, 0, errors.join('; '));
+  await page.close();
+});

@@ -1,8 +1,9 @@
 import React from 'react';
-import { Check, Copy } from 'lucide-react';
+import { Check, Copy, FileDown, Pin } from 'lucide-react';
 
 export function NavRail({ ctx }) {
   const {
+    pinned, pinCurrentScenario, handleExportReport,
     activeInputTab, copiedBOM, economicsNavTabs, facility, gpu, handleCopyBOM,
     memory, results, setActiveInputTab, technicalNavTabs,
   } = ctx;
@@ -104,6 +105,29 @@ export function NavRail({ ctx }) {
             </>
           )}
         </button>
+
+        <div className="grid grid-cols-2 gap-1">
+          <button
+            type="button"
+            data-testid="pin-scenario"
+            onClick={pinCurrentScenario}
+            title="Freeze the current configuration as scenario A, then change settings to compare against it"
+            className="py-1 px-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-medium rounded-lg border border-zinc-700 flex items-center justify-center gap-1.5 transition cursor-pointer"
+          >
+            <Pin className="w-3.5 h-3.5 text-zinc-400" />
+            <span>{pinned ? 'Re-pin A' : 'Pin as A'}</span>
+          </button>
+          <button
+            type="button"
+            data-testid="export-report"
+            onClick={handleExportReport}
+            title="Download a printable HTML report of this sizing"
+            className="py-1 px-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-medium rounded-lg border border-zinc-700 flex items-center justify-center gap-1.5 transition cursor-pointer"
+          >
+            <FileDown className="w-3.5 h-3.5 text-zinc-400" />
+            <span>Report</span>
+          </button>
+        </div>
       </div>
     </nav>
   );

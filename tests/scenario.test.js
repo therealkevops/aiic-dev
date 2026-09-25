@@ -101,3 +101,26 @@ test('offloading idle sessions sizes GPUs for active sessions only', () => {
   assert.equal(quarter.workloadShape.gpuResidentSessions, Math.ceil(base.concurrency * 0.25));
   assert.ok(quarter.results.totalGpus < all.results.totalGpus);
 });
+
+import { scenarioMetrics, compareMetrics } from '../src/utils/compare.js';
+import { buildReportHtml } from '../src/utils/report.js';
+
+test('comparison marks the cheaper / faster side and computes deltas', () => {
+  const a = applyPresetConfig(DEFAULT_CONFIG, USE_CASE_PRESETS.find(p => p.id === 'ent-rag-assistant').config);
+  const b = { ...a, concurrency: a.concurrency * 4 };
+  const rows = compareMetrics(scenarioMetrics(a, computeScenario(a)), scenarioMetrics(b, computeScenario(b)));
+  const gpus = rows.find(r => r.label === 'GPUs');
+  assert.equal(gpus.winner, 'a');
+  assert.ok(gpus.delta > 0);
+  assert.equal(rows.find(r => r.label === 'Model').winner, null);
+});
+
+test('report HTML escapes content and includes every section', () => {
+  const config = applyPresetConfig(DEFAULT_CONFIG, USE_CASE_PRESETS[0].config);
+  const scenario = computeScenario(config);
+  const pinned = { label: 'A <script>', metrics: scenarioMetrics(config, scenario) };
+  const html = buildReportHtml({ config, scenario, label: 'B & co', pinned, bomText: '<bom>' });
+  for (const section of ['Summary', 'Comparison with scenario A', 'Key assumptions', 'Bill of materials']) assert.ok(html.includes(section), section);
+  assert.ok(!html.includes('<script>'));
+  assert.ok(html.includes('B &amp; co') && html.includes('&lt;bom&gt;'));
+});

@@ -9,6 +9,8 @@ import { USE_CASE_PRESETS } from './data/presets';
 import { DEFAULT_CONFIG, applyPresetConfig } from './state/config';
 import { computeScenario } from './utils/scenario';
 import { buildBomText } from './utils/bomText';
+import { scenarioMetrics } from './utils/compare';
+import { buildReportHtml } from './utils/report';
 import { GlossaryPage } from './components/GlossaryPage';
 import { AppHeader } from './components/AppHeader';
 import { NavRail } from './components/NavRail';
@@ -49,6 +51,8 @@ export default function App() {
   const [activeInputTab, setActiveInputTab] = useState('workload');
   const [selectedPresetId, setSelectedPresetId] = useState('');
   const [copiedBOM, setCopiedBOM] = useState(false);
+  // Scenario A for side-by-side comparison: a frozen copy of a configuration and its metrics.
+  const [pinned, setPinned] = useState(null);
 
   const scenario = useMemo(() => computeScenario(config), [config]);
 
@@ -68,6 +72,24 @@ export default function App() {
     () => USE_CASE_PRESETS.find(p => p.id === selectedPresetId) || null,
     [selectedPresetId]
   );
+  const currentMetrics = useMemo(() => scenarioMetrics(config, scenario), [config, scenario]);
+  // A preset label only describes the configuration until something is changed.
+  const presetModified = useMemo(
+    () => !!activePreset && Object.entries(applyPresetConfig(DEFAULT_CONFIG, activePreset.config))
+      .some(([k, v]) => k in activePreset.config && config[k] !== v),
+    [activePreset, config]
+  );
+  const currentLabel = activePreset ? `${activePreset.label}${presetModified ? ' (modified)' : ''}` : 'Custom configuration';
+
+  const pinCurrentScenario = () => setPinned({ config, presetId: selectedPresetId, label: currentLabel, metrics: currentMetrics });
+  const unpinScenario = () => setPinned(null);
+  // Load A into the calculator and keep the current configuration as the new A.
+  const swapWithPinned = () => {
+    if (!pinned) return;
+    pinCurrentScenario();
+    setConfig(pinned.config);
+    setSelectedPresetId(pinned.presetId);
+  };
 
   // Vendor switch: pick that vendor's first platform, an H200 (or second) platform for the
   // LLM-D decode pool, and fall back to the vendor's default fabric if the current one isn't offered.
@@ -133,6 +155,23 @@ export default function App() {
     ...config, ...setters, ...scenario,
     page, setPage, activeInputTab, setActiveInputTab, selectedPresetId, applyPreset, activePreset,
     handleVendorChange, copiedBOM, technicalNavTabs, economicsNavTabs,
+  };
+  ctx.pinned = pinned;
+  ctx.currentMetrics = currentMetrics;
+  ctx.currentLabel = currentLabel;
+  ctx.pinCurrentScenario = pinCurrentScenario;
+  ctx.unpinScenario = unpinScenario;
+  ctx.swapWithPinned = swapWithPinned;
+  ctx.handleExportReport = () => {
+    const html = buildReportHtml({ config, scenario, label: currentLabel, pinned, bomText: buildBomText(ctx) });
+    const url = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `ai-sizing-report-${(selectedPresetId || 'custom')}.html`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
   ctx.handleCopyBOM = () => {
     navigator.clipboard.writeText(buildBomText(ctx));

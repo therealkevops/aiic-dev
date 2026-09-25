@@ -33,6 +33,10 @@ export const DEFAULT_CONFIG = {
   manualPp: 1,
   manualDp: 1,
   isAutoDp: true,
+  memoryHeadroomPct: 5, // extra % of usable GPU memory kept free when sizing
+  latencyTargetsEnabled: false, // size for latency targets, not just memory
+  targetTtftSec: 2, // time-to-first-token target (unloaded: prefill + guardrail/ingress latency)
+  targetTpotMs: 50, // time-per-output-token target
   selectedProtocolId: 'rocev2',
   oversubscriptionRatio: 1,
   servingEngine: 'vllm', // 'vllm' | 'trt-llm' | 'tgi'
@@ -97,6 +101,10 @@ export const DEFAULT_CONFIG = {
 // these rather than keeping whatever the previous configuration had.
 const PRESET_FALLBACKS = {
   oversubscriptionRatio: 1,
+  memoryHeadroomPct: 5,
+  latencyTargetsEnabled: false,
+  targetTtftSec: 2,
+  targetTpotMs: 50,
   enableTrainingRedundancy: false,
   spareNodePct: 2,
   enableMlops: false,

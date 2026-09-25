@@ -111,7 +111,7 @@ export function ResultsPane({ ctx }) {
         <Card icon={HardDrive} title="VRAM allocation · per GPU" right={<span className="text-zinc-400 font-mono">{gpu.name} ({gpu.vramGb} GB)</span>} className="space-y-3">
           <Meter capacity={gpu.vramGb} segments={[
             { label: 'Weights', value: memory.perGpuWeightsGb, display: `${memory.perGpuWeightsGb.toFixed(1)} GB`, color: 'bg-sky-500' },
-            { label: workloadType === 'inference' ? 'KV Cache' : 'Optimizer', value: memory.perGpuKvOrOptGb, display: `${memory.perGpuKvOrOptGb.toFixed(1)} GB${workloadType === 'inference' && memory.kvSavingsGb > 0 ? ` (-${memory.kvSavingsGb.toFixed(1)} GB)` : ''}`, color: 'bg-sky-700' },
+            { label: workloadType === 'inference' ? 'KV Cache' : 'Optimizer', value: memory.perGpuKvOrOptGb, display: `${memory.perGpuKvOrOptGb.toFixed(1)} GB`, color: 'bg-sky-700' },
             { label: 'Activations', value: memory.perGpuActGb, display: `${memory.perGpuActGb.toFixed(1)} GB`, color: 'bg-zinc-600' },
             { label: 'Free', value: Math.max(0, memory.headroomGb), display: `${Math.max(0, memory.headroomGb).toFixed(1)} GB`, color: 'bg-zinc-800' },
           ]} />
@@ -120,7 +120,7 @@ export function ResultsPane({ ctx }) {
               <span className="text-zinc-400">
                 KV precision: <strong className="text-sky-400">{kvPrecision.toUpperCase()}</strong>{prefixCacheRatio > 0 ? ` · ${(prefixCacheRatio * 100).toFixed(0)}% prefix sharing` : ''}
               </span>
-              <span className="text-emerald-400 font-mono font-medium">Saving {memory.kvSavingsGb.toFixed(1)} GB</span>
+              <span className="text-emerald-400 font-mono font-medium">Saving {(memory.kvCacheTotalGb > 0 ? memory.kvSavingsGb * memory.perGpuKvOrOptGb / memory.kvCacheTotalGb : 0).toFixed(1)} GB/GPU vs FP16, no sharing</span>
             </div>
           )}
         </Card>

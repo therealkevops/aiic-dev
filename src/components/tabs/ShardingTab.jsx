@@ -1,14 +1,18 @@
 import React from 'react';
-import { AlertTriangle, CheckCircle2, Layers, RefreshCw, Sparkles } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Gauge, Layers, RefreshCw, Sparkles } from 'lucide-react';
 import { InfoHelper } from '../InfoHelper';
-import { Card, ScaleField, SegmentedToggle, Tag } from '../ui';
+import { Banner, Card, Field, Row, Rows, ScaleField, SegmentedToggle, SliderField, Tag, ToggleRow } from '../ui';
 
 export function ShardingTab({ ctx }) {
   const {
     autoRecommendation, canAutoDp, concurrency, dp, isAutoDp, isAutoSharding,
     manualPp, manualTp, pp, setIsAutoDp, setIsAutoSharding, setManualDp,
-    setManualPp, setManualTp, tp,
+    setManualPp, setManualTp, tp, workloadType, servingArchitecture, memoryHeadroomPct, setMemoryHeadroomPct,
+    latencyTargetsEnabled, setLatencyTargetsEnabled, targetTtftSec, setTargetTtftSec, targetTpotMs, setTargetTpotMs,
+    latencySolve, memorySizing,
   } = ctx;
+  const fmtSec = (sec) => (sec < 1 ? `${Math.round(sec * 1000)} ms` : `${sec.toFixed(2)} s`);
+  const latencyTargetsAvailable = workloadType === 'inference' && isAutoSharding && servingArchitecture !== 'llmd';
   return (
     <>
       <Card
@@ -174,6 +178,82 @@ export function ShardingTab({ ctx }) {
             whyItMatters="For inference, Auto-scale derives DP directly from concurrency so every replica only has to hold KV cache for its own share of users. For training, pick DP to match your target cluster size — total GPUs = TP × PP × DP."
           />
         </div>
+      </Card>
+      <Card icon={Gauge} title="Sizing Targets" className="space-y-4">
+        <SliderField
+          label="Memory headroom margin:"
+          valueLabel={`${memoryHeadroomPct}%`}
+          min="0" max="20" step="1"
+          value={memoryHeadroomPct}
+          onChange={(e) => setMemoryHeadroomPct(Number(e.target.value))}
+          marks={['0% (fill to limit)', '10%', '20%']}
+          helper={
+            <InfoHelper
+              title="Memory Headroom Margin"
+              text="Share of each GPU's usable memory (after the 10% runtime reserve) that sizing leaves empty. The solver adds replicas or GPUs so weights plus KV cache stay below this line."
+              whyItMatters="A design sized to the last gigabyte preempts requests the moment prompts run longer than planned or traffic spikes. 5-10% is a common operating margin."
+            />
+          }
+        />
+        {memorySizing && (
+          <div className="text-[11px] text-zinc-400 leading-relaxed">
+            TP={tp} uses fewer GPUs than the smallest TP that fits (TP={memorySizing.minimalTp} would need {memorySizing.minimalGpus} GPUs): each replica stores the weights once, so spreading it across more GPUs frees memory for KV cache.
+          </div>
+        )}
+
+        {workloadType === 'inference' && (
+          <div className="space-y-3 pt-3 border-t border-zinc-800/70">
+            <ToggleRow
+              label="Size for latency targets"
+              description={latencyTargetsAvailable
+                ? 'Search larger TP and more replicas for the cheapest layout that meets both targets.'
+                : 'Available with the auto-solver and colocated serving.'}
+              checked={latencyTargetsEnabled && latencyTargetsAvailable}
+              onChange={setLatencyTargetsEnabled}
+              disabled={!latencyTargetsAvailable}
+            />
+            {latencyTargetsEnabled && latencyTargetsAvailable && (
+              <>
+                <div className="grid grid-cols-2 gap-3">
+                  <Field label="Time to first token (s)">
+                    <input
+                      type="number" min="0.05" max="600" step="0.1"
+                      value={targetTtftSec}
+                      onChange={(e) => setTargetTtftSec(Math.max(0.05, Number(e.target.value) || 0.05))}
+                      className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-2 py-1.5 text-xs text-white font-mono focus:outline-none focus:border-sky-500"
+                    />
+                  </Field>
+                  <Field label="Time per output token (ms)">
+                    <input
+                      type="number" min="1" max="1000" step="1"
+                      value={targetTpotMs}
+                      onChange={(e) => setTargetTpotMs(Math.max(1, Number(e.target.value) || 1))}
+                      className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-2 py-1.5 text-xs text-white font-mono focus:outline-none focus:border-sky-500"
+                    />
+                  </Field>
+                </div>
+                <div className="text-[10.5px] text-zinc-500">
+                  TTFT is unloaded: prefill plus guardrail and ingress latency. Queueing on top of it is set by target utilization on the SLA tab.
+                </div>
+                {latencySolve && (
+                  <>
+                    <Rows>
+                      <Row k="Memory-only sizing" v={`${latencySolve.memoryOnly.totalGpus} GPUs · TP=${latencySolve.memoryOnly.tp} DP=${latencySolve.memoryOnly.dp} · ${fmtSec(latencySolve.memoryOnly.ttftSec)} / ${latencySolve.memoryOnly.tpotMs.toFixed(1)} ms`} />
+                      <Row k={latencySolve.met ? 'Latency-sized' : 'Closest layout'} tone={latencySolve.met ? 'good' : 'warn'} v={`${latencySolve.chosen.totalGpus} GPUs · TP=${latencySolve.chosen.tp} DP=${latencySolve.chosen.dp} · ${fmtSec(latencySolve.chosen.ttftSec)} / ${latencySolve.chosen.tpotMs.toFixed(1)} ms`} />
+                    </Rows>
+                    {!latencySolve.met && (
+                      <Banner tone="warn" icon={AlertTriangle} title="Targets not reachable on this platform">
+                        {latencySolve.fixedLatencySec >= latencySolve.targetTtftSec
+                          ? `Guardrail and ingress checks alone add ${fmtSec(latencySolve.fixedLatencySec)} before the first token, above the ${fmtSec(latencySolve.targetTtftSec)} target. Use a smaller guard model, check only outputs, or relax the target.`
+                          : 'Even TP at the full chassis cannot meet both targets. Shorten prompts, use a faster GPU or lower precision, or relax the targets. The closest layout is shown and used.'}
+                      </Banner>
+                    )}
+                  </>
+                )}
+              </>
+            )}
+          </div>
+        )}
       </Card>
     </>
   );

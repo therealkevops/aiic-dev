@@ -31,6 +31,10 @@ export const CONFIG = {
 };
 
 const VRAM_USABLE_FACTOR = CONFIG.gpuMemUtil;
+/** Fraction of physical GPU memory the sizing may fill: the runtime reserve minus any extra headroom. */
+function usableMemoryFactor(memoryHeadroomPct = 0) {
+  return VRAM_USABLE_FACTOR * (1 - Math.min(50, Math.max(0, memoryHeadroomPct)) / 100);
+}
 const RACK_USABLE_RU = CONFIG.rackRU;
 const DEFAULT_SWITCH_POWER_KW = 3.5;
 
@@ -167,7 +171,12 @@ export function recommendSharding(params) {
     gpu,
     platform,
     trainingType,
-    zeroStage
+    zeroStage,
+    // Extra % of usable memory to keep free (on top of the 10% runtime reserve), so a design
+    // isn't sized to the last gigabyte.
+    memoryHeadroomPct = 0,
+    // Latency-driven sizing: use at least this TP (within the chassis) even if a smaller TP fits.
+    minTp = 1,
   } = params;
 
   const totalParams    = model.id === "custom" ? (Number(customParams) || 32) : model.params;
@@ -260,7 +269,7 @@ export function recommendSharding(params) {
   }
 
   // Safe usable VRAM per GPU (shared constant — same buffer used in OOM check)
-  const usableGpuVramGb     = gpu.vramGb * VRAM_USABLE_FACTOR;
+  const usableGpuVramGb     = gpu.vramGb * usableMemoryFactor(memoryHeadroomPct);
   const singleNodeCapacityGb = gpusPerChassis * usableGpuVramGb;
 
   // Helper: S5 TP must divide H_q. If it doesn't, step down to the next divisor.
@@ -316,6 +325,15 @@ export function recommendSharding(params) {
       rationale = error;
     } else {
       rationale = `Workload base (~${totalReplicaMemoryGb.toFixed(1)} GB) exceeds a single ${gpusPerChassis}-GPU chassis (${singleNodeCapacityGb.toFixed(0)} GB usable). TP is locked to ${recommendedTp} to maximize NVLink speeds inside each node, and Pipeline Parallelism is enabled at PP=${recommendedPp} to partition layers across ${recommendedPp} separate server nodes.`;
+    }
+  }
+
+  // Latency-driven override: a larger TP than memory alone requires (single-chassis only).
+  if (!error && recommendedPp === 1 && minTp > recommendedTp) {
+    const forcedTp = getValidTp(Math.min(minTp, gpusPerChassis), numHeads);
+    if (forcedTp > recommendedTp) {
+      rationale = `Workload base (~${totalReplicaMemoryGb.toFixed(1)} GB) would fit at TP=${recommendedTp}, but TP=${forcedTp} is used: splitting each replica across ${forcedTp} GPUs over NVLink needs fewer GPUs in total (the weights are stored once per replica) or is needed to meet the latency target. PP=1.`;
+      recommendedTp = forcedTp;
     }
   }
 
@@ -419,6 +437,7 @@ export function calculateInfra(config) {
                                // topologies use a fixed uplink design regardless of this setting.
     pue = 1.35,      // facility PUE factor (default 1.35)
     servingConfig = null, // { servingEngine, orchestrator, servingArchitecture, enableChunkedPrefill, enablePrefixCaching }
+    memoryHeadroomPct = 0, // extra % of usable memory kept free (see recommendSharding)
   } = config;
 
   const totalParams = model.id === "custom" ? (Number(customParams) || 32) : model.params;
@@ -611,7 +630,7 @@ export function calculateInfra(config) {
     }
 
     const prefillTotalUsedGb = prefillWeightsGb + prefillActGb + prefillKvGb;
-    const prefillUsableGb = prefillGpu.vramGb * CONFIG.gpuMemUtil;
+    const prefillUsableGb = prefillGpu.vramGb * usableMemoryFactor(memoryHeadroomPct);
     prefillIsOOM = prefillTotalUsedGb > prefillUsableGb;
     const prefillHeadroomGb = prefillUsableGb - prefillTotalUsedGb;
     const prefillUtilization = Math.min(100, Math.round((prefillTotalUsedGb / prefillGpu.vramGb) * 100));
@@ -630,7 +649,7 @@ export function calculateInfra(config) {
     const decodeActBytes = (decodeTokensPerStep * (hiddenDim + 2 * intermediate) * CONFIG.B_act * 1.2) + (maxNumSeqs * vocab * 4);
     const decodeActGb = (decodeActBytes / 1e9 / decodeTp) + (CONFIG.runtimeOverheadPerGpu / 1e9);
     const decodeTotalUsedGb = decodeWeightsGb + decodeKvGb + decodeActGb;
-    const decodeUsableGb = decodeGpu.vramGb * CONFIG.gpuMemUtil;
+    const decodeUsableGb = decodeGpu.vramGb * usableMemoryFactor(memoryHeadroomPct);
     decodeIsOOM = decodeTotalUsedGb > decodeUsableGb;
     const decodeHeadroomGb = decodeUsableGb - decodeTotalUsedGb;
     const decodeUtilization = Math.min(100, Math.round((decodeTotalUsedGb / decodeGpu.vramGb) * 100));
@@ -746,7 +765,8 @@ export function calculateInfra(config) {
   const perGpuTotalUsedGb = isLlmd ? llmdData.decode.totalUsedGb : (perGpuWeightsGb + perGpuKvOrOptGb + perGpuGradGb + perGpuActGb);
   const gpuCapacityGb     = isLlmd ? decodeGpu.vramGb : gpu.vramGb;
   // FIX: Apply same VRAM_USABLE_FACTOR buffer here as in recommendSharding() for consistency
-  const usableGpuCapacityGb      = gpuCapacityGb * VRAM_USABLE_FACTOR;
+  const usableFactor             = usableMemoryFactor(memoryHeadroomPct);
+  const usableGpuCapacityGb      = gpuCapacityGb * usableFactor;
   const memoryUtilizationPercent = Math.min(100, Math.round((perGpuTotalUsedGb / gpuCapacityGb) * 100));
   const isOOM     = isLlmd ? (prefillIsOOM || decodeIsOOM) : (perGpuTotalUsedGb > usableGpuCapacityGb);
   const headroomGb = usableGpuCapacityGb - perGpuTotalUsedGb;
@@ -806,12 +826,17 @@ export function calculateInfra(config) {
     }
   }
 
+  // Near-limit notice: fits, but with almost nothing spare for longer-than-planned prompts.
+  if (!isOOM && !isLlmd && workloadType === 'inference' && headroomGb < 0.03 * usableGpuCapacityGb) {
+    warnings.push(`Tight fit: only ${headroomGb.toFixed(1)} GB of ${usableGpuCapacityGb.toFixed(0)} GB usable per GPU is left. Longer prompts or a traffic spike will cause preemptions; raise the memory headroom margin, add a replica, or use more TP.`);
+  }
+
   if (isOOM && !isLlmd) {
     const deficitGb = (perGpuTotalUsedGb - usableGpuCapacityGb).toFixed(1);
-    warnings.push(`Out of Memory! Each GPU needs ${perGpuTotalUsedGb.toFixed(1)} GB, exceeding ${gpu.name}'s usable ${usableGpuCapacityGb.toFixed(0)} GB limit (${gpuCapacityGb} GB × ${VRAM_USABLE_FACTOR}) by ${deficitGb} GB.`);
+    warnings.push(`Out of Memory! Each GPU needs ${perGpuTotalUsedGb.toFixed(1)} GB, exceeding ${gpu.name}'s usable ${usableGpuCapacityGb.toFixed(0)} GB limit (${gpuCapacityGb} GB × ${usableFactor.toFixed(3)}${memoryHeadroomPct > 0 ? `, incl. ${memoryHeadroomPct}% headroom` : ''}) by ${deficitGb} GB.`);
 
     if (workloadType === "inference") {
-      recommendations.push("Increase Tensor Parallelism (TP), switch to FP8/INT4 quantization, increase Pipeline Parallelism (PP), or select higher VRAM GPUs (e.g. H200 141GB or B200 192GB).");
+      recommendations.push("Increase Tensor Parallelism (TP), switch to FP8/INT4 quantization, increase Pipeline Parallelism (PP), or select higher VRAM GPUs (e.g. H200 141GB, B200 180GB or B300 288GB).");
     } else {
       recommendations.push("Enable ZeRO-3 / FSDP, switch to LoRA/QLoRA, or scale to more GPU nodes to shard optimizer states.");
     }

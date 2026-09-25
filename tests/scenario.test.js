@@ -34,3 +34,30 @@ test('computeScenario is pure: same config, same numbers', () => {
   const config = applyPresetConfig(DEFAULT_CONFIG, USE_CASE_PRESETS[0].config);
   assert.equal(computeScenario(config).cost.tcoUsd, computeScenario({ ...config }).cost.tcoUsd);
 });
+
+test('memory sizing never uses more GPUs than the minimum-TP layout', () => {
+  for (const p of USE_CASE_PRESETS.filter(p => p.config.workloadType === 'inference')) {
+    const s = computeScenario(applyPresetConfig(DEFAULT_CONFIG, p.config));
+    if (s.memorySizing) assert.ok(s.results.totalGpus < s.memorySizing.minimalGpus, p.id);
+    assert.equal(s.memory.isOOM, false, `${p.id} OOM`);
+  }
+});
+
+test('latency solver meets reachable targets and reports unreachable ones', () => {
+  const base = applyPresetConfig(DEFAULT_CONFIG, USE_CASE_PRESETS.find(p => p.id === 'ent-agent-tool-use').config);
+  const s = computeScenario({ ...base, latencyTargetsEnabled: true, targetTtftSec: 3, targetTpotMs: 25 });
+  assert.ok(s.latencySolve.met);
+  assert.ok(s.throughput.tpotMs <= 25);
+  assert.ok(s.sla.ttftBaselineSec <= 3);
+  // Guardrails alone add ~1.4s here, so a 0.5s TTFT target cannot be met.
+  const u = computeScenario({ ...base, latencyTargetsEnabled: true, targetTtftSec: 0.5, targetTpotMs: 25 });
+  assert.equal(u.latencySolve.met, false);
+  assert.ok(u.latencySolve.fixedLatencySec > 0.5);
+});
+
+test('memory headroom margin keeps free memory on every GPU', () => {
+  const base = applyPresetConfig(DEFAULT_CONFIG, USE_CASE_PRESETS.find(p => p.id === 'neo-maas-inference').config);
+  const s = computeScenario({ ...base, memoryHeadroomPct: 10 });
+  const physicalUsable = s.gpu.vramGb * 0.9;
+  assert.ok(s.memory.perGpuTotalUsedGb <= physicalUsable * 0.9 + 1e-9);
+});

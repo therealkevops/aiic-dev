@@ -32,7 +32,11 @@ export function resolveModel(config) {
   };
 }
 
-export function computeScenario(config) {
+/**
+ * Runs the full pipeline for one configuration. `_solverTp` / `_solverDp` are internal fields
+ * the latency solver sets to evaluate a specific TP / DP candidate.
+ */
+function computeScenarioCore(config) {
   const c = config;
 
   // ── Catalog lookups ──────────────────────────────────────────────────────────
@@ -67,13 +71,15 @@ export function computeScenario(config) {
     platform,
     trainingType: c.trainingType,
     zeroStage: c.zeroStage,
+    memoryHeadroomPct: c.memoryHeadroomPct,
+    minTp: c._solverTp || 1,
   });
   const tp = c.isAutoSharding ? autoRecommendation.tp : c.manualTp;
   const pp = c.isAutoSharding ? autoRecommendation.pp : c.manualPp;
   // DP is only auto-derived for inference, and only while TP/PP are also auto-solved (the
   // auto-DP formula is computed against the solver's own TP/PP, not a manual override).
   const canAutoDp = c.workloadType === 'inference' && c.isAutoSharding;
-  const dp = (canAutoDp && c.isAutoDp) ? autoRecommendation.dp : c.manualDp;
+  const dp = (canAutoDp && c.isAutoDp) ? Math.max(autoRecommendation.dp, c._solverDp || 0) : c.manualDp;
 
   // ── 2. Compute, network & facility sizing ────────────────────────────────────
   const results = calculateInfra({
@@ -96,6 +102,7 @@ export function computeScenario(config) {
     networkProtocol: c.selectedProtocolId,
     oversubscriptionRatio: c.oversubscriptionRatio,
     pue: c.pue,
+    memoryHeadroomPct: c.memoryHeadroomPct,
     servingConfig: {
       servingEngine: c.servingEngine,
       orchestrator: c.orchestrator,
@@ -297,4 +304,124 @@ export function computeScenario(config) {
     trainingRedundancy, mlopsStrategy, mlops,
     cost,
   };
+}
+
+// ── Latency-target solver ─────────────────────────────────────────────────────
+// The memory solver above picks the fewest GPUs that hold the model and its KV cache. When
+// latency targets are on, this searches larger TP (faster per-token work inside a replica) and
+// more DP (fewer streams per replica, so smaller decode batches and less queueing) for the
+// cheapest layout that meets both targets.
+
+// TTFT is measured unloaded (prefill + guardrail/ingress latency, before queueing): queueing at
+// a fixed target utilization is set on the SLA tab and isn't something extra GPUs remove here.
+function latencyOf(s) {
+  return {
+    ttftSec: s.sla.eligible ? s.sla.ttftBaselineSec : (s.throughput?.ttftSec ?? Infinity),
+    tpotMs: Number(s.throughput?.tpotMs ?? Infinity),
+  };
+}
+
+function summarize(s) {
+  return { tp: s.tp, pp: s.pp, dp: s.dp, totalGpus: s.results.totalGpus, ...latencyOf(s) };
+}
+
+export function solveForLatency(config, memorySized) {
+  const targetTtft = Math.max(0.01, Number(config.targetTtftSec) || 0);
+  const targetTpot = Math.max(1, Number(config.targetTpotMs) || 0);
+  const meets = (s) => {
+    const l = latencyOf(s);
+    return !s.memory.isOOM && l.ttftSec <= targetTtft && l.tpotMs <= targetTpot;
+  };
+  // How far a layout misses its targets (0 = meets both); used to pick the closest if none do.
+  const shortfall = (s) => {
+    const l = latencyOf(s);
+    return Math.max(0, l.ttftSec / targetTtft - 1) + Math.max(0, l.tpotMs / targetTpot - 1) + (s.memory.isOOM ? 10 : 0);
+  };
+
+  let evaluated = 0;
+  let best = null;
+  let closest = memorySized;
+  const tpCandidates = tpCandidatesFor(memorySized, memorySized.tp);
+  const dpSearchable = config.isAutoDp;
+
+  for (const tpCandidate of tpCandidates) {
+    const atTp = computeScenarioCore({ ...config, _solverTp: tpCandidate });
+    evaluated++;
+    if (atTp.pp > 1 && tpCandidate !== memorySized.tp) continue;
+    const dpStart = atTp.dp;
+    const dpLimit = dpSearchable ? Math.max(dpStart * 8, dpStart + 32) : dpStart;
+    for (let dp = dpStart; dp <= dpLimit; dp += Math.max(1, Math.ceil(dp * 0.1))) {
+      const s = dp === dpStart ? atTp : computeScenarioCore({ ...config, _solverTp: tpCandidate, _solverDp: dp });
+      if (dp !== dpStart) evaluated++;
+      if (shortfall(s) < shortfall(closest)) closest = s;
+      if (meets(s)) {
+        if (!best || s.results.totalGpus < best.results.totalGpus
+          || (s.results.totalGpus === best.results.totalGpus && latencyOf(s).tpotMs < latencyOf(best).tpotMs)) {
+          best = s;
+        }
+        break; // more DP at this TP only adds GPUs
+      }
+      // Stop once this TP already needs more GPUs than the best layout found so far.
+      if (best && s.results.totalGpus >= best.results.totalGpus) break;
+    }
+  }
+
+  const chosen = best || closest;
+  // Fixed latency (guardrails, ingress) that no amount of GPU capacity removes.
+  const fixedLatencySec = (chosen.ingress.eligible ? chosen.ingress.addedLatencyMs / 1000 : 0)
+    + (chosen.guardrails.eligible ? chosen.guardrails.addedTtftSec : 0);
+  return {
+    ...chosen,
+    latencySolve: {
+      met: !!best,
+      targetTtftSec: targetTtft,
+      targetTpotMs: targetTpot,
+      memoryOnly: summarize(memorySized),
+      chosen: summarize(chosen),
+      fixedLatencySec,
+      evaluated,
+    },
+  };
+}
+
+/** TP values worth trying for a replica on this platform, from `fromTp` up to the chassis size. */
+function tpCandidatesFor(scenario, fromTp) {
+  const gpusPerChassis = scenario.platform.gpusPerChassis || 8;
+  return [1, 2, 4, 8, 16].filter(t => t >= fromTp && t <= gpusPerChassis);
+}
+
+/**
+ * Memory sizing: the smallest TP that fits is not always the fewest GPUs. Each TP=1 replica
+ * holds a full copy of the weights, while a TP=4 replica shares one copy across four GPUs and
+ * gives the rest to KV cache -- so for KV-heavy workloads a larger TP can need fewer GPUs in
+ * total. Try each in-chassis TP and keep the layout with the fewest GPUs (ties: smaller TP).
+ */
+function computeMemorySized(config) {
+  const minimal = computeScenarioCore(config);
+  const applies = config.workloadType === 'inference' && config.isAutoSharding && config.isAutoDp
+    && config.servingArchitecture !== 'llmd' && minimal.pp === 1 && !minimal.autoRecommendation.error
+    // Without NVLink every TP all-reduce crosses PCIe; don't trade that for a few GPUs.
+    && minimal.gpu.interconnectType !== 'pcie';
+  if (!applies) return minimal;
+  let best = minimal;
+  for (const tp of tpCandidatesFor(minimal, minimal.tp + 1)) {
+    const s = computeScenarioCore({ ...config, _solverTp: tp });
+    if (s.pp === 1 && !s.memory.isOOM && s.results.totalGpus < best.results.totalGpus) best = s;
+  }
+  if (best === minimal) return minimal;
+  return {
+    ...best,
+    memorySizing: { minimalTp: minimal.tp, minimalDp: minimal.dp, minimalGpus: minimal.results.totalGpus },
+  };
+}
+
+export function computeScenario(config) {
+  const memorySized = computeMemorySized(config);
+  const solverApplies = config.latencyTargetsEnabled
+    && config.workloadType === 'inference'
+    && config.isAutoSharding
+    && config.servingArchitecture !== 'llmd'
+    && !memorySized.autoRecommendation.error;
+  if (!solverApplies) return { memorySizing: null, ...memorySized, latencySolve: null };
+  return { memorySizing: null, ...solveForLatency(config, memorySized) };
 }

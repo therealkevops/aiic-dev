@@ -38,7 +38,7 @@ export function CostTab({ ctx }) {
           </Banner>
         )}
 
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <Field label={`${gpu.name} — Unit Price (Capex)`}>
             <div className="relative">
               <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-zinc-500">$</span>
@@ -165,7 +165,7 @@ export function CostTab({ ctx }) {
               />
             }
           />
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <Field label="API price, input ($ / 1M tokens)">
               <input type="number" min="0" step="0.05" value={apiInputUsdPer1M}
                 onChange={(e) => setApiInputUsdPer1M(Math.max(0, Number(e.target.value) || 0))}

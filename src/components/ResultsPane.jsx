@@ -48,7 +48,7 @@ function SizingStatus({ ctx }) {
       aria-label="Sizing status"
       className={`rounded-lg border border-zinc-800 border-l-2 ${t.edge} bg-zinc-900/70 px-4 py-3.5 space-y-3`}
     >
-      <div className="flex items-center justify-between gap-3">
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
         <div className="flex items-center gap-2 min-w-0">
           <span className={`w-2 h-2 rounded-full shrink-0 ${t.dot}`} />
           <h2 className="text-[13.5px] font-semibold text-zinc-100 truncate">{headline}</h2>
@@ -130,7 +130,7 @@ export function ResultsPane({ ctx }) {
     storage, throughput, trainingRedundancy, workloadType,
   } = ctx;
   return (
-    <aside data-testid="results-pane" className="w-[44%] xl:w-[42%] min-w-[420px] max-w-[760px] shrink-0 overflow-y-auto p-4 md:p-6 bg-zinc-900/30 space-y-4">
+    <aside data-testid="results-pane" className="flex-1 min-w-0 lg:flex-none lg:w-[44%] xl:w-[42%] lg:min-w-[380px] xl:min-w-[420px] lg:max-w-[760px] lg:shrink-0 overflow-y-auto p-3 sm:p-4 md:p-6 bg-zinc-900/30 space-y-4">
 
       <ScenarioCompare ctx={ctx} />
 

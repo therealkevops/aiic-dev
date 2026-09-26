@@ -240,7 +240,7 @@ export function ShardingTab({ ctx }) {
             />
             {latencyTargetsEnabled && latencyTargetsAvailable && (
               <>
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <Field label="Time to first token (s)">
                     <input
                       type="number" min="0.05" max="600" step="0.1"

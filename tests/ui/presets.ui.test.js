@@ -241,3 +241,81 @@ test('learning: capstone brief and scored quiz', async () => {
   assert.equal(errors.length, 0, errors.join('; '));
   await context.close();
 });
+
+// Any visible element reaching past the viewport edge, outside a deliberate horizontal scroller.
+function overflowAudit() {
+  const vw = document.documentElement.clientWidth;
+  const inScroller = (el) => {
+    for (let p = el.parentElement; p; p = p.parentElement) {
+      const cs = getComputedStyle(p);
+      if ((cs.overflowX === 'auto' || cs.overflowX === 'scroll') && p.scrollWidth > p.clientWidth + 1) return true;
+    }
+    return false;
+  };
+  const out = [];
+  for (const el of document.querySelectorAll('body *')) {
+    const r = el.getBoundingClientRect();
+    if (!r.width || !r.height) continue;
+    if ((r.right > vw + 1 || r.left < -1) && !inScroller(el)) out.push(`${el.tagName} ${String(el.className).slice(0, 50)}`);
+  }
+  return out.slice(0, 5);
+}
+
+const ADVANCED_TABS = ['workload', 'platform', 'sharding', 'network', 'facility', 'storage', 'rag', 'stack', 'guardrails', 'ingress', 'hadr', 'mlops', 'mig', 'sla', 'cost', 'planning'];
+
+for (const width of [360, 768, 1024, 1280]) {
+  test(`responsive: every calculator section fits a ${width}px-wide screen`, async () => {
+    const context = await browser.newContext({ viewport: { width, height: 800 } });
+    const page = await context.newPage();
+    const errors = [];
+    page.on('pageerror', e => errors.push(e.message));
+    await page.goto(`${URL}#/advanced`, { waitUntil: 'networkidle' });
+    const narrow = width < 1024;
+    const problems = {};
+    for (const tab of ADVANCED_TABS) {
+      if (narrow) await page.getByTestId('open-sections').click();
+      await page.getByTestId(`nav-${tab}`).click();
+      const found = await page.evaluate(overflowAudit);
+      if (found.length) problems[tab] = found;
+    }
+    if (narrow) await page.getByTestId('pane-results').click();
+    const results = await page.evaluate(overflowAudit);
+    if (results.length) problems.results = results;
+    assert.deepEqual(problems, {}, `content past the screen edge at ${width}px`);
+    assert.equal(errors.length, 0, errors.join('; '));
+    await context.close();
+  });
+}
+
+test('responsive: phone journey through the calculator', async () => {
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, acceptDownloads: true });
+  const page = await context.newPage();
+  const errors = [];
+  page.on('pageerror', e => errors.push(e.message));
+  await page.goto(`${URL}#/advanced`, { waitUntil: 'networkidle' });
+  // Header actions live in the "more" menu on a phone.
+  await page.getByTestId('header-menu').click();
+  await page.getByTestId('menu-preset-select').selectOption('ent-agent-tool-use');
+  await page.keyboard.press('Escape');
+  await page.getByTestId('open-sections').click();
+  await page.getByTestId('nav-sharding').click();
+  assert.match(await page.getByTestId('config-pane').innerText(), /Sharding/);
+  // The summary bar switches to results and back.
+  await page.getByTestId('summary-bar').click();
+  assert.equal(await page.getByTestId('results-pane').count(), 1);
+  assert.equal(await page.getByTestId('config-pane').count(), 0);
+  assert.match(await page.getByTestId('sizing-status').innerText(), /Fits/);
+  await page.getByTestId('summary-bar').click();
+  assert.equal(await page.getByTestId('config-pane').count(), 1);
+  // Report download from the menu.
+  await page.getByTestId('header-menu').click();
+  const [download] = await Promise.all([page.waitForEvent('download'), page.getByTestId('menu-export-report').click()]);
+  assert.match(readFileSync(await download.path(), 'utf8'), /AI Infrastructure Sizing Report/);
+  // Guided setup opens full screen and applies.
+  await page.getByTestId('header-menu').click();
+  await page.getByTestId('menu-guided-setup').click();
+  await page.getByTestId('guided-apply').click();
+  assert.equal(await page.getByTestId('guided-setup-dialog').count(), 0);
+  assert.equal(errors.length, 0, errors.join('; '));
+  await context.close();
+});

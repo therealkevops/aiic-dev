@@ -12,14 +12,14 @@ export function Card({ icon: Icon, title, right, children, className = '', tight
   return (
     <div className={`bg-zinc-900 border border-zinc-800 rounded-xl ${tight ? 'p-3' : 'p-4'} ${className}`}>
       {(title || right) && (
-        <div className="flex items-center justify-between gap-3 pb-2.5 mb-3 border-b border-zinc-800/80">
+        <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 pb-2.5 mb-3 border-b border-zinc-800/80">
           <div className="flex items-center gap-2 min-w-0">
             {Icon && <Icon className="w-4 h-4 text-sky-400 shrink-0" />}
             {typeof title === 'string' ? (
               <span className="font-semibold text-[13px] text-zinc-100 truncate">{title}</span>
             ) : title}
           </div>
-          {right && <div className="shrink-0 text-xs">{right}</div>}
+          {right && <div className="shrink-0 max-w-full text-xs">{right}</div>}
         </div>
       )}
       {children}

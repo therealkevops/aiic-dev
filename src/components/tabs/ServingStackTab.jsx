@@ -27,7 +27,7 @@ export function ServingStackTab({ ctx }) {
         {/* Inference Engine Selection */}
         <div>
           <label className="block text-xs font-medium text-zinc-300 mb-1.5">High-Throughput Inference Runtime</label>
-          <div className="grid grid-cols-3 gap-1.5">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-1.5">
             {[
               { id: 'vllm', name: 'vLLM (v1)', desc: 'PagedAttention + Chunked Prefill' },
               { id: 'trt-llm', name: 'TensorRT-LLM', desc: 'NVIDIA Graph Compiler' },
@@ -47,7 +47,7 @@ export function ServingStackTab({ ctx }) {
         {/* Kubernetes / Cloud-Native Orchestrator */}
         <div>
           <label className="block text-xs font-medium text-zinc-300 mb-1.5">Cluster Orchestration &amp; Model Lifecycle</label>
-          <div className="grid grid-cols-3 gap-1.5">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-1.5">
             {[
               { id: 'kserve', name: 'KServe (K8s)', desc: 'Cisco IKS / OpenShift' },
               { id: 'ray', name: 'Ray Serve', desc: 'Distributed Pythonic' },
@@ -67,7 +67,7 @@ export function ServingStackTab({ ctx }) {
         {/* Serving Architecture: Colocated vs LLM-D (Disaggregated Prefill-Decode) */}
         <div>
           <label className="block text-xs font-medium text-zinc-300 mb-1.5">Serving Topology: Colocated vs. LLM-D Disaggregation</label>
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
             <ChoiceCard
               selected={servingArchitecture === 'colocated'}
               onClick={() => setServingArchitecture('colocated')}
@@ -260,7 +260,7 @@ export function ServingStackTab({ ctx }) {
           </label>
           {enableSpeculativeDecoding && workloadType === 'inference' && (
             <div className="ml-6 space-y-2.5 p-2.5 rounded-lg border border-zinc-800 bg-zinc-950/60">
-              <div className="grid grid-cols-2 gap-2.5">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                 <Field label="Drafter">
                   <select
                     value={specMethod}

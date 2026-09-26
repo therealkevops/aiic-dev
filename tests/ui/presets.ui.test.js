@@ -247,7 +247,7 @@ function overflowAudit() {
   const vw = document.documentElement.clientWidth;
   const inScroller = (el) => {
     for (let p = el.parentElement; p; p = p.parentElement) {
-      const cs = getComputedStyle(p);
+      const cs = window.getComputedStyle(p);
       if ((cs.overflowX === 'auto' || cs.overflowX === 'scroll') && p.scrollWidth > p.clientWidth + 1) return true;
     }
     return false;
@@ -363,3 +363,35 @@ for (const width of [360, 768, 1024]) {
     await context.close();
   });
 }
+
+test('responsive: architecture guide and home page on a phone', async () => {
+  const context = await browser.newContext({ viewport: { width: 360, height: 780 }, hasTouch: true, isMobile: true });
+  const page = await context.newPage();
+  const errors = [];
+  page.on('pageerror', e => errors.push(e.message));
+  await page.goto(URL, { waitUntil: 'networkidle' });
+  assert.deepEqual(await page.evaluate(overflowAudit), [], 'home page fits');
+  await page.goto(`${URL}#/guide`, { waitUntil: 'networkidle' });
+  // The chapter list is a drawer below lg; every chapter fits the screen.
+  assert.equal(await page.getByTestId('chapter-list').isVisible(), false);
+  await page.getByTestId('open-chapters').click();
+  const ids = await page.$$eval('[data-testid^="doc-"]', els => els.map(e => e.dataset.testid));
+  assert.ok(ids.length > 20);
+  const problems = {};
+  for (const id of ids) {
+    if (!(await page.getByTestId('chapter-list').isVisible())) await page.getByTestId('open-chapters').click();
+    await page.getByTestId(id).click();
+    assert.equal(await page.getByTestId('chapter-list').isVisible(), false, 'choosing a chapter closes the drawer');
+    const found = await page.evaluate(overflowAudit);
+    if (found.length) problems[id] = found;
+  }
+  assert.deepEqual(problems, {});
+  // Hover-only readouts have a tap alternative.
+  await page.goto(`${URL}#/advanced`, { waitUntil: 'networkidle' });
+  await page.getByTestId('open-sections').click();
+  await page.getByTestId('nav-planning').click();
+  await page.locator('[data-testid^="tornado-row-"]').first().tap();
+  assert.equal(await page.getByTestId('tornado-readout').count(), 1);
+  assert.equal(errors.length, 0, errors.join('; '));
+  await context.close();
+});

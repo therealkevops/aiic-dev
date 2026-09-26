@@ -51,9 +51,16 @@ function Tornado({ analysis, format }) {
         {analysis.rows.map((r) => (
           <div
             key={r.key}
-            className="grid grid-cols-[132px_1fr] items-center gap-2 py-1 rounded hover:bg-zinc-900/60"
+            data-testid={`tornado-row-${r.key}`}
+            className="grid grid-cols-[104px_1fr] sm:grid-cols-[132px_1fr] items-center gap-2 py-1 rounded hover:bg-zinc-900/60 cursor-pointer"
+            // Hover on desktop; tap, Enter or Space toggles the readout on touch screens.
+            role="button"
+            tabIndex={0}
             onMouseEnter={() => setHover(r.key)}
             onMouseLeave={() => setHover(null)}
+            onBlur={() => setHover(null)}
+            onClick={() => setHover(h => (h === r.key ? null : r.key))}
+            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setHover(h => (h === r.key ? null : r.key)); } }}
           >
             <div className="text-[11.5px] text-zinc-300 leading-tight">
               {r.label}
@@ -64,7 +71,7 @@ function Tornado({ analysis, format }) {
               {bar(r.lowValue, LOW_COLOR, 2)}
               {bar(r.highValue, HIGH_COLOR, 12)}
               {hover === r.key && (
-                <div className="absolute z-10 right-0 -top-12 bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-[10.5px] text-zinc-200 whitespace-nowrap shadow-lg">
+                <div data-testid="tornado-readout" className="absolute z-10 right-0 -top-12 bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-[10.5px] text-zinc-200 whitespace-nowrap shadow-lg">
                   <div><span className="inline-block w-2 h-2 rounded-sm mr-1" style={{ background: LOW_COLOR }} />{r.lowInput}: {format(r.lowValue)}</div>
                   <div><span className="inline-block w-2 h-2 rounded-sm mr-1" style={{ background: HIGH_COLOR }} />{r.highInput}: {format(r.highValue)}</div>
                 </div>

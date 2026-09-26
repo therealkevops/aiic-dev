@@ -50,3 +50,29 @@ details[open] > summary .chev {
 ::-webkit-scrollbar-thumb:hover {
   background: rgba(82, 82, 91, 0.9);
 }
+
+/* Phones: iOS zooms the page when a focused field's text is under 16px, so touch
+   screens get 16px form text below the sm breakpoint. */
+@media (max-width: 639px) and (pointer: coarse) {
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+  select,
+  textarea {
+    font-size: 16px;
+  }
+}
+
+/* Visible keyboard focus everywhere; mouse clicks don't draw a ring. */
+/* :where() keeps specificity at zero so fields styled with outline-none keep their own focus look. */
+:where(:focus-visible) {
+  outline: 2px solid rgb(56 189 248 / 0.8);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

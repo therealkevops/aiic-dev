@@ -15,7 +15,7 @@ function Point({ children }) {
 
 function ModeCard({ testId, icon: Icon, title, tagline, points, footer, primary, secondary }) {
   return (
-    <div data-testid={testId} className="flex flex-col rounded-xl border border-zinc-800 bg-zinc-900/60 p-6">
+    <div data-testid={testId} className="flex flex-col rounded-xl border border-zinc-800 bg-zinc-900/60 p-5 sm:p-6">
       <div className="flex items-center gap-3">
         <div className="w-9 h-9 rounded-lg bg-zinc-800 text-sky-400 flex items-center justify-center">
           <Icon className="w-5 h-5" />
@@ -25,12 +25,12 @@ function ModeCard({ testId, icon: Icon, title, tagline, points, footer, primary,
       <p className="text-sm text-zinc-400 mt-3 leading-relaxed">{tagline}</p>
       <ul className="mt-4 space-y-2 flex-1">{points.map((p, i) => <Point key={i}>{p}</Point>)}</ul>
       {footer}
-      <div className="mt-6 flex items-center gap-2">
+      <div className="mt-6 flex flex-wrap items-center gap-2">
         <button
           type="button"
           data-testid={primary.testId}
           onClick={primary.onClick}
-          className="h-9 inline-flex items-center gap-1.5 px-4 rounded-md bg-sky-600 hover:bg-sky-500 text-sm font-medium text-white cursor-pointer"
+          className="h-10 sm:h-9 inline-flex items-center gap-1.5 px-4 whitespace-nowrap rounded-md bg-sky-600 hover:bg-sky-500 text-sm font-medium text-white cursor-pointer"
         >
           {primary.label} <ArrowRight className="w-4 h-4" />
         </button>
@@ -38,7 +38,7 @@ function ModeCard({ testId, icon: Icon, title, tagline, points, footer, primary,
           <button
             type="button"
             onClick={secondary.onClick}
-            className="h-9 inline-flex items-center gap-1.5 px-3 rounded-md border border-zinc-700 hover:bg-zinc-800 text-sm text-zinc-200 cursor-pointer"
+            className="h-10 sm:h-9 inline-flex items-center gap-1.5 px-3 whitespace-nowrap rounded-md border border-zinc-700 hover:bg-zinc-800 text-sm text-zinc-200 cursor-pointer"
           >
             {secondary.icon && <secondary.icon className="w-4 h-4 text-zinc-400" />}
             {secondary.label}
@@ -57,27 +57,27 @@ export function HomePage({ onLearn, onAdvanced, onGuidedSetup, onGuide }) {
   const started = done > 0 || !!progress.lastLessonId;
 
   return (
-    <div className="min-h-screen w-full bg-zinc-950 text-zinc-100 antialiased overflow-y-auto">
-      <header className="h-14 px-6 border-b border-zinc-800 flex items-center justify-between">
-        <div className="flex items-center gap-2.5">
+    <div className="min-h-[100dvh] w-full bg-zinc-950 text-zinc-100 antialiased overflow-y-auto">
+      <header className="h-14 px-4 sm:px-6 border-b border-zinc-800 flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2.5 min-w-0">
           <div className="w-7 h-7 rounded-md bg-sky-600 text-white flex items-center justify-center">
             <Server className="w-4 h-4" />
           </div>
-          <span className="text-sm font-semibold text-white">AI Infrastructure Sizer</span>
+          <span className="text-sm font-semibold text-white truncate">AI Infrastructure Sizer</span>
         </div>
-        <button type="button" onClick={onGuide} className="h-8 inline-flex items-center gap-1.5 px-2.5 rounded-md text-xs text-zinc-300 hover:bg-zinc-800 cursor-pointer">
-          <BookOpen className="w-3.5 h-3.5" /> Architecture guide
+        <button type="button" onClick={onGuide} className="shrink-0 h-10 sm:h-8 inline-flex items-center gap-1.5 px-2.5 whitespace-nowrap rounded-md text-xs text-zinc-300 hover:bg-zinc-800 cursor-pointer">
+          <BookOpen className="w-3.5 h-3.5" /> <span className="sm:hidden">Guide</span><span className="hidden sm:inline">Architecture guide</span>
         </button>
       </header>
 
-      <main className="max-w-5xl mx-auto px-6 py-14">
-        <h1 className="text-3xl font-semibold tracking-tight text-white">Design private AI infrastructure with confidence</h1>
+      <main className="max-w-5xl mx-auto px-4 sm:px-6 py-8 sm:py-14 pb-[max(2rem,env(safe-area-inset-bottom))]">
+        <h1 className="text-2xl sm:text-3xl font-semibold tracking-tight text-white">Design private AI infrastructure with confidence</h1>
         <p className="mt-3 text-[15px] text-zinc-400 max-w-2xl leading-relaxed">
           Size GPU servers, networking, storage, power and cost for AI inference and training, using the same sizing engine
           in both modes. Choose how you want to work; you can switch at any time from the header.
         </p>
 
-        <div className="mt-10 grid md:grid-cols-2 gap-5">
+        <div className="mt-8 sm:mt-10 grid md:grid-cols-2 gap-4 sm:gap-5">
           <ModeCard
             testId="mode-card-learn"
             icon={GraduationCap}

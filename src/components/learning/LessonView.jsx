@@ -4,6 +4,7 @@ import { computeScenario } from '../../utils/scenario';
 import { CATALOG } from '../../learning/catalog';
 import { CONTROLS, LESSONS, METRICS, controlId, controlOptions, controlSet, controlValue } from '../../learning/lessons';
 import { loadProgress, saveProgress } from '../../learning/progress';
+import { BREAKPOINTS, useMinWidth } from '../../state/useMediaQuery';
 
 function Paragraphs({ text }) {
   return String(text).split('\n\n').map((p, i) => <p key={i} className="text-[13.5px] text-zinc-300 leading-relaxed">{p}</p>);
@@ -100,7 +101,15 @@ function PredictStep({ step, chosen, onChoose }) {
   );
 }
 
-function TaskStep({ step, complete }) {
+function OpenDesign({ onClick }) {
+  return (
+    <button type="button" data-testid="open-design" onClick={onClick} className="w-full h-10 inline-flex items-center justify-center gap-1.5 rounded-md border border-sky-800 bg-sky-500/10 text-sm text-sky-200 cursor-pointer">
+      <SlidersHorizontal className="w-4 h-4" /> Open the Design tab
+    </button>
+  );
+}
+
+function TaskStep({ step, complete, onOpenDesign }) {
   const [hint, setHint] = useState(false);
   return (
     <div className="space-y-3">
@@ -113,7 +122,8 @@ function TaskStep({ step, complete }) {
         {complete ? (
           <p className="mt-2 text-[12.5px] text-zinc-300 leading-relaxed">{step.done}</p>
         ) : (
-          <div className="mt-2">
+          <div className="mt-2 space-y-2">
+            {onOpenDesign && <OpenDesign onClick={onOpenDesign} />}
             {hint
               ? <p className="text-[12px] text-zinc-400">{step.hint}</p>
               : <button type="button" onClick={() => setHint(true)} className="text-[12px] text-sky-400 hover:underline cursor-pointer inline-flex items-center gap-1"><Lightbulb className="w-3.5 h-3.5" />Show a hint</button>}
@@ -124,13 +134,14 @@ function TaskStep({ step, complete }) {
   );
 }
 
-function BriefStep({ step, config, scenario }) {
+function BriefStep({ step, config, scenario, onOpenDesign }) {
   const [hint, setHint] = useState(false);
   const results = step.requirements.map(r => ({ ...r, ok: r.check(config, scenario), value: r.show(scenario, config) }));
   const allOk = results.every(r => r.ok);
   return (
     <div className="space-y-3">
       <Paragraphs text={step.body} />
+      {onOpenDesign && !allOk && <OpenDesign onClick={onOpenDesign} />}
       <ul className="rounded-md border border-zinc-800 divide-y divide-zinc-800" data-testid="brief-checklist">
         {results.map((r, i) => (
           <li key={i} className="flex items-center gap-2.5 px-3 py-2 text-[12.5px]">
@@ -226,6 +237,11 @@ export function LessonView({ lessonId, navigate, onOpenInAdvanced }) {
   const [answers, setAnswers] = useState(saved.answers || {});
   const [finished, setFinished] = useState(false);
   const [mathOpen, setMathOpen] = useState(true);
+  const xl = useMinWidth(BREAKPOINTS.xl);
+  const lg = useMinWidth(BREAKPOINTS.lg);
+  const [tab, setTab] = useState('lesson');
+  const openDesign = lg ? null : () => setTab('design');
+  const goStep = (i) => { setStepIdx(Math.max(0, Math.min(lesson.steps.length - 1, i))); setTab('lesson'); };
 
   const base = useMemo(() => lesson.start(), [lesson]);
   const config = useMemo(() => ({ ...base, ...values }), [base, values]);
@@ -242,6 +258,7 @@ export function LessonView({ lessonId, navigate, onOpenInAdvanced }) {
     saveProgress({ ...p, quiz: { ...p.quiz, [lessonId]: { last: pct, best: Math.max(prev.best || 0, pct) } } });
   };
   const highlight = new Set(step.highlight || []);
+  const watched = (step.highlight || []).find(id => lesson.metrics.includes(id));
 
   useEffect(() => {
     const p = loadProgress();
@@ -256,11 +273,8 @@ export function LessonView({ lessonId, navigate, onOpenInAdvanced }) {
   const next = CATALOG.find(l => l.number === meta.number + 1);
   const nextReady = next && LESSONS[next.id];
 
-  return (
-    <div className="flex-1 min-h-0 grid grid-cols-[minmax(340px,400px)_1fr_minmax(300px,360px)]">
-      {/* Steps */}
-      <section aria-label="Lesson steps" className="border-r border-zinc-800 overflow-y-auto flex flex-col">
-        <div className="px-5 pt-5 pb-4 border-b border-zinc-800">
+  const stepsHeader = (
+        <div className="px-4 sm:px-5 pt-5 pb-4 border-b border-zinc-800">
           <div className="text-[11px] text-zinc-500">Lesson {meta.number} of {CATALOG.length}</div>
           <h1 className="text-[17px] font-semibold text-white mt-0.5 leading-snug">{meta.title}</h1>
           <p className="text-[12.5px] text-zinc-400 mt-1.5 leading-relaxed">{lesson.objective}</p>
@@ -271,15 +285,16 @@ export function LessonView({ lessonId, navigate, onOpenInAdvanced }) {
           </div>
           <div className="text-[11px] text-zinc-500 mt-1.5 tabular-nums">Step {stepIdx + 1} of {lesson.steps.length}</div>
         </div>
-
-        <div className="px-5 py-5 flex-1 space-y-4" data-testid="lesson-step">
+  );
+  const stepBody = (
+        <div className="px-4 sm:px-5 py-5 flex-1 space-y-4" data-testid="lesson-step">
           <h2 className="text-[15px] font-semibold text-zinc-100">{step.title}</h2>
           {step.kind === 'read' && <Paragraphs text={step.body} />}
           {step.kind === 'predict' && (
             <PredictStep step={step} chosen={answers[stepIdx]} onChoose={(i) => setAnswers(a => ({ ...a, [stepIdx]: i }))} />
           )}
-          {step.kind === 'task' && <TaskStep key={stepIdx} step={step} complete={taskDone} />}
-          {step.kind === 'brief' && <BriefStep key={stepIdx} step={step} config={config} scenario={scenario} />}
+          {step.kind === 'task' && <TaskStep key={stepIdx} step={step} complete={taskDone} onOpenDesign={openDesign} />}
+          {step.kind === 'brief' && <BriefStep key={stepIdx} step={step} config={config} scenario={scenario} onOpenDesign={openDesign} />}
           {step.kind === 'quiz' && (
             <QuizStep step={step} state={answers[stepIdx]} onChange={(st) => setAnswers(a => ({ ...a, [stepIdx]: st }))} onSubmit={submitQuiz} />
           )}
@@ -313,19 +328,25 @@ export function LessonView({ lessonId, navigate, onOpenInAdvanced }) {
             </>
           )}
         </div>
-
-        <div className="px-5 py-3 border-t border-zinc-800 flex items-center justify-between">
+  );
+  const navFooter = (
+        <div className="px-4 sm:px-5 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] border-t border-zinc-800 flex items-center justify-between gap-3 bg-zinc-950">
           <button
             type="button"
-            onClick={() => setStepIdx(i => Math.max(0, i - 1))}
+            onClick={() => goStep(stepIdx - 1)}
             disabled={stepIdx === 0}
-            className="h-8 inline-flex items-center gap-1 px-2.5 rounded-md text-xs text-zinc-300 hover:bg-zinc-800 disabled:opacity-40 disabled:cursor-default cursor-pointer"
+            className="h-10 lg:h-8 inline-flex items-center gap-1 px-2.5 rounded-md text-sm lg:text-xs text-zinc-300 hover:bg-zinc-800 disabled:opacity-40 disabled:cursor-default cursor-pointer"
           >
             <ArrowLeft className="w-3.5 h-3.5" /> Back
           </button>
+          {!lg && watched && (
+            <span className="flex-1 min-w-0 text-center text-[11.5px] text-zinc-400 truncate" data-testid="watched-metric">
+              {METRICS[watched].label}: <span className="text-zinc-100 font-medium tabular-nums">{METRICS[watched].format(METRICS[watched].value(scenario, config), scenario, config)}</span>
+            </span>
+          )}
           {step.kind === 'recap' ? (
             !finished && (
-              <button type="button" data-testid="finish-lesson" onClick={finish} className="h-8 inline-flex items-center gap-1.5 px-3 rounded-md bg-emerald-600 hover:bg-emerald-500 text-xs font-medium text-white cursor-pointer">
+              <button type="button" data-testid="finish-lesson" onClick={finish} className="h-10 lg:h-8 inline-flex items-center gap-1.5 px-3 rounded-md bg-emerald-600 hover:bg-emerald-500 text-sm lg:text-xs font-medium text-white cursor-pointer">
                 <Check className="w-3.5 h-3.5" /> Finish lesson
               </button>
             )
@@ -333,20 +354,19 @@ export function LessonView({ lessonId, navigate, onOpenInAdvanced }) {
             <button
               type="button"
               data-testid="next-step"
-              onClick={() => setStepIdx(i => Math.min(lesson.steps.length - 1, i + 1))}
+              onClick={() => goStep(stepIdx + 1)}
               disabled={!canAdvance}
               title={canAdvance ? undefined : step.kind === 'task' || step.kind === 'brief' ? 'Complete the task to continue' : step.kind === 'quiz' ? 'Submit the quiz to continue' : 'Choose an answer to continue'}
-              className="h-8 inline-flex items-center gap-1 px-3 rounded-md bg-sky-600 hover:bg-sky-500 text-xs font-medium text-white disabled:bg-zinc-800 disabled:text-zinc-500 disabled:cursor-default cursor-pointer"
+              className="h-10 lg:h-8 inline-flex items-center gap-1 px-4 lg:px-3 rounded-md bg-sky-600 hover:bg-sky-500 text-sm lg:text-xs font-medium text-white disabled:bg-zinc-800 disabled:text-zinc-500 disabled:cursor-default cursor-pointer"
             >
               Next <ArrowRight className="w-3.5 h-3.5" />
             </button>
           )}
         </div>
-      </section>
-
-      {/* Design workbench */}
-      <section aria-label="Design" className="overflow-y-auto p-6 space-y-5">
-        <div className="rounded-lg border border-zinc-800 bg-zinc-900/60 p-5 space-y-4">
+  );
+  const designPanel = (
+    <>
+        <div className="rounded-lg border border-zinc-800 bg-zinc-900/60 p-4 sm:p-5 space-y-4">
           <div className="flex items-start justify-between gap-3">
             <div>
               <h2 className="text-[13.5px] font-semibold text-zinc-100">Your design</h2>
@@ -384,19 +404,70 @@ export function LessonView({ lessonId, navigate, onOpenInAdvanced }) {
             </div>
           )}
         </div>
-      </section>
-
-      {/* Results */}
-      <section aria-label="Results" className="border-l border-zinc-800 overflow-y-auto p-5 space-y-3 bg-zinc-950">
+    </>
+  );
+  const resultsPanel = (
+    <>
         <div className="flex items-center gap-2">
           <span className={`w-2 h-2 rounded-full ${scenario.memory.isOOM ? 'bg-red-400' : 'bg-emerald-400'}`} />
           <span className="text-[13px] font-medium text-zinc-100">{scenario.memory.isOOM ? 'Does not fit' : 'Fits in memory'}</span>
           <span className="text-[11px] text-zinc-500 ml-auto truncate">{scenario.gpu.name}</span>
         </div>
-        <div className="grid grid-cols-1 gap-2.5">
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-1 gap-2.5">
           {lesson.metrics.map(id => <MetricTile key={id} id={id} scenario={scenario} config={config} highlighted={highlight.has(id)} />)}
         </div>
-      </section>
+    </>
+  );
+
+  // Three columns from xl, two from lg (design above results), tabs below lg.
+  if (xl) {
+    return (
+      <div className="flex-1 min-h-0 grid grid-cols-[minmax(340px,400px)_1fr_minmax(300px,360px)]">
+        <section aria-label="Lesson steps" className="border-r border-zinc-800 overflow-y-auto flex flex-col">
+          {stepsHeader}{stepBody}{navFooter}
+        </section>
+        <section aria-label="Design" className="overflow-y-auto p-6 space-y-5">{designPanel}</section>
+        <section aria-label="Results" className="border-l border-zinc-800 overflow-y-auto p-5 space-y-3 bg-zinc-950">{resultsPanel}</section>
+      </div>
+    );
+  }
+  if (lg) {
+    return (
+      <div className="flex-1 min-h-0 grid grid-cols-[minmax(320px,380px)_1fr]">
+        <section aria-label="Lesson steps" className="border-r border-zinc-800 overflow-y-auto flex flex-col">
+          {stepsHeader}{stepBody}{navFooter}
+        </section>
+        <div className="overflow-y-auto p-5 space-y-5">
+          <section aria-label="Design" className="space-y-5">{designPanel}</section>
+          <section aria-label="Results" className="space-y-3">{resultsPanel}</section>
+        </div>
+      </div>
+    );
+  }
+  const tabs = [{ id: 'lesson', label: 'Lesson' }, { id: 'design', label: 'Design' }, { id: 'results', label: 'Results' }];
+  return (
+    <div className="flex-1 min-h-0 flex flex-col">
+      <div role="tablist" aria-label="Lesson view" className="shrink-0 grid grid-cols-3 gap-1 p-1.5 border-b border-zinc-800 bg-zinc-950">
+        {tabs.map(t => (
+          <button
+            key={t.id}
+            type="button"
+            role="tab"
+            aria-selected={tab === t.id}
+            data-testid={`lesson-tab-${t.id}`}
+            onClick={() => setTab(t.id)}
+            className={`h-10 rounded-md text-sm font-medium cursor-pointer ${tab === t.id ? 'bg-zinc-800 text-white' : 'text-zinc-400'}`}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+      <div className="flex-1 min-h-0 overflow-y-auto">
+        {tab === 'lesson' && <section aria-label="Lesson steps" className="flex flex-col">{stepsHeader}{stepBody}</section>}
+        {tab === 'design' && <section aria-label="Design" className="p-3 sm:p-5 space-y-4">{designPanel}</section>}
+        {tab === 'results' && <section aria-label="Results" className="p-3 sm:p-5 space-y-3">{resultsPanel}</section>}
+      </div>
+      {navFooter}
     </div>
   );
 }

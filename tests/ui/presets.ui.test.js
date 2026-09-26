@@ -319,3 +319,47 @@ test('responsive: phone journey through the calculator', async () => {
   assert.equal(errors.length, 0, errors.join('; '));
   await context.close();
 });
+
+test('responsive: complete a lesson task on a phone', async () => {
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+  const page = await context.newPage();
+  const errors = [];
+  page.on('pageerror', e => errors.push(e.message));
+  await page.goto(`${URL}#/learn/kv-cache`, { waitUntil: 'networkidle' });
+  const next = page.getByTestId('next-step');
+  await next.click();
+  await next.click();
+  await page.getByTestId('predict-option-1').click();
+  await next.click();
+  assert.equal(await next.isDisabled(), true);
+  // The task's controls are on the Design tab; Next stays reachable from every tab.
+  await page.getByTestId('open-design').click();
+  await page.getByTestId('control-concurrency-8').click();
+  assert.match(await page.getByTestId('watched-metric').innerText(), /21\.5 GB/);
+  assert.equal(await next.isDisabled(), false);
+  await page.getByTestId('lesson-tab-results').click();
+  assert.equal(await page.getByTestId('metric-gpus').count(), 1);
+  await next.click();
+  assert.equal(await page.getByTestId('lesson-step').count(), 1, 'Next returns to the lesson tab');
+  assert.equal(errors.length, 0, errors.join('; '));
+  await context.close();
+});
+
+for (const width of [360, 768, 1024]) {
+  test(`responsive: learning mode fits a ${width}px-wide screen`, async () => {
+    const context = await browser.newContext({ viewport: { width, height: 800 } });
+    const page = await context.newPage();
+    const problems = {};
+    for (const id of ['', '/memory', '/speed', '/capstone']) {
+      await page.goto(`${URL}#/learn${id}`, { waitUntil: 'networkidle' });
+      const views = width < 1024 && id ? ['lesson', 'design', 'results'] : [null];
+      for (const v of views) {
+        if (v) await page.getByTestId(`lesson-tab-${v}`).click();
+        const found = await page.evaluate(overflowAudit);
+        if (found.length) problems[`${id || 'index'}${v ? `/${v}` : ''}`] = found;
+      }
+    }
+    assert.deepEqual(problems, {});
+    await context.close();
+  });
+}

@@ -10,11 +10,11 @@ const READY = new Set(Object.keys(LESSONS)); // lessons whose steps are written
 
 export function LearningHeader({ navigate, children }) {
   return (
-    <header className="h-14 px-4 bg-zinc-950 border-b border-zinc-800 shrink-0 flex items-center gap-4">
+    <header className="h-14 px-3 sm:px-4 bg-zinc-950 border-b border-zinc-800 shrink-0 flex items-center gap-2 sm:gap-4">
       <ProductMark Icon={GraduationCap} onHome={() => navigate({ page: 'home' })} />
       <ModeSwitch mode="learn" onChange={(m) => navigate({ page: m })} />
       <div className="flex-1 min-w-0">{children}</div>
-      <button type="button" onClick={() => navigate({ page: 'guide' })} title="Architecture guide and glossary" className="h-8 inline-flex items-center gap-1.5 px-2.5 rounded-md text-xs text-zinc-300 hover:bg-zinc-800 cursor-pointer shrink-0">
+      <button type="button" onClick={() => navigate({ page: 'guide' })} title="Architecture guide and glossary" aria-label="Architecture guide" className="h-10 lg:h-8 min-w-10 justify-center inline-flex items-center gap-1.5 px-2.5 rounded-md text-xs text-zinc-300 hover:bg-zinc-800 cursor-pointer shrink-0">
         <BookOpen className="w-3.5 h-3.5" /><span className="hidden xl:inline">Guide</span>
       </button>
     </header>
@@ -25,7 +25,7 @@ function LessonIndex({ navigate }) {
   const progress = loadProgress();
   return (
     <main className="flex-1 overflow-y-auto">
-      <div className="max-w-3xl mx-auto px-6 py-10">
+      <div className="max-w-3xl mx-auto px-4 sm:px-6 py-8 sm:py-10">
         <h1 className="text-2xl font-semibold text-white">Learning path</h1>
         <p className="mt-2 text-sm text-zinc-400 leading-relaxed">
           Ten lessons that build up how a validated AI infrastructure design is sized, from what a GPU has to hold to what the
@@ -76,8 +76,8 @@ export function LearningPage({ lessonId, navigate, onOpenInAdvanced }) {
         {lesson && (
           <nav aria-label="Breadcrumb" className="flex items-center gap-2 text-xs text-zinc-500 min-w-0">
             <button type="button" data-testid="all-lessons" onClick={() => navigate({ page: 'learn', lessonId: null })} className="hover:text-zinc-200 cursor-pointer whitespace-nowrap">All lessons</button>
-            <span>/</span>
-            <span className="text-zinc-300 truncate">{lesson.number}. {lesson.title}</span>
+            <span className="hidden sm:inline">/</span>
+            <span className="text-zinc-300 truncate hidden sm:inline">{lesson.number}. {lesson.title}</span>
           </nav>
         )}
       </LearningHeader>

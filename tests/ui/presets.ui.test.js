@@ -241,3 +241,157 @@ test('learning: capstone brief and scored quiz', async () => {
   assert.equal(errors.length, 0, errors.join('; '));
   await context.close();
 });
+
+// Any visible element reaching past the viewport edge, outside a deliberate horizontal scroller.
+function overflowAudit() {
+  const vw = document.documentElement.clientWidth;
+  const inScroller = (el) => {
+    for (let p = el.parentElement; p; p = p.parentElement) {
+      const cs = window.getComputedStyle(p);
+      if ((cs.overflowX === 'auto' || cs.overflowX === 'scroll') && p.scrollWidth > p.clientWidth + 1) return true;
+    }
+    return false;
+  };
+  const out = [];
+  for (const el of document.querySelectorAll('body *')) {
+    const r = el.getBoundingClientRect();
+    if (!r.width || !r.height) continue;
+    if ((r.right > vw + 1 || r.left < -1) && !inScroller(el)) out.push(`${el.tagName} ${String(el.className).slice(0, 50)}`);
+  }
+  return out.slice(0, 5);
+}
+
+const ADVANCED_TABS = ['workload', 'platform', 'sharding', 'network', 'facility', 'storage', 'rag', 'stack', 'guardrails', 'ingress', 'hadr', 'mlops', 'mig', 'sla', 'cost', 'planning'];
+
+for (const width of [360, 768, 1024, 1280]) {
+  test(`responsive: every calculator section fits a ${width}px-wide screen`, async () => {
+    const context = await browser.newContext({ viewport: { width, height: 800 } });
+    const page = await context.newPage();
+    const errors = [];
+    page.on('pageerror', e => errors.push(e.message));
+    await page.goto(`${URL}#/advanced`, { waitUntil: 'networkidle' });
+    const narrow = width < 1024;
+    const problems = {};
+    for (const tab of ADVANCED_TABS) {
+      if (narrow) await page.getByTestId('open-sections').click();
+      await page.getByTestId(`nav-${tab}`).click();
+      const found = await page.evaluate(overflowAudit);
+      if (found.length) problems[tab] = found;
+    }
+    if (narrow) await page.getByTestId('pane-results').click();
+    const results = await page.evaluate(overflowAudit);
+    if (results.length) problems.results = results;
+    assert.deepEqual(problems, {}, `content past the screen edge at ${width}px`);
+    assert.equal(errors.length, 0, errors.join('; '));
+    await context.close();
+  });
+}
+
+test('responsive: phone journey through the calculator', async () => {
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, acceptDownloads: true });
+  const page = await context.newPage();
+  const errors = [];
+  page.on('pageerror', e => errors.push(e.message));
+  await page.goto(`${URL}#/advanced`, { waitUntil: 'networkidle' });
+  // Header actions live in the "more" menu on a phone.
+  await page.getByTestId('header-menu').click();
+  await page.getByTestId('menu-preset-select').selectOption('ent-agent-tool-use');
+  await page.keyboard.press('Escape');
+  await page.getByTestId('open-sections').click();
+  await page.getByTestId('nav-sharding').click();
+  assert.match(await page.getByTestId('config-pane').innerText(), /Sharding/);
+  // The summary bar switches to results and back.
+  await page.getByTestId('summary-bar').click();
+  assert.equal(await page.getByTestId('results-pane').count(), 1);
+  assert.equal(await page.getByTestId('config-pane').count(), 0);
+  assert.match(await page.getByTestId('sizing-status').innerText(), /Fits/);
+  await page.getByTestId('summary-bar').click();
+  assert.equal(await page.getByTestId('config-pane').count(), 1);
+  // Report download from the menu.
+  await page.getByTestId('header-menu').click();
+  const [download] = await Promise.all([page.waitForEvent('download'), page.getByTestId('menu-export-report').click()]);
+  assert.match(readFileSync(await download.path(), 'utf8'), /AI Infrastructure Sizing Report/);
+  // Guided setup opens full screen and applies.
+  await page.getByTestId('header-menu').click();
+  await page.getByTestId('menu-guided-setup').click();
+  await page.getByTestId('guided-apply').click();
+  assert.equal(await page.getByTestId('guided-setup-dialog').count(), 0);
+  assert.equal(errors.length, 0, errors.join('; '));
+  await context.close();
+});
+
+test('responsive: complete a lesson task on a phone', async () => {
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+  const page = await context.newPage();
+  const errors = [];
+  page.on('pageerror', e => errors.push(e.message));
+  await page.goto(`${URL}#/learn/kv-cache`, { waitUntil: 'networkidle' });
+  const next = page.getByTestId('next-step');
+  await next.click();
+  await next.click();
+  await page.getByTestId('predict-option-1').click();
+  await next.click();
+  assert.equal(await next.isDisabled(), true);
+  // The task's controls are on the Design tab; Next stays reachable from every tab.
+  await page.getByTestId('open-design').click();
+  await page.getByTestId('control-concurrency-8').click();
+  assert.match(await page.getByTestId('watched-metric').innerText(), /21\.5 GB/);
+  assert.equal(await next.isDisabled(), false);
+  await page.getByTestId('lesson-tab-results').click();
+  assert.equal(await page.getByTestId('metric-gpus').count(), 1);
+  await next.click();
+  assert.equal(await page.getByTestId('lesson-step').count(), 1, 'Next returns to the lesson tab');
+  assert.equal(errors.length, 0, errors.join('; '));
+  await context.close();
+});
+
+for (const width of [360, 768, 1024]) {
+  test(`responsive: learning mode fits a ${width}px-wide screen`, async () => {
+    const context = await browser.newContext({ viewport: { width, height: 800 } });
+    const page = await context.newPage();
+    const problems = {};
+    for (const id of ['', '/memory', '/speed', '/capstone']) {
+      await page.goto(`${URL}#/learn${id}`, { waitUntil: 'networkidle' });
+      const views = width < 1024 && id ? ['lesson', 'design', 'results'] : [null];
+      for (const v of views) {
+        if (v) await page.getByTestId(`lesson-tab-${v}`).click();
+        const found = await page.evaluate(overflowAudit);
+        if (found.length) problems[`${id || 'index'}${v ? `/${v}` : ''}`] = found;
+      }
+    }
+    assert.deepEqual(problems, {});
+    await context.close();
+  });
+}
+
+test('responsive: architecture guide and home page on a phone', async () => {
+  const context = await browser.newContext({ viewport: { width: 360, height: 780 }, hasTouch: true, isMobile: true });
+  const page = await context.newPage();
+  const errors = [];
+  page.on('pageerror', e => errors.push(e.message));
+  await page.goto(URL, { waitUntil: 'networkidle' });
+  assert.deepEqual(await page.evaluate(overflowAudit), [], 'home page fits');
+  await page.goto(`${URL}#/guide`, { waitUntil: 'networkidle' });
+  // The chapter list is a drawer below lg; every chapter fits the screen.
+  assert.equal(await page.getByTestId('chapter-list').isVisible(), false);
+  await page.getByTestId('open-chapters').click();
+  const ids = await page.$$eval('[data-testid^="doc-"]', els => els.map(e => e.dataset.testid));
+  assert.ok(ids.length > 20);
+  const problems = {};
+  for (const id of ids) {
+    if (!(await page.getByTestId('chapter-list').isVisible())) await page.getByTestId('open-chapters').click();
+    await page.getByTestId(id).click();
+    assert.equal(await page.getByTestId('chapter-list').isVisible(), false, 'choosing a chapter closes the drawer');
+    const found = await page.evaluate(overflowAudit);
+    if (found.length) problems[id] = found;
+  }
+  assert.deepEqual(problems, {});
+  // Hover-only readouts have a tap alternative.
+  await page.goto(`${URL}#/advanced`, { waitUntil: 'networkidle' });
+  await page.getByTestId('open-sections').click();
+  await page.getByTestId('nav-planning').click();
+  await page.locator('[data-testid^="tornado-row-"]').first().tap();
+  assert.equal(await page.getByTestId('tornado-readout').count(), 1);
+  assert.equal(errors.length, 0, errors.join('; '));
+  await context.close();
+});

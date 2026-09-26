@@ -3,7 +3,7 @@ import {
   ArrowLeft, BookOpen, Cpu, Network, Database, Server,
   Share2, Briefcase, Bot, CloudLightning, Timer,
   ChevronRight, ChevronLeft, ChevronDown, Search, Layers, Info,
-  HardDrive, Zap, DollarSign, AlertTriangle, Terminal, ShieldCheck
+  HardDrive, Zap, DollarSign, AlertTriangle, Terminal, ShieldCheck, Menu, X
 } from 'lucide-react';
 import { COMPLIANCE_FRAMEWORKS, CONTROL_DOMAINS, STATUS, evaluateControlDomains } from '../data/security';
 import { Banner, Tag, Rows, Row, SectionLabel } from './ui';
@@ -2432,6 +2432,14 @@ export function GlossaryPage({ onBack, initialDocId }) {
   
   // Collapsible section groups state (default all open)
   const [collapsedGroups, setCollapsedGroups] = useState({});
+  // Below lg the chapter list is a slide-out menu.
+  const [chaptersOpen, setChaptersOpen] = useState(false);
+  useEffect(() => {
+    if (!chaptersOpen) return undefined;
+    const onKey = (e) => { if (e.key === 'Escape') setChaptersOpen(false); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [chaptersOpen]);
 
   const toggleGroup = (groupId) => {
     setCollapsedGroups(prev => ({
@@ -2468,30 +2476,48 @@ export function GlossaryPage({ onBack, initialDocId }) {
   }, [searchQuery]);
 
   return (
-    <div className="h-screen w-screen flex flex-col bg-zinc-950 text-zinc-100 antialiased overflow-hidden">
+    <div className="h-[100dvh] w-full flex flex-col bg-zinc-950 text-zinc-100 antialiased overflow-hidden">
       {/* Top Header */}
-      <header className="px-4 py-2.5 bg-zinc-900/95 border-b border-zinc-800 shrink-0 flex items-center justify-between z-10">
-        <div className="flex items-center gap-4">
+      <header className="px-3 sm:px-4 py-2.5 bg-zinc-900/95 border-b border-zinc-800 shrink-0 flex items-center justify-between gap-3 z-10">
+        <div className="flex items-center gap-3 sm:gap-4 min-w-0">
           <button
             type="button"
             onClick={onBack}
             className="flex items-center gap-1.5 text-xs font-medium text-zinc-300 hover:text-white bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded-lg px-2.5 py-1.5 transition cursor-pointer"
           >
             <ArrowLeft className="w-3.5 h-3.5" />
-            Back to Calculator
+            Back<span className="hidden sm:inline">&nbsp;to Calculator</span>
           </button>
-          <div className="h-4 w-px bg-zinc-800" />
-          <div className="flex items-center gap-2 text-zinc-100">
-            <BookOpen className="w-4 h-4 text-sky-400" />
-            <span className="text-sm font-semibold tracking-tight">AI Infrastructure Architecture Documentation</span>
+          <div className="hidden sm:block h-4 w-px bg-zinc-800" />
+          <div className="flex items-center gap-2 text-zinc-100 min-w-0">
+            <BookOpen className="w-4 h-4 text-sky-400 shrink-0" />
+            <span className="text-sm font-semibold tracking-tight truncate"><span className="lg:hidden">Architecture guide</span><span className="hidden lg:inline">AI Infrastructure Architecture Documentation</span></span>
           </div>
         </div>
+        <button
+          type="button"
+          data-testid="open-chapters"
+          onClick={() => setChaptersOpen(true)}
+          className="lg:hidden shrink-0 h-10 inline-flex items-center gap-1.5 px-3 rounded-lg border border-zinc-700 bg-zinc-800 text-sm text-zinc-200 cursor-pointer"
+        >
+          <Menu className="w-4 h-4" /> Chapters
+        </button>
       </header>
 
       {/* Main Hub Body */}
       <div className="flex-1 flex overflow-hidden">
         {/* Left Documentation Navigation Sidebar */}
-        <aside className="w-72 shrink-0 bg-zinc-900/95 border-r border-zinc-800 flex flex-col h-full overflow-hidden">
+        {chaptersOpen && <div className="lg:hidden fixed inset-0 z-30 bg-black/60" onClick={() => setChaptersOpen(false)} />}
+        <aside
+          data-testid="chapter-list"
+          className={`${chaptersOpen ? 'fixed inset-y-0 left-0 z-40 flex w-[min(20rem,85vw)] pb-[env(safe-area-inset-bottom)]' : 'hidden'} lg:static lg:z-auto lg:flex lg:w-72 shrink-0 bg-zinc-900 lg:bg-zinc-900/95 border-r border-zinc-800 flex-col h-full overflow-hidden`}
+        >
+          <div className="lg:hidden flex items-center justify-between px-3 pt-3">
+            <span className="text-sm font-semibold text-white">Chapters</span>
+            <button type="button" onClick={() => setChaptersOpen(false)} aria-label="Close chapters" className="w-10 h-10 -mr-2 flex items-center justify-center rounded-md text-zinc-400 hover:text-white hover:bg-zinc-800 cursor-pointer">
+              <X className="w-5 h-5" />
+            </button>
+          </div>
           {/* Search Bar */}
           <div className="p-3 border-b border-zinc-800">
             <div className="relative">
@@ -2501,7 +2527,7 @@ export function GlossaryPage({ onBack, initialDocId }) {
                 placeholder="Search architecture docs..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full bg-zinc-900 border border-zinc-800 rounded-lg pl-8 pr-3 py-1.5 text-xs text-zinc-200 placeholder-zinc-500 focus:outline-none focus:border-sky-500 transition-colors"
+                className="w-full bg-zinc-900 border border-zinc-800 rounded-lg pl-8 pr-3 py-2 lg:py-1.5 text-base lg:text-xs text-zinc-200 placeholder-zinc-500 focus:outline-none focus:border-sky-500 transition-colors"
               />
             </div>
           </div>
@@ -2536,7 +2562,8 @@ export function GlossaryPage({ onBack, initialDocId }) {
                         return (
                           <button
                             key={item.id}
-                            onClick={() => setActiveDocId(item.id)}
+                            data-testid={`doc-${item.id}`}
+                            onClick={() => { setActiveDocId(item.id); setChaptersOpen(false); }}
                             className={`w-full text-left px-2.5 py-1.5 rounded-md text-xs font-medium transition-all flex items-center gap-2.5 cursor-pointer ${
                               isActive
                                 ? 'bg-sky-500/15 text-sky-400 font-semibold border border-sky-500/30'
@@ -2557,16 +2584,16 @@ export function GlossaryPage({ onBack, initialDocId }) {
         </aside>
 
         {/* Right Active Document Pane */}
-        <main className="flex-1 overflow-y-auto p-6 lg:p-8">
+        <main className="flex-1 min-w-0 overflow-y-auto p-4 sm:p-6 lg:p-8">
           <div className="max-w-4xl mx-auto">
             
             {/* Breadcrumb Navigation */}
-            <div className="flex items-center gap-2 text-xs font-mono text-zinc-500 mb-6">
-              <span>Docs</span>
-              <ChevronRight className="w-3 h-3 text-zinc-600" />
-              <span className="text-zinc-400">{currentDoc.category}</span>
-              <ChevronRight className="w-3 h-3 text-zinc-600" />
-              <span className="text-sky-400 font-medium">{currentDoc.title}</span>
+            <div className="flex items-center gap-2 text-xs font-mono text-zinc-500 mb-4 sm:mb-6 min-w-0">
+              <span className="hidden sm:inline">Docs</span>
+              <ChevronRight className="hidden sm:block w-3 h-3 text-zinc-600 shrink-0" />
+              <span className="text-zinc-400 shrink-0">{currentDoc.category}</span>
+              <ChevronRight className="hidden sm:block w-3 h-3 text-zinc-600 shrink-0" />
+              <span className="hidden sm:inline text-sky-400 font-medium truncate">{currentDoc.title}</span>
             </div>
 
             {/* Document Content Rendering */}

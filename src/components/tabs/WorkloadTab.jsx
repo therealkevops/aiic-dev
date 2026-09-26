@@ -171,7 +171,7 @@ export function WorkloadTab({ ctx }) {
                   options={[{ value: 'users', label: 'Users × requests/hour' }, { value: 'rps', label: 'Requests / second' }]}
                 />
                 {trafficInputType === 'users' ? (
-                  <div className="grid grid-cols-2 gap-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <Field label="Active users in the peak hour">
                       <input type="number" min="1" step="10" value={peakActiveUsers}
                         onChange={(e) => setPeakActiveUsers(Math.max(1, Number(e.target.value) || 1))}
@@ -329,7 +329,7 @@ export function WorkloadTab({ ctx }) {
                   onChange={setRequestMixEnabled}
                 />
                 {requestMixEnabled && (
-                  <div className="grid grid-cols-2 gap-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <Field label={`Short requests: ${shortRequestPct}%`}>
                       <input
                         type="range" min="0" max="95" step="5"
@@ -373,7 +373,7 @@ export function WorkloadTab({ ctx }) {
               }
             />
 
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <Field label="Training tokens (billions)">
                 <input type="number" min="0.001" step="1" value={trainingTokensB}
                   onChange={(e) => setTrainingTokensB(Math.max(0.001, Number(e.target.value) || 0.001))}

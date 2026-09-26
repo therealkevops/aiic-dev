@@ -24,7 +24,7 @@ export function TrainingRedundancyTab({ ctx }) {
         {trainingTime.eligible && (
           <div className="space-y-3">
             <SectionLabel>FAILURE MODEL</SectionLabel>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <Field label="GPU MTBF (GPU-hours)">
                 <input type="number" min="1000" step="5000" value={gpuMtbfHours}
                   onChange={(e) => setGpuMtbfHours(Math.max(100, Number(e.target.value) || 100))}

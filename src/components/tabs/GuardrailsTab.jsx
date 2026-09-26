@@ -72,7 +72,7 @@ export function GuardrailsTab({ ctx }) {
               onChange={setEnableOutputGuard}
             />
 
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <Field label="Guard GPU">
                 <select
                   value={guardGpuId}

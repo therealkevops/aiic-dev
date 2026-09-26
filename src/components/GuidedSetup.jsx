@@ -34,16 +34,16 @@ export function GuidedSetup({ current, onApply, onClose }) {
   }, [onClose]);
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/70 flex items-start justify-center overflow-y-auto p-4" onClick={onClose}>
+    <div className="fixed inset-0 z-50 bg-black/70 flex items-start justify-center overflow-y-auto p-0 sm:p-4" onClick={onClose}>
       <div
         role="dialog"
         aria-modal="true"
         aria-labelledby="guided-setup-title"
         data-testid="guided-setup-dialog"
-        className="w-full max-w-5xl bg-zinc-900 border border-zinc-800 rounded-xl shadow-2xl my-6"
+        className="w-full max-w-5xl bg-zinc-900 sm:border border-zinc-800 sm:rounded-xl shadow-2xl min-h-full sm:min-h-0 sm:my-6"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between px-5 py-3 border-b border-zinc-800">
+        <div className="sticky top-0 z-10 bg-zinc-900 sm:rounded-t-xl flex items-center justify-between px-4 sm:px-5 py-3 border-b border-zinc-800">
           <h2 id="guided-setup-title" className="text-sm font-semibold text-white flex items-center gap-2">
             <Compass className="w-4 h-4 text-sky-400" /> Guided setup
           </h2>
@@ -53,7 +53,7 @@ export function GuidedSetup({ current, onApply, onClose }) {
         </div>
 
         <div className="grid md:grid-cols-[1fr_380px] gap-0">
-          <div className="p-5 space-y-5 md:border-r border-zinc-800">
+          <div className="p-4 sm:p-5 space-y-5 md:border-r border-zinc-800">
             <Question n={1} title="What will it do?">
               <div className="grid grid-cols-2 lg:grid-cols-3 gap-2">
                 {USE_CASES.map(u => (
@@ -64,7 +64,7 @@ export function GuidedSetup({ current, onApply, onClose }) {
 
             {training ? (
               <Question n={2} title="How much data, and how soon?" hint="Training tokens are the dataset size times the number of passes over it.">
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <label className="text-[11px] text-zinc-400 space-y-1 block">
                     <span>Training tokens (billions)</span>
                     <input type="number" min="0.01" step="0.1" className={inputCls}
@@ -117,7 +117,7 @@ export function GuidedSetup({ current, onApply, onClose }) {
             </Question>
 
             <Question n={training ? 4 : 5} title="Hardware vendor and budget" hint="Every platform from the vendor is sized and the lowest total cost of ownership within budget is recommended.">
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <label className="text-[11px] text-zinc-400 space-y-1 block">
                   <span>Vendor</span>
                   <select className={inputCls} value={answers.vendor} onChange={(e) => set('vendor')(e.target.value)}>
@@ -134,7 +134,7 @@ export function GuidedSetup({ current, onApply, onClose }) {
             </Question>
           </div>
 
-          <div className="p-5 space-y-3 bg-zinc-950/40">
+          <div className="p-4 sm:p-5 space-y-3 bg-zinc-950/40">
             <h3 className="text-[13px] font-semibold text-zinc-100">Recommendation</h3>
             {!chosen ? (
               <p className="text-xs text-zinc-400">No platform from this vendor can hold this workload. Try another vendor or a shorter document length.</p>

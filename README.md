@@ -12,6 +12,8 @@ Built for infrastructure architects and systems engineers designing clusters for
   - **Learning**: a ten-lesson path for solutions architects on validated reference designs. Each lesson exposes a few controls on a real design, highlights the metrics to watch, shows the math with live values from the sizing engine, and mixes predict-then-check questions with tasks that complete automatically. Lessons: GPU memory, KV cache, sharding, prefill vs decode, traffic and queueing, the network fabric, power and cooling, training, and cost; a capstone design brief (latency, capacity and budget) and a scored quiz finish the path. Progress and quiz scores are kept in the browser; any lesson's design opens in Advanced mode, and Advanced tabs link to the matching lesson.
   - **Advanced**: the full calculator described below.
 
+- **Works on any screen**: from wide desktops down to 360px phones. Below 1024px the calculator shows one pane at a time (a section picker, an Inputs/Results switch and a summary bar with the headline numbers), header actions move to a menu, lessons switch to Lesson/Design/Results tabs, and the architecture guide's chapter list becomes a slide-out menu. Every setting stays editable on a phone.
+
 - **Model Weight & Architecture Modeling**:
   - Dense models (LLaMA 3.1 8B, 70B, 405B, Gemma 2, Mistral).
   - Mixture-of-Experts (MoE) with exact VRAM loading across all expert weights and active parameter decode routing (DeepSeek-V3 / R1, Mixtral 8x7B).
@@ -105,7 +107,7 @@ Test modules cover:
 10. Planning (`tests/planning.test.js`): energy and carbon, rent vs buy, power budget, sensitivity, growth plan; guided setup (`tests/guidedSetup.test.js`)
 11. Add-on modules: storage, RAG, guardrails, ingress, HA/DR, MLOps, MIG, SLA queueing, training redundancy, cost and security posture
 
-Browser tests (`npm run test:ui`) build the app, render every preset on every tab against a golden snapshot, and exercise scenario comparison, report export and guided setup.
+Browser tests (`npm run test:ui`) build the app, render every preset on every tab against a golden snapshot, and exercise scenario comparison, report export, guided setup and Learning mode. Responsive tests check that no calculator section, lesson view, guide chapter or the home page reaches past the screen edge at 360, 768, 1024 and 1280px, and walk through the calculator and a lesson on a phone.
 
 Detailed mathematical documentation and references can be found in [`docs/SIZING_LOGIC_SPEC.md`](docs/SIZING_LOGIC_SPEC.md).
 

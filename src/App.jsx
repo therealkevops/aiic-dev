@@ -17,7 +17,9 @@ import { scenarioMetrics } from './utils/compare';
 import { buildReportHtml } from './utils/report';
 import { GlossaryPage } from './components/GlossaryPage';
 import { AppHeader } from './components/AppHeader';
-import { NavRail } from './components/NavRail';
+import { NavRail, NavDrawer } from './components/NavRail';
+import { SectionBar, SummaryBar } from './components/MobileBars';
+import { useMinWidth, BREAKPOINTS } from './state/useMediaQuery';
 import { ResultsPane } from './components/ResultsPane';
 import { GuidedSetup } from './components/GuidedSetup';
 import { WorkloadTab } from './components/tabs/WorkloadTab';
@@ -61,6 +63,10 @@ export default function App() {
   // Scenario A for side-by-side comparison: a frozen copy of a configuration and its metrics.
   const [pinned, setPinned] = useState(null);
   const [guidedOpen, setGuidedOpen] = useState(false);
+  // Below lg one pane shows at a time and the section list is a slide-out menu.
+  const wide = useMinWidth(BREAKPOINTS.lg);
+  const [pane, setPane] = useState('inputs');
+  const [sectionsOpen, setSectionsOpen] = useState(false);
 
   const scenario = useMemo(() => computeScenario(config), [config]);
 
@@ -227,7 +233,7 @@ export default function App() {
   }
 
   return (
-    <div className="h-screen w-screen flex flex-col bg-zinc-950 text-zinc-100 antialiased overflow-hidden select-none-text">
+    <div className="h-[100dvh] w-full flex flex-col bg-zinc-950 text-zinc-100 antialiased overflow-hidden select-none-text">
       {/* Top Banner / Header (Compact, Fixed at top) */}
       <AppHeader ctx={ctx} />
 
@@ -244,14 +250,27 @@ export default function App() {
         />
       )}
 
-      {/* Main 3-Pane Layout Area (Fills Viewport Height) */}
-      <div className="flex-1 flex overflow-hidden">
+      {!wide && (
+        <>
+          <SectionBar ctx={ctx} pane={pane} onPane={setPane} onOpenSections={() => setSectionsOpen(true)} />
+          <NavDrawer
+            ctx={ctx}
+            open={sectionsOpen}
+            onClose={() => setSectionsOpen(false)}
+            onSelect={(id) => { setActiveInputTab(id); setPane('inputs'); setSectionsOpen(false); }}
+          />
+        </>
+      )}
+
+      {/* Main layout: nav rail, inputs and results side by side from lg; one pane at a time below */}
+      <div className="flex-1 min-h-0 flex overflow-hidden">
 
         {/* PANE 1: Left Navigation Rail */}
-        <NavRail ctx={ctx} />
+        {wide && <NavRail ctx={ctx} />}
 
         {/* PANE 2: Central Configuration Variables Pane (Independently Scrollable) */}
-        <main data-testid="config-pane" className="flex-1 min-w-[380px] overflow-y-auto p-4 md:p-6 bg-zinc-950/70 border-r border-zinc-800 space-y-4">
+        {(wide || pane === 'inputs') && (
+        <main data-testid="config-pane" className="flex-1 min-w-0 lg:min-w-[360px] overflow-y-auto p-3 sm:p-4 md:p-6 bg-zinc-950/70 lg:border-r border-zinc-800 space-y-4">
 
           <LearnLink tabId={activeInputTab} navigate={navigate} />
 
@@ -308,11 +327,14 @@ export default function App() {
           {activeInputTab === 'planning' && <PlanningTab ctx={ctx} />}
 
         </main>
+        )}
 
         {/* PANE 3: Right Results Pane (Independently Scrollable) */}
-        <ResultsPane ctx={ctx} />
+        {(wide || pane === 'results') && <ResultsPane ctx={ctx} />}
 
       </div>
+
+      {!wide && <SummaryBar ctx={ctx} pane={pane} onPane={setPane} />}
     </div>
   );
 }

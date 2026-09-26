@@ -20,7 +20,8 @@ export function ModeSwitch({ mode, onChange }) {
             data-testid={`mode-${o.id}`}
             onClick={() => !active && onChange(o.id)}
             title={`${o.label} mode`}
-            className={`inline-flex items-center gap-1.5 px-2.5 rounded text-xs font-medium transition cursor-pointer ${
+            aria-label={`${o.label} mode`}
+            className={`inline-flex items-center gap-1.5 px-2.5 min-w-9 justify-center rounded text-xs font-medium transition cursor-pointer ${
               active ? 'bg-zinc-700 text-white' : 'text-zinc-400 hover:text-zinc-100'
             }`}
           >
@@ -36,12 +37,12 @@ export function ModeSwitch({ mode, onChange }) {
 // Product mark and name; returns to the home page.
 export function ProductMark({ onHome, Icon, tagline }) {
   return (
-    <button type="button" data-testid="go-home" onClick={onHome} title="Home" className="flex items-center gap-2.5 shrink-0 text-left cursor-pointer">
+    <button type="button" data-testid="go-home" onClick={onHome} title="Home" aria-label="AI Infrastructure Sizer: home" className="flex items-center gap-2.5 shrink-0 text-left cursor-pointer">
       <div className="w-7 h-7 rounded-md bg-sky-600 text-white flex items-center justify-center">
         <Icon className="w-4 h-4" />
       </div>
       <div className="leading-tight">
-        <div className="text-sm font-semibold text-white whitespace-nowrap">AI Infrastructure Sizer</div>
+        <div className="text-sm font-semibold text-white whitespace-nowrap hidden sm:block">AI Infrastructure Sizer</div>
         {tagline && <div className="text-[10.5px] text-zinc-500 whitespace-nowrap hidden 2xl:block">{tagline}</div>}
       </div>
     </button>

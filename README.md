@@ -83,6 +83,8 @@ npm test
 npm run build
 ```
 
+The build is split so the home page downloads only the sizing engine and React; the calculator, Learning mode, guided setup and the architecture guide load when opened. Fonts are bundled (no external requests), and a service worker (`build/serviceWorker.js` generates `sw.js`) caches every build file on the first visit, so after one online visit the app works offline or air-gapped and can be installed from the browser. The build uses relative paths, so `dist/` can be served from any folder.
+
 ---
 
 ## Testing & Verification

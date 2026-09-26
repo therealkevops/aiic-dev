@@ -155,16 +155,18 @@ test('home page on first visit, then the last-used mode', async () => {
   assert.equal(await page.getByTestId('mode-card-learn').count(), 1, 'first visit shows the home page');
   await page.getByTestId('open-advanced').click();
   assert.match(page.url(), /#\/advanced$/);
-  assert.equal(await page.getByTestId('kpi-gpus').count(), 1);
+  // Screens load on demand, so wait for each one to appear.
+  await page.getByTestId('kpi-gpus').waitFor();
   // A later visit to the root opens the last-used mode.
   await page.goto(URL, { waitUntil: 'networkidle' });
-  assert.equal(await page.getByTestId('kpi-gpus').count(), 1, 'remembered mode skips the home page');
+  await page.getByTestId('kpi-gpus').waitFor();
+  assert.equal(await page.getByTestId('mode-card-learn').count(), 0, 'remembered mode skips the home page');
   // Switch to Learning from the header; the product name returns home.
   await page.getByTestId('mode-learn').click();
   assert.match(page.url(), /#\/learn$/);
-  assert.equal(await page.getByTestId('lesson-list').count(), 1);
+  await page.getByTestId('lesson-list').waitFor();
   await page.getByTestId('go-home').click();
-  assert.equal(await page.getByTestId('mode-card-advanced').count(), 1);
+  await page.getByTestId('mode-card-advanced').waitFor();
   assert.equal(errors.length, 0, errors.join('; '));
   await context.close();
 });
@@ -392,6 +394,32 @@ test('responsive: architecture guide and home page on a phone', async () => {
   await page.getByTestId('nav-planning').click();
   await page.locator('[data-testid^="tornado-row-"]').first().tap();
   assert.equal(await page.getByTestId('tornado-readout').count(), 1);
+  assert.equal(errors.length, 0, errors.join('; '));
+  await context.close();
+});
+
+test('home loads only the core files; every screen works offline after one visit', async () => {
+  const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const page = await context.newPage();
+  const errors = [];
+  page.on('pageerror', e => errors.push(e.message));
+  const scripts = [];
+  page.on('request', r => { if (r.resourceType() === 'script') scripts.push(r.url()); });
+  await page.goto(URL, { waitUntil: 'networkidle' });
+  await page.getByTestId('mode-card-learn').waitFor();
+  assert.equal(scripts.some(u => /GlossaryPage|LearningPage|AdvancedView/.test(u)), false, `home fetched: ${scripts.join(', ')}`);
+  // The service worker precaches every build file, then the app runs without a network.
+  await page.evaluate(() => navigator.serviceWorker.ready);
+  await page.reload({ waitUntil: 'networkidle' });
+  assert.equal(await page.evaluate(() => !!navigator.serviceWorker.controller), true);
+  await context.setOffline(true);
+  await page.goto(`${URL}#/advanced`);
+  await page.getByTestId('kpi-gpus').waitFor();
+  await page.goto(`${URL}#/learn/memory`);
+  await page.getByTestId('lesson-step').waitFor();
+  await page.goto(`${URL}#/guide`);
+  await page.getByTestId('chapter-list').waitFor();
+  assert.equal(await page.evaluate(() => document.fonts.check('600 14px "IBM Plex Sans"')), true, 'bundled font available offline');
   assert.equal(errors.length, 0, errors.join('; '));
   await context.close();
 });

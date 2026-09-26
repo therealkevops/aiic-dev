@@ -4,6 +4,8 @@ import { computeScenario } from '../src/utils/scenario.js';
 import { CATALOG } from '../src/learning/catalog.js';
 import { CONTROLS, LESSONS, METRICS, controlId, controlOptions, controlSet, controlValue } from '../src/learning/lessons.js';
 import { parseRoute, routeHash } from '../src/state/route.js';
+import { DEFAULT_CONFIG, applyPresetConfig } from '../src/state/config.js';
+import { USE_CASE_PRESETS } from '../src/data/presets.js';
 
 // Every combination of a lesson's control values.
 function* combinations(controls, i = 0, acc = {}) {
@@ -230,4 +232,84 @@ test('lesson facts: capstone brief', () => {
     cheapest.push(lessonAt('capstone', { ...set('selectedPlatformId', pl), selectedPrecisionId: pr, kvPrecision: kv }).cost.totalCapexUsd);
   }
   near(Math.min(...cheapest), 622000, 5000, 'cheapest answer');
+});
+
+test('lesson facts: RAG', () => {
+  const start = lessonAt('rag');
+  near(start.rag.numChunks / 1e6, 48.8, 0.1, 'chunks'); near(start.rag.indexSizeGb, 230, 2, 'index');
+  assert.equal(start.rag.vectorDbNodesNeeded, 3); assert.equal(start.rag.nodesForThroughput, 1);
+  near(start.rag.bytesPerVector / 1e3, 4.7, 0.05, 'bytes per vector');
+  const big = lessonAt('rag', { corpusSizeGb: 2000 });
+  near(big.rag.numChunks / 1e6, 195.3, 0.1, 'chunks 2TB'); near(big.rag.indexSizeGb, 920, 3, 'index 2TB');
+  assert.equal(big.rag.vectorDbNodesNeeded, 9); assert.equal(big.rag.embeddingGpusNeeded, 6); near(big.rag.actualIngestionTimeHours, 21.2, 0.1, 'ingest');
+  const qwen = lessonAt('rag', { corpusSizeGb: 2000, selectedEmbeddingModelId: 'qwen3-embedding-8b' });
+  near(qwen.rag.indexSizeGb, 3680, 10, 'qwen index'); assert.equal(qwen.rag.vectorDbNodesNeeded, 34); assert.equal(qwen.rag.embeddingGpusNeeded, 120);
+  const chunky = lessonAt('rag', { corpusSizeGb: 2000, avgChunkTokens: 1024 });
+  near(chunky.rag.indexSizeGb, 460, 2, 'chunk 1024 index'); assert.equal(chunky.rag.vectorDbNodesNeeded, 5); assert.equal(chunky.rag.embeddingGpusNeeded, 6);
+  assert.equal(lessonAt('rag', { corpusSizeGb: 2000, ingestionTargetHours: 4 }).rag.embeddingGpusNeeded, 32);
+});
+
+test('lesson facts: serving', () => {
+  const off = lessonAt('serving');
+  near(Number(off.throughput.tpotMs), 39.5, 0.1, 'tpot off'); near(off.throughput.batchThroughputTps, 810, 5, 'tps off');
+  near(off.tokenEconomics.costPer1MOutputTokensUsd, 3.21, 0.01, 'cost off');
+  const on = lessonAt('serving', { enableSpeculativeDecoding: true });
+  near(on.throughput.speculative.expectedTokensPerStep, 2.31, 0.01, 'tokens per step');
+  near(on.throughput.speculative.speedup, 1.56, 0.01, 'speed-up'); near(Number(on.throughput.tpotMs), 25.2, 0.1, 'tpot on');
+  near(on.throughput.batchThroughputTps, 1268, 5, 'tps on'); near(on.tokenEconomics.costPer1MOutputTokensUsd, 2.05, 0.01, 'cost on');
+  near(lessonAt('serving', { enableSpeculativeDecoding: true, specAcceptanceRate: 0.4 }).throughput.speculative.speedup, 1.12, 0.01, 'low acceptance');
+  const one = lessonAt('serving', { enableSpeculativeDecoding: true, concurrency: 1 });
+  near(one.throughput.speculative.speedup, 1.77, 0.01, 'one user'); near(Number(one.throughput.tpotMs), 11.4, 0.1, 'one user tpot');
+  near(Number(lessonAt('serving', { concurrency: 1 }).throughput.tpotMs), 20.2, 0.1, 'one user off');
+  // The disaggregation comparison quoted in the read step.
+  const llmd = { ...applyPresetConfig(DEFAULT_CONFIG, USE_CASE_PRESETS.find(p => p.id === 'neo-llmd-disaggregated').config), selectedModelId: 'llama33-70b', concurrency: 128 };
+  assert.equal(llmd.contextLength, 32768);
+  assert.equal(computeScenario(llmd).results.totalGpus, 24);
+  assert.equal(computeScenario({ ...llmd, servingArchitecture: 'colocated' }).results.totalGpus, 6);
+});
+
+test('lesson facts: guardrails', () => {
+  const start = lessonAt('guardrails');
+  assert.equal(start.guardrails.guardGpusNeeded, 18); near(start.guardrails.requestRatePerSec, 20, 0.1, 'request rate');
+  near(start.guardrails.addedTtftSec, 0.72, 0.005, 'added TTFT'); assert.ok(start.sla.ttftBaselineSec > 3 * start.throughput.ttftSec);
+  assert.equal(start.memory.promptTokens, 6554);
+  const outOnly = lessonAt('guardrails', { enableInputGuard: false });
+  assert.equal(outOnly.guardrails.guardGpusNeeded, 4); assert.equal(outOnly.guardrails.addedTtftSec, 0);
+  const small = lessonAt('guardrails', { selectedGuardModelId: 'llama-guard-3-1b' });
+  assert.equal(small.guardrails.guardGpusNeeded, 3); near(small.guardrails.addedTtftSec, 0.09, 0.005, '1B TTFT');
+  const gemma = lessonAt('guardrails', { selectedGuardModelId: 'shieldgemma-2b' });
+  assert.equal(gemma.guardrails.guardGpusNeeded, 5); near(gemma.guardrails.addedTtftSec, 0.18, 0.005, '2B TTFT');
+});
+
+test('lesson facts: resilience', () => {
+  const at = (tier) => lessonAt('resilience', { selectedHaDrTierId: tier });
+  near(at('backup-restore').cost.totalCapexUsd, 399000, 500, 'start capex');
+  const aa = at('multi-site-active-active');
+  near(aa.cost.totalCapexUsd, 742000, 500, 'active-active capex');
+  near(aa.haDr.incrementalComputeCapexUsd, 280000, 500, 'extra GPUs'); near(aa.haDr.incrementalStorageCapexUsd, 70000, 500, 'extra storage');
+  near(aa.facility.totalItPowerKw + aa.haDr.haDrItPowerKw, 24.5, 0.3, 'doubled power'); near(aa.cost.tcoUsd, 1288000, 2000, 'TCO');
+  near(at('multi-az').haDr.haDrComputeCapexUsd, 92400, 100, 'multi-AZ');
+  near(at('pilot-light').haDr.haDrComputeCapexUsd, 98000, 100, 'pilot light');
+  near(at('warm-standby').haDr.haDrComputeCapexUsd, 210000, 100, 'warm standby');
+});
+
+test('learning record: summary and printable page', async () => {
+  const { recordSummary, buildRecordHtml, PASS_PCT } = await import('../src/learning/record.js');
+  const { CORE, PRODUCTION, lessonPosition } = await import('../src/learning/catalog.js');
+  assert.equal(CORE.length, 10); assert.equal(PRODUCTION.length, 4);
+  assert.equal(lessonPosition(CORE[2]), 'Lesson 3 of 10'); assert.equal(lessonPosition(PRODUCTION[1]), 'Production topic 2 of 4');
+  const empty = { completed: {}, quiz: {}, steps: {}, name: '' };
+  const r0 = recordSummary(empty);
+  assert.deepEqual([r0.coreDone, r0.pathComplete, r0.quizBest], [0, false, null]);
+  const completed = Object.fromEntries(CORE.map(l => [l.id, '2026-09-01']));
+  completed.memory = true; // finished before dates were kept
+  completed.rag = '2026-09-20';
+  const failed = recordSummary({ ...empty, completed, quiz: { capstone: { best: PASS_PCT - 1 } } });
+  assert.equal(failed.coreDone, 10); assert.equal(failed.pathComplete, false, 'the quiz must be passed');
+  const passed = recordSummary({ ...empty, completed, quiz: { capstone: { best: 83 } } });
+  assert.equal(passed.pathComplete, true); assert.equal(passed.productionDone, 1);
+  const html = buildRecordHtml({ ...empty, completed, quiz: { capstone: { best: 83 } }, name: 'Sam <Taylor>' }, '2026-09-26');
+  assert.match(html, /Learning record: Sam &lt;Taylor&gt;/);
+  assert.match(html, /Core path complete/); assert.match(html, /best score 83%/); assert.match(html, /Production topics: 1 of 4/);
+  assert.match(html, /Completed 2026-09-20/); assert.match(html, /not a verified certification/);
 });

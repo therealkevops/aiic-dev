@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { ArrowLeft, ArrowRight, BookOpen, Check, CheckCircle2, ChevronDown, Lightbulb, RotateCcw, SlidersHorizontal, Target, X } from 'lucide-react';
+import { ArrowLeft, Award, ArrowRight, BookOpen, Check, CheckCircle2, ChevronDown, Lightbulb, RotateCcw, SlidersHorizontal, Target, X } from 'lucide-react';
 import { computeScenario } from '../../utils/scenario';
-import { CATALOG } from '../../learning/catalog';
+import { CATALOG, lessonPosition } from '../../learning/catalog';
 import { CONTROLS, LESSONS, METRICS, controlId, controlOptions, controlSet, controlValue } from '../../learning/lessons';
 import { loadProgress, saveProgress } from '../../learning/progress';
 import { BREAKPOINTS, useMinWidth } from '../../state/useMediaQuery';
@@ -267,7 +267,7 @@ export function LessonView({ lessonId, navigate, onOpenInAdvanced }) {
 
   const finish = () => {
     const p = loadProgress();
-    saveProgress({ ...p, completed: { ...p.completed, [lessonId]: true } });
+    saveProgress({ ...p, completed: { ...p.completed, [lessonId]: new Date().toISOString().slice(0, 10) } });
     setFinished(true);
   };
   const next = CATALOG.find(l => l.number === meta.number + 1);
@@ -275,7 +275,7 @@ export function LessonView({ lessonId, navigate, onOpenInAdvanced }) {
 
   const stepsHeader = (
         <div className="px-4 sm:px-5 pt-5 pb-4 border-b border-zinc-800">
-          <div className="text-[11px] text-zinc-500">Lesson {meta.number} of {CATALOG.length}</div>
+          <div className="text-[11px] text-zinc-500">{lessonPosition(meta)}</div>
           <h1 className="text-[17px] font-semibold text-white mt-0.5 leading-snug">{meta.title}</h1>
           <p className="text-[12.5px] text-zinc-400 mt-1.5 leading-relaxed">{lesson.objective}</p>
           <div className="mt-3 flex gap-1" aria-hidden="true">
@@ -314,6 +314,11 @@ export function LessonView({ lessonId, navigate, onOpenInAdvanced }) {
                     {nextReady && (
                       <button type="button" data-testid="next-lesson" onClick={() => navigate({ page: 'learn', lessonId: next.id })} className="h-9 inline-flex items-center justify-center gap-1.5 rounded-md bg-sky-600 hover:bg-sky-500 text-sm font-medium text-white cursor-pointer">
                         Next: {next.title} <ArrowRight className="w-4 h-4" />
+                      </button>
+                    )}
+                    {lessonId === 'capstone' && (
+                      <button type="button" data-testid="view-record" onClick={() => navigate({ page: 'learn', lessonId: 'record' })} className="h-9 inline-flex items-center justify-center gap-1.5 rounded-md border border-emerald-800 hover:bg-emerald-500/10 text-sm text-emerald-200 cursor-pointer">
+                        <Award className="w-4 h-4" /> View your learning record
                       </button>
                     )}
                     <button type="button" data-testid="open-in-advanced" onClick={() => onOpenInAdvanced(config)} className="h-9 inline-flex items-center justify-center gap-1.5 rounded-md border border-zinc-700 hover:bg-zinc-800 text-sm text-zinc-200 cursor-pointer">

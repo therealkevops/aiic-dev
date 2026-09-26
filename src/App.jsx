@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { Suspense, lazy, useState, useMemo, useEffect } from 'react';
 import {
   Activity, Building2, Layers, Network, Zap, HardDrive, Search, Workflow, Shield, Globe,
   LifeBuoy, GitBranch, Grid2x2, Timer, DollarSign, LineChart,
@@ -9,36 +9,16 @@ import { USE_CASE_PRESETS } from './data/presets';
 import { DEFAULT_CONFIG, applyPresetConfig, withPlatform } from './state/config';
 import { useRoute, rememberedMode } from './state/route';
 import { HomePage } from './components/HomePage';
-import { LearningPage } from './components/learning/LearningPage';
-import { LearnLink } from './components/learning/LearnLink';
+import { PageLoading } from './components/PageLoading';
+
+// Each screen is its own chunk, so the home page loads only the engine and itself.
+const AdvancedView = lazy(() => import('./components/AdvancedView'));
+const LearningPage = lazy(() => import('./components/learning/LearningPage').then(m => ({ default: m.LearningPage })));
+const GlossaryPage = lazy(() => import('./components/GlossaryPage').then(m => ({ default: m.GlossaryPage })));
 import { computeScenario } from './utils/scenario';
 import { buildBomText } from './utils/bomText';
 import { scenarioMetrics } from './utils/compare';
 import { buildReportHtml } from './utils/report';
-import { GlossaryPage } from './components/GlossaryPage';
-import { AppHeader } from './components/AppHeader';
-import { NavRail, NavDrawer } from './components/NavRail';
-import { SectionBar, SummaryBar } from './components/MobileBars';
-import { useMinWidth, BREAKPOINTS } from './state/useMediaQuery';
-import { ResultsPane } from './components/ResultsPane';
-import { GuidedSetup } from './components/GuidedSetup';
-import { WorkloadTab } from './components/tabs/WorkloadTab';
-import { PlatformTab } from './components/tabs/PlatformTab';
-import { ShardingTab } from './components/tabs/ShardingTab';
-import { NetworkTab } from './components/tabs/NetworkTab';
-import { FacilityTab } from './components/tabs/FacilityTab';
-import { StorageTab } from './components/tabs/StorageTab';
-import { RagTab } from './components/tabs/RagTab';
-import { ServingStackTab } from './components/tabs/ServingStackTab';
-import { GuardrailsTab } from './components/tabs/GuardrailsTab';
-import { IngressTab } from './components/tabs/IngressTab';
-import { HaDrTab } from './components/tabs/HaDrTab';
-import { TrainingRedundancyTab } from './components/tabs/TrainingRedundancyTab';
-import { MlopsTab } from './components/tabs/MlopsTab';
-import { MigTab } from './components/tabs/MigTab';
-import { SlaTab } from './components/tabs/SlaTab';
-import { CostTab } from './components/tabs/CostTab';
-import { PlanningTab } from './components/tabs/PlanningTab';
 
 // One setter per config field (setContextLength, setEnableRag, ...), each accepting a value or
 // an updater function, so tab components read like they did when every field was its own state.
@@ -63,10 +43,6 @@ export default function App() {
   // Scenario A for side-by-side comparison: a frozen copy of a configuration and its metrics.
   const [pinned, setPinned] = useState(null);
   const [guidedOpen, setGuidedOpen] = useState(false);
-  // Below lg one pane shows at a time and the section list is a slide-out menu.
-  const wide = useMinWidth(BREAKPOINTS.lg);
-  const [pane, setPane] = useState('inputs');
-  const [sectionsOpen, setSectionsOpen] = useState(false);
 
   const scenario = useMemo(() => computeScenario(config), [config]);
 
@@ -205,7 +181,15 @@ export default function App() {
   };
 
   if (route.page === 'guide') {
-    return <GlossaryPage key={route.docId || 'overview'} initialDocId={route.docId} onBack={() => (window.history.length > 1 ? window.history.back() : navigate({ page: rememberedMode() || 'home' }))} />;
+    return (
+      <Suspense fallback={<PageLoading />}>
+        <GlossaryPage
+          key={route.docId || 'overview'}
+          initialDocId={route.docId}
+          onBack={() => (window.history.length > 1 ? window.history.back() : navigate({ page: rememberedMode() || 'home' }))}
+        />
+      </Suspense>
+    );
   }
   if (route.page === 'home') {
     return (
@@ -219,122 +203,34 @@ export default function App() {
   }
   if (route.page === 'learn') {
     return (
-      <LearningPage
-        lessonId={route.lessonId}
-        navigate={navigate}
-        onOpenInAdvanced={(next) => {
-          setConfig(next);
-          setSelectedPresetId('');
-          setActiveInputTab('workload');
-          navigate({ page: 'advanced' });
-        }}
-      />
+      <Suspense fallback={<PageLoading />}>
+        <LearningPage
+          lessonId={route.lessonId}
+          navigate={navigate}
+          onOpenInAdvanced={(next) => {
+            setConfig(next);
+            setSelectedPresetId('');
+            setActiveInputTab('workload');
+            navigate({ page: 'advanced' });
+          }}
+        />
+      </Suspense>
     );
   }
 
   return (
-    <div className="h-[100dvh] w-full flex flex-col bg-zinc-950 text-zinc-100 antialiased overflow-hidden select-none-text">
-      {/* Top Banner / Header (Compact, Fixed at top) */}
-      <AppHeader ctx={ctx} />
-
-      {guidedOpen && (
-        <GuidedSetup
-          current={config}
-          onClose={() => setGuidedOpen(false)}
-          onApply={(next) => {
-            setConfig(next);
-            setSelectedPresetId('');
-            setActiveInputTab('workload');
-            setGuidedOpen(false);
-          }}
-        />
-      )}
-
-      {!wide && (
-        <>
-          <SectionBar ctx={ctx} pane={pane} onPane={setPane} onOpenSections={() => setSectionsOpen(true)} />
-          <NavDrawer
-            ctx={ctx}
-            open={sectionsOpen}
-            onClose={() => setSectionsOpen(false)}
-            onSelect={(id) => { setActiveInputTab(id); setPane('inputs'); setSectionsOpen(false); }}
-          />
-        </>
-      )}
-
-      {/* Main layout: nav rail, inputs and results side by side from lg; one pane at a time below */}
-      <div className="flex-1 min-h-0 flex overflow-hidden">
-
-        {/* PANE 1: Left Navigation Rail */}
-        {wide && <NavRail ctx={ctx} />}
-
-        {/* PANE 2: Central Configuration Variables Pane (Independently Scrollable) */}
-        {(wide || pane === 'inputs') && (
-        <main data-testid="config-pane" className="flex-1 min-w-0 lg:min-w-[360px] overflow-y-auto p-3 sm:p-4 md:p-6 bg-zinc-950/70 lg:border-r border-zinc-800 space-y-4">
-
-          <LearnLink tabId={activeInputTab} navigate={navigate} />
-
-          {/* 1. Workload Mode & Model */}
-          {activeInputTab === 'workload' && <WorkloadTab ctx={ctx} />}
-
-          {/* 2. SPECIFIC GPU PLATFORM SELECTION (CISCO vs. NVIDIA) */}
-          {activeInputTab === 'platform' && <PlatformTab ctx={ctx} />}
-
-          {/* 3. Parallelism & Sharding Strategy (CONDITIONED ON PRECEDING VARIABLES) */}
-          {activeInputTab === 'sharding' && <ShardingTab ctx={ctx} />}
-
-          {/* 4. Network Fabric Configuration */}
-          {activeInputTab === 'network' && <NetworkTab ctx={ctx} />}
-
-          {/* 5. Facility & Power Configuration */}
-          {activeInputTab === 'facility' && <FacilityTab ctx={ctx} />}
-
-          {/* 6. Storage: checkpoint/dataset/model-repo capacity & throughput sizing */}
-          {activeInputTab === 'storage' && <StorageTab ctx={ctx} />}
-
-          {/* 7. RAG Pipeline: embedding-compute ingestion sizing + vector database serving */}
-          {activeInputTab === 'rag' && <RagTab ctx={ctx} />}
-
-          {/* 8. Serving Stack, Orchestration & LLM-D Disaggregation */}
-          {activeInputTab === 'stack' && <ServingStackTab ctx={ctx} />}
-
-          {/* 9. Guardrails: input/output safety-classifier pool */}
-          {activeInputTab === 'guardrails' && <GuardrailsTab ctx={ctx} />}
-
-          {/* 10. Ingress & Edge: load-balancing/TLS-termination/edge layer in front of the cluster */}
-          {activeInputTab === 'ingress' && <IngressTab ctx={ctx} />}
-
-          {/* 11. High Availability / Disaster Recovery: replica multipliers, RTO/RPO */}
-          {activeInputTab === 'hadr' && workloadType === 'inference' && <HaDrTab ctx={ctx} />}
-
-          {/* 11. Resilience & DR (training branch): spare/hot-standby node capacity, since HA/DR's
-              live-replica redundancy doesn't apply to a training run -- see calculateTrainingRedundancy(). */}
-          {activeInputTab === 'hadr' && workloadType === 'training' && <TrainingRedundancyTab ctx={ctx} />}
-
-          {/* 12. MLOps Lifecycle: canary/shadow/blue-green model-rollout validation pool sizing */}
-          {activeInputTab === 'mlops' && <MlopsTab ctx={ctx} />}
-
-          {/* 13. MIG (Multi-Instance GPU) Partitioning */}
-          {activeInputTab === 'mig' && <MigTab ctx={ctx} />}
-
-          {/* 14. SLA / Tail-Latency Queueing */}
-          {activeInputTab === 'sla' && <SlaTab ctx={ctx} />}
-
-          {/* 15. Cost & TCO */}
-          {activeInputTab === 'cost' && <CostTab ctx={ctx} />}
-
-          {/* 16. Planning: sensitivity, rent vs buy, growth over time */}
-          {activeInputTab === 'planning' && <PlanningTab ctx={ctx} />}
-
-        </main>
-        )}
-
-        {/* PANE 3: Right Results Pane (Independently Scrollable) */}
-        {(wide || pane === 'results') && <ResultsPane ctx={ctx} />}
-
-      </div>
-
-      {!wide && <SummaryBar ctx={ctx} pane={pane} onPane={setPane} />}
-    </div>
+    <Suspense fallback={<PageLoading />}>
+      <AdvancedView
+        ctx={ctx}
+        guidedOpen={guidedOpen}
+        onCloseGuided={() => setGuidedOpen(false)}
+        onApplyGuided={(next) => {
+          setConfig(next);
+          setSelectedPresetId('');
+          setActiveInputTab('workload');
+          setGuidedOpen(false);
+        }}
+      />
+    </Suspense>
   );
 }

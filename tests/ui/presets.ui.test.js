@@ -155,16 +155,18 @@ test('home page on first visit, then the last-used mode', async () => {
   assert.equal(await page.getByTestId('mode-card-learn').count(), 1, 'first visit shows the home page');
   await page.getByTestId('open-advanced').click();
   assert.match(page.url(), /#\/advanced$/);
-  assert.equal(await page.getByTestId('kpi-gpus').count(), 1);
+  // Screens load on demand, so wait for each one to appear.
+  await page.getByTestId('kpi-gpus').waitFor();
   // A later visit to the root opens the last-used mode.
   await page.goto(URL, { waitUntil: 'networkidle' });
-  assert.equal(await page.getByTestId('kpi-gpus').count(), 1, 'remembered mode skips the home page');
+  await page.getByTestId('kpi-gpus').waitFor();
+  assert.equal(await page.getByTestId('mode-card-learn').count(), 0, 'remembered mode skips the home page');
   // Switch to Learning from the header; the product name returns home.
   await page.getByTestId('mode-learn').click();
   assert.match(page.url(), /#\/learn$/);
-  assert.equal(await page.getByTestId('lesson-list').count(), 1);
+  await page.getByTestId('lesson-list').waitFor();
   await page.getByTestId('go-home').click();
-  assert.equal(await page.getByTestId('mode-card-advanced').count(), 1);
+  await page.getByTestId('mode-card-advanced').waitFor();
   assert.equal(errors.length, 0, errors.join('; '));
   await context.close();
 });
@@ -350,7 +352,7 @@ for (const width of [360, 768, 1024]) {
     const context = await browser.newContext({ viewport: { width, height: 800 } });
     const page = await context.newPage();
     const problems = {};
-    for (const id of ['', '/memory', '/speed', '/capstone']) {
+    for (const id of ['', '/memory', '/speed', '/capstone', '/rag', '/guardrails']) {
       await page.goto(`${URL}#/learn${id}`, { waitUntil: 'networkidle' });
       const views = width < 1024 && id ? ['lesson', 'design', 'results'] : [null];
       for (const v of views) {
@@ -359,6 +361,10 @@ for (const width of [360, 768, 1024]) {
         if (found.length) problems[`${id || 'index'}${v ? `/${v}` : ''}`] = found;
       }
     }
+    await page.goto(`${URL}#/learn/record`, { waitUntil: 'networkidle' });
+    await page.getByTestId('learning-record').waitFor();
+    const found = await page.evaluate(overflowAudit);
+    if (found.length) problems.record = found;
     assert.deepEqual(problems, {});
     await context.close();
   });
@@ -392,6 +398,70 @@ test('responsive: architecture guide and home page on a phone', async () => {
   await page.getByTestId('nav-planning').click();
   await page.locator('[data-testid^="tornado-row-"]').first().tap();
   assert.equal(await page.getByTestId('tornado-readout').count(), 1);
+  assert.equal(errors.length, 0, errors.join('; '));
+  await context.close();
+});
+
+test('home loads only the core files; every screen works offline after one visit', async () => {
+  const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const page = await context.newPage();
+  const errors = [];
+  page.on('pageerror', e => errors.push(e.message));
+  const scripts = [];
+  page.on('request', r => { if (r.resourceType() === 'script') scripts.push(r.url()); });
+  await page.goto(URL, { waitUntil: 'networkidle' });
+  await page.getByTestId('mode-card-learn').waitFor();
+  assert.equal(scripts.some(u => /GlossaryPage|LearningPage|AdvancedView/.test(u)), false, `home fetched: ${scripts.join(', ')}`);
+  // The service worker precaches every build file, then the app runs without a network.
+  await page.evaluate(() => navigator.serviceWorker.ready);
+  await page.reload({ waitUntil: 'networkidle' });
+  assert.equal(await page.evaluate(() => !!navigator.serviceWorker.controller), true);
+  await context.setOffline(true);
+  await page.goto(`${URL}#/advanced`);
+  await page.getByTestId('kpi-gpus').waitFor();
+  await page.goto(`${URL}#/learn/memory`);
+  await page.getByTestId('lesson-step').waitFor();
+  await page.goto(`${URL}#/guide`);
+  await page.getByTestId('chapter-list').waitFor();
+  assert.equal(await page.evaluate(() => document.fonts.check('600 14px "IBM Plex Sans"')), true, 'bundled font available offline');
+  assert.equal(errors.length, 0, errors.join('; '));
+  await context.close();
+});
+
+test('learning: a production topic brief, then the learning record', async () => {
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, acceptDownloads: true });
+  const page = await context.newPage();
+  const errors = [];
+  page.on('pageerror', e => errors.push(e.message));
+  await page.goto(`${URL}#/learn`, { waitUntil: 'networkidle' });
+  await page.getByTestId('production-list').waitFor();
+  await page.getByTestId('lesson-guardrails').click();
+  const next = page.getByTestId('next-step');
+  await next.click(); await next.click();               // two reads
+  await page.getByTestId('predict-option-0').click();   // input guard
+  await next.click();
+  await page.getByTestId('control-enableInputGuard-false').click();
+  assert.match(await page.getByTestId('metric-guardGpus').innerText(), /\b4 ×/);
+  await next.click();
+  // The brief: both guards on, first token within 0.5 s, guard capex within $50k.
+  assert.equal(await next.isDisabled(), true);
+  await page.getByTestId('control-enableInputGuard-true').click();
+  await page.getByTestId('control-selectedGuardModelId-llama-guard-3-1b').click();
+  assert.equal(await next.isDisabled(), false, 'a 1B guard meets the brief');
+  await next.click();
+  await page.getByTestId('finish-lesson').click();
+  await page.getByTestId('lesson-complete').waitFor();
+
+  await page.goto(`${URL}#/learn`, { waitUntil: 'networkidle' });
+  await page.getByTestId('open-record').click();
+  await page.getByTestId('learning-record').waitFor();
+  assert.match(await page.getByTestId('record-status').innerText(), /Production topics\s*1 of 4/);
+  await page.getByTestId('record-name').fill('Sam Taylor');
+  const [download] = await Promise.all([page.waitForEvent('download'), page.getByTestId('record-download').click()]);
+  assert.equal(download.suggestedFilename(), 'learning-record-sam-taylor.html');
+  const html = readFileSync(await download.path(), 'utf8');
+  assert.match(html, /Learning record: Sam Taylor/);
+  assert.match(html, /Guardrails: safety models in the request path<\/td><td>Completed \d{4}-\d{2}-\d{2}/);
   assert.equal(errors.length, 0, errors.join('; '));
   await context.close();
 });

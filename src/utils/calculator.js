@@ -2065,6 +2065,7 @@ export function calculateRag(config) {
   const HNSW_OVERHEAD_FACTOR = 1.15;
   const USABLE_RAM_FRACTION = 0.85; // headroom for OS/query cache, consistent with storage sizing
   const bytesPerVector = embeddingModel.dims * 4 * HNSW_OVERHEAD_FACTOR;
+  const indexSizeGb = (numChunks * bytesPerVector) / 1e9;
   const vectorsPerNode = Math.floor((vectorDbPlatform.ramGbPerNode * 1e9 * USABLE_RAM_FRACTION) / bytesPerVector);
   const nodesForCapacity = Math.max(1, Math.ceil(numChunks / vectorsPerNode));
   const nodesForThroughput = Math.max(1, Math.ceil(queryQps / vectorDbPlatform.estimatedQpsPerNode));
@@ -2093,6 +2094,8 @@ export function calculateRag(config) {
     ingestionGpusNeeded,
     actualIngestionTimeHours,
     queryEmbeddingGpusNeeded,
+    bytesPerVector,
+    indexSizeGb,
     embeddingGpusNeeded,
     embeddingComputeCapexUsd,
     embeddingGpuPowerKw,

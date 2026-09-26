@@ -352,7 +352,7 @@ for (const width of [360, 768, 1024]) {
     const context = await browser.newContext({ viewport: { width, height: 800 } });
     const page = await context.newPage();
     const problems = {};
-    for (const id of ['', '/memory', '/speed', '/capstone']) {
+    for (const id of ['', '/memory', '/speed', '/capstone', '/rag', '/guardrails']) {
       await page.goto(`${URL}#/learn${id}`, { waitUntil: 'networkidle' });
       const views = width < 1024 && id ? ['lesson', 'design', 'results'] : [null];
       for (const v of views) {
@@ -361,6 +361,10 @@ for (const width of [360, 768, 1024]) {
         if (found.length) problems[`${id || 'index'}${v ? `/${v}` : ''}`] = found;
       }
     }
+    await page.goto(`${URL}#/learn/record`, { waitUntil: 'networkidle' });
+    await page.getByTestId('learning-record').waitFor();
+    const found = await page.evaluate(overflowAudit);
+    if (found.length) problems.record = found;
     assert.deepEqual(problems, {});
     await context.close();
   });
@@ -420,6 +424,44 @@ test('home loads only the core files; every screen works offline after one visit
   await page.goto(`${URL}#/guide`);
   await page.getByTestId('chapter-list').waitFor();
   assert.equal(await page.evaluate(() => document.fonts.check('600 14px "IBM Plex Sans"')), true, 'bundled font available offline');
+  assert.equal(errors.length, 0, errors.join('; '));
+  await context.close();
+});
+
+test('learning: a production topic brief, then the learning record', async () => {
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, acceptDownloads: true });
+  const page = await context.newPage();
+  const errors = [];
+  page.on('pageerror', e => errors.push(e.message));
+  await page.goto(`${URL}#/learn`, { waitUntil: 'networkidle' });
+  await page.getByTestId('production-list').waitFor();
+  await page.getByTestId('lesson-guardrails').click();
+  const next = page.getByTestId('next-step');
+  await next.click(); await next.click();               // two reads
+  await page.getByTestId('predict-option-0').click();   // input guard
+  await next.click();
+  await page.getByTestId('control-enableInputGuard-false').click();
+  assert.match(await page.getByTestId('metric-guardGpus').innerText(), /\b4 ×/);
+  await next.click();
+  // The brief: both guards on, first token within 0.5 s, guard capex within $50k.
+  assert.equal(await next.isDisabled(), true);
+  await page.getByTestId('control-enableInputGuard-true').click();
+  await page.getByTestId('control-selectedGuardModelId-llama-guard-3-1b').click();
+  assert.equal(await next.isDisabled(), false, 'a 1B guard meets the brief');
+  await next.click();
+  await page.getByTestId('finish-lesson').click();
+  await page.getByTestId('lesson-complete').waitFor();
+
+  await page.goto(`${URL}#/learn`, { waitUntil: 'networkidle' });
+  await page.getByTestId('open-record').click();
+  await page.getByTestId('learning-record').waitFor();
+  assert.match(await page.getByTestId('record-status').innerText(), /Production topics\s*1 of 4/);
+  await page.getByTestId('record-name').fill('Sam Taylor');
+  const [download] = await Promise.all([page.waitForEvent('download'), page.getByTestId('record-download').click()]);
+  assert.equal(download.suggestedFilename(), 'learning-record-sam-taylor.html');
+  const html = readFileSync(await download.path(), 'utf8');
+  assert.match(html, /Learning record: Sam Taylor/);
+  assert.match(html, /Guardrails: safety models in the request path<\/td><td>Completed \d{4}-\d{2}-\d{2}/);
   assert.equal(errors.length, 0, errors.join('; '));
   await context.close();
 });

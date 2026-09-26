@@ -1,10 +1,11 @@
 import React from 'react';
-import { BookOpen, CheckCircle2, Clock, GraduationCap, Lock } from 'lucide-react';
-import { CATALOG } from '../../learning/catalog';
+import { Award, BookOpen, CheckCircle2, Clock, GraduationCap, Lock } from 'lucide-react';
+import { CATALOG, CORE, PRODUCTION } from '../../learning/catalog';
 import { loadProgress } from '../../learning/progress';
 import { ModeSwitch, ProductMark } from '../ModeSwitch';
 import { LESSONS } from '../../learning/lessons';
 import { LessonView } from './LessonView';
+import { LearningRecord } from './LearningRecord';
 
 const READY = new Set(Object.keys(LESSONS)); // lessons whose steps are written
 
@@ -21,48 +22,66 @@ export function LearningHeader({ navigate, children }) {
   );
 }
 
+function LessonList({ lessons, progress, navigate, testId }) {
+  return (
+    <ol className="divide-y divide-zinc-800 border-y border-zinc-800" data-testid={testId}>
+      {lessons.map(l => {
+        const ready = READY.has(l.id);
+        const done = !!progress.completed[l.id];
+        return (
+          <li key={l.id}>
+            <button
+              type="button"
+              data-testid={`lesson-${l.id}`}
+              disabled={!ready}
+              onClick={() => navigate({ page: 'learn', lessonId: l.id })}
+              className={`w-full text-left py-4 flex items-start gap-4 ${ready ? 'cursor-pointer hover:bg-zinc-900/60' : 'cursor-default'}`}
+            >
+              <span className={`w-7 h-7 rounded-full shrink-0 flex items-center justify-center text-xs font-semibold tabular-nums ${
+                done ? 'bg-emerald-500/15 text-emerald-300' : ready ? 'bg-zinc-800 text-zinc-200' : 'bg-zinc-900 text-zinc-600'
+              }`}>
+                {done ? <CheckCircle2 className="w-4 h-4" /> : l.number}
+              </span>
+              <span className="flex-1 min-w-0">
+                <span className={`block text-sm font-medium ${ready ? 'text-zinc-100' : 'text-zinc-500'}`}>{l.title}</span>
+                <span className="block text-[12.5px] text-zinc-500 mt-0.5">{l.summary}</span>
+                {progress.quiz[l.id] && <span className="block text-[11.5px] text-zinc-400 mt-1 tabular-nums">Best quiz score: {progress.quiz[l.id].best}%</span>}
+              </span>
+              <span className="text-[11px] text-zinc-500 shrink-0 flex items-center gap-1 mt-0.5">
+                {ready ? <><Clock className="w-3 h-3" />{l.minutes} min</> : <><Lock className="w-3 h-3" />In preparation</>}
+              </span>
+            </button>
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
 function LessonIndex({ navigate }) {
   const progress = loadProgress();
+  const started = Object.keys(progress.completed).length > 0 || Object.keys(progress.quiz).length > 0;
   return (
     <main className="flex-1 overflow-y-auto">
-      <div className="max-w-3xl mx-auto px-4 sm:px-6 py-8 sm:py-10">
-        <h1 className="text-2xl font-semibold text-white">Learning path</h1>
+      <div className="max-w-3xl mx-auto px-4 sm:px-6 py-8 sm:py-10 pb-[max(2rem,env(safe-area-inset-bottom))]">
+        <div className="flex items-start justify-between gap-4">
+          <h1 className="text-2xl font-semibold text-white">Learning path</h1>
+          {started && (
+            <button type="button" data-testid="open-record" onClick={() => navigate({ page: 'learn', lessonId: 'record' })} className="shrink-0 h-10 sm:h-8 inline-flex items-center gap-1.5 px-2.5 rounded-md border border-zinc-700 hover:bg-zinc-800 text-xs text-zinc-200 cursor-pointer">
+              <Award className="w-3.5 h-3.5 text-sky-400" /> Your record
+            </button>
+          )}
+        </div>
         <p className="mt-2 text-sm text-zinc-400 leading-relaxed">
-          Ten lessons that build up how a validated AI infrastructure design is sized, from what a GPU has to hold to what the
-          whole solution costs. Each lesson works on a real design with the calculator&apos;s own engine and shows the math behind
-          every number. Lessons build on each other, so take them in order.
+          The core path builds up how a validated AI infrastructure design is sized, from what a GPU has to hold to what the
+          whole solution costs, and ends with a capstone design brief and a scored quiz. Each lesson works on a real design with
+          the calculator&apos;s own engine and shows the math behind every number. Take the core lessons in order.
         </p>
-        <ol className="mt-8 divide-y divide-zinc-800 border-y border-zinc-800" data-testid="lesson-list">
-          {CATALOG.map(l => {
-            const ready = READY.has(l.id);
-            const done = !!progress.completed[l.id];
-            return (
-              <li key={l.id}>
-                <button
-                  type="button"
-                  data-testid={`lesson-${l.id}`}
-                  disabled={!ready}
-                  onClick={() => navigate({ page: 'learn', lessonId: l.id })}
-                  className={`w-full text-left py-4 flex items-start gap-4 ${ready ? 'cursor-pointer hover:bg-zinc-900/60' : 'cursor-default'}`}
-                >
-                  <span className={`w-7 h-7 rounded-full shrink-0 flex items-center justify-center text-xs font-semibold tabular-nums ${
-                    done ? 'bg-emerald-500/15 text-emerald-300' : ready ? 'bg-zinc-800 text-zinc-200' : 'bg-zinc-900 text-zinc-600'
-                  }`}>
-                    {done ? <CheckCircle2 className="w-4 h-4" /> : l.number}
-                  </span>
-                  <span className="flex-1 min-w-0">
-                    <span className={`block text-sm font-medium ${ready ? 'text-zinc-100' : 'text-zinc-500'}`}>{l.title}</span>
-                    <span className="block text-[12.5px] text-zinc-500 mt-0.5">{l.summary}</span>
-                    {progress.quiz[l.id] && <span className="block text-[11.5px] text-zinc-400 mt-1 tabular-nums">Best quiz score: {progress.quiz[l.id].best}%</span>}
-                  </span>
-                  <span className="text-[11px] text-zinc-500 shrink-0 flex items-center gap-1 mt-0.5">
-                    {ready ? <><Clock className="w-3 h-3" />{l.minutes} min</> : <><Lock className="w-3 h-3" />In preparation</>}
-                  </span>
-                </button>
-              </li>
-            );
-          })}
-        </ol>
+        <h2 className="mt-8 mb-2 text-sm font-semibold text-zinc-100">Core path</h2>
+        <LessonList lessons={CORE} progress={progress} navigate={navigate} testId="lesson-list" />
+        <h2 className="mt-10 text-sm font-semibold text-zinc-100">Production topics</h2>
+        <p className="mt-1 mb-2 text-[12.5px] text-zinc-500">The services around the model that production designs add. Take them after the core path, in any order.</p>
+        <LessonList lessons={PRODUCTION} progress={progress} navigate={navigate} testId="production-list" />
       </div>
     </main>
   );
@@ -70,9 +89,17 @@ function LessonIndex({ navigate }) {
 
 export function LearningPage({ lessonId, navigate, onOpenInAdvanced }) {
   const lesson = lessonId && LESSONS[lessonId] ? CATALOG.find(l => l.id === lessonId) : null;
+  const record = lessonId === 'record';
   return (
-    <div className="h-screen w-screen flex flex-col bg-zinc-950 text-zinc-100 antialiased overflow-hidden">
+    <div className="h-[100dvh] w-full flex flex-col bg-zinc-950 text-zinc-100 antialiased overflow-hidden">
       <LearningHeader navigate={navigate}>
+        {record && (
+          <nav aria-label="Breadcrumb" className="flex items-center gap-2 text-xs text-zinc-500 min-w-0">
+            <button type="button" data-testid="all-lessons" onClick={() => navigate({ page: 'learn', lessonId: null })} className="hover:text-zinc-200 cursor-pointer whitespace-nowrap">All lessons</button>
+            <span className="hidden sm:inline">/</span>
+            <span className="text-zinc-300 truncate hidden sm:inline">Your record</span>
+          </nav>
+        )}
         {lesson && (
           <nav aria-label="Breadcrumb" className="flex items-center gap-2 text-xs text-zinc-500 min-w-0">
             <button type="button" data-testid="all-lessons" onClick={() => navigate({ page: 'learn', lessonId: null })} className="hover:text-zinc-200 cursor-pointer whitespace-nowrap">All lessons</button>
@@ -81,9 +108,11 @@ export function LearningPage({ lessonId, navigate, onOpenInAdvanced }) {
           </nav>
         )}
       </LearningHeader>
-      {lesson
-        ? <LessonView key={lesson.id} lessonId={lesson.id} navigate={navigate} onOpenInAdvanced={onOpenInAdvanced} />
-        : <LessonIndex navigate={navigate} />}
+      {record
+        ? <LearningRecord />
+        : lesson
+          ? <LessonView key={lesson.id} lessonId={lesson.id} navigate={navigate} onOpenInAdvanced={onOpenInAdvanced} />
+          : <LessonIndex navigate={navigate} />}
     </div>
   );
 }

@@ -1,6 +1,6 @@
 import React from 'react';
 import { ArrowRight, BookOpen, Check, Compass, GraduationCap, Server, SlidersHorizontal } from 'lucide-react';
-import { CATALOG } from '../learning/catalog';
+import { CATALOG, CORE, PRODUCTION } from '../learning/catalog';
 import { loadProgress } from '../learning/progress';
 import { USE_CASE_PRESETS } from '../data/presets';
 
@@ -84,9 +84,9 @@ export function HomePage({ onLearn, onAdvanced, onGuidedSetup, onGuide }) {
             title="Learning"
             tagline="For solutions architects building their expertise: learn how complex AI infrastructure is designed, one concept at a time, on validated reference designs."
             points={[
-              `${CATALOG.length} hands-on lessons, from GPU memory to TCO`,
+              `${CORE.length}-lesson core path from GPU memory to TCO, plus ${PRODUCTION.length} production topics`,
               'Change real designs and watch the numbers respond, with the math shown',
-              'Predict-then-check questions and a scored capstone',
+              'Predict-then-check questions, a scored capstone and a shareable learning record',
             ]}
             footer={started && (
               <div className="mt-5">

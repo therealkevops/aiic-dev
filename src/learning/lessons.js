@@ -74,6 +74,22 @@ export const METRICS = {
   usdPerGpuHour: { label: 'Cost per GPU-hour', value: (s) => s.cost.effectiveUsdPerGpuHour, format: (v) => `$${v.toFixed(2)}` },
   costPer1M: { label: 'Cost per 1M output tokens', value: (s) => s.tokenEconomics.costPer1MOutputTokensUsd, format: (v) => `$${v.toFixed(2)}` },
   reservedCloud: { label: 'Same GPUs, reserved cloud', value: (s) => s.rentVsBuy.options.find(o => o.id === 'reserved').usd, format: (v) => usd(v) },
+  // Production topics (lessons 11-14)
+  ragChunks: { label: 'Chunks to embed', value: (s) => s.rag.numChunks, format: (v) => `${(v / 1e6).toFixed(1)} million` },
+  ragIndex: { label: 'Vector index size', value: (s) => s.rag.indexSizeGb, format: (v) => gb(v, 0) },
+  ragDbNodes: { label: 'Vector database nodes', value: (s) => s.rag.vectorDbNodesNeeded, format: (v, s) => `${v} × ${s.vectorDbPlatform.ramGbPerNode} GB (${s.rag.bindingConstraint === 'capacity' ? 'set by index size' : 'set by query rate'})` },
+  ragEmbedGpus: { label: 'Embedding GPUs', value: (s) => s.rag.embeddingGpusNeeded, format: (v, s) => `${v} × ${s.embeddingGpu.name.split(' (')[0].replace('NVIDIA ', '')}` },
+  ragIngest: { label: 'Full re-index time', value: (s) => s.rag.actualIngestionTimeHours, format: (v) => `${v.toFixed(1)} h` },
+  ragCapex: { label: 'RAG capex (embedding + vector DB)', value: (s) => s.rag.ragComputeCapexUsd, format: (v) => usd(v) },
+  specSpeedup: { label: 'Decode speed-up', value: (s) => s.throughput.speculative?.speedup ?? 1, format: (v, s) => (s.throughput.speculative ? `×${v.toFixed(2)} (${s.throughput.speculative.expectedTokensPerStep.toFixed(2)} tokens per step)` : 'Off') },
+  guardGpus: { label: 'Guard GPUs', value: (s) => s.guardrails.guardGpusNeeded ?? 0, format: (v, s) => (s.guardrails.eligible ? `${v} × ${s.guardGpu.name.split(' (')[0].replace('NVIDIA ', '')}` : 'None') },
+  guardTtft: { label: 'Added to first token', value: (s) => s.guardrails.addedTtftSec ?? 0, format: (v) => sec(v) },
+  ttftGuarded: { label: 'Time to first token, with guards', value: (s) => s.sla.ttftBaselineSec ?? s.throughput.ttftSec, format: (v) => sec(v) },
+  guardCapex: { label: 'Guardrail capex', value: (s) => s.guardrails.guardrailsComputeCapexUsd ?? 0, format: (v) => usd(v) },
+  haDrExtra: { label: 'Added by the resilience tier', value: (s) => s.haDr.haDrComputeCapexUsd ?? 0, format: (v) => usd(v) },
+  haDrPower: { label: 'Added IT power', value: (s) => s.haDr.haDrItPowerKw ?? 0, format: (v) => `${v.toFixed(1)} kW` },
+  rto: { label: 'Recovery time (RTO)', value: (s) => s.haDrTier.computeMultiplier, format: (_v, s) => s.haDrTier.rtoDescription },
+  rpo: { label: 'Data loss window (RPO)', value: (s) => s.haDrTier.storageMultiplier, format: (_v, s) => s.haDrTier.rpoDescription },
 };
 
 // Controls a lesson can expose, bound to config fields shared with Advanced mode.
@@ -186,6 +202,64 @@ export const CONTROLS = {
   enableNvidiaAiEnterprise: {
     label: 'NVIDIA AI Enterprise licences',
     options: [{ value: true, label: 'Included' }, { value: false, label: 'Not included' }],
+  },
+  corpusSizeGb: {
+    label: 'Document corpus (raw files)',
+    options: [{ value: 100, label: '100 GB' }, { value: 500, label: '500 GB' }, { value: 2000, label: '2 TB' }],
+  },
+  selectedEmbeddingModelId: {
+    label: 'Embedding model',
+    options: [
+      { value: 'bge-large-en-v1.5', label: 'BGE-Large · 335M · 1,024 dims' },
+      { value: 'bge-m3', label: 'BGE-M3 · 568M · 1,024 dims' },
+      { value: 'qwen3-embedding-8b', label: 'Qwen3-Embedding 8B · 4,096 dims' },
+    ],
+  },
+  avgChunkTokens: {
+    label: 'Chunk size (tokens)',
+    options: [256, 512, 1024].map(v => ({ value: v, label: String(v) })),
+  },
+  ingestionTargetHours: {
+    label: 'Full re-index must finish within',
+    options: [{ value: 24, label: '24 hours' }, { value: 4, label: '4 hours' }],
+  },
+  enableSpeculativeDecoding: {
+    label: 'Speculative decoding',
+    options: [{ value: false, label: 'Off' }, { value: true, label: 'On' }],
+  },
+  specMethod: {
+    label: 'Draft method',
+    options: [{ value: 'draft-model', label: 'Separate draft model (1B)' }, { value: 'draft-head', label: 'Draft head (EAGLE / MTP)' }],
+  },
+  specAcceptanceRate: {
+    label: 'Draft acceptance rate',
+    options: [0.4, 0.6, 0.8].map(v => ({ value: v, label: `${Math.round(v * 100)}%` })),
+  },
+  selectedGuardModelId: {
+    label: 'Guard model',
+    options: [
+      { value: 'llama-guard-3-1b', label: 'Llama Guard 3 1B' },
+      { value: 'shieldgemma-2b', label: 'ShieldGemma 2B' },
+      { value: 'llama-guard-3-8b', label: 'Llama Guard 3 8B' },
+    ],
+  },
+  enableInputGuard: {
+    label: 'Check prompts (input guard)',
+    options: [{ value: true, label: 'On' }, { value: false, label: 'Off' }],
+  },
+  enableOutputGuard: {
+    label: 'Check answers (output guard)',
+    options: [{ value: true, label: 'On' }, { value: false, label: 'Off' }],
+  },
+  selectedHaDrTierId: {
+    label: 'Resilience tier',
+    options: [
+      { value: 'backup-restore', label: 'Backup & restore' },
+      { value: 'pilot-light', label: 'Pilot light' },
+      { value: 'warm-standby', label: 'Warm standby' },
+      { value: 'multi-az', label: 'Multi-zone HA' },
+      { value: 'multi-site-active-active', label: 'Active-active, two sites' },
+    ],
   },
 };
 
@@ -1149,6 +1223,383 @@ export const LESSONS = {
           'Convert users to requests in flight with Little\'s law and a utilization target.',
           'Then fabric, power and cooling, and finally cost: capex, opex and utilization.',
           'Advanced mode runs the same engine with every setting, presets and reports for real opportunities.',
+        ],
+      },
+    ],
+  },
+
+  // ── Production topics ─────────────────────────────────────────────────────────────────────
+
+  rag: {
+    id: 'rag',
+    objective: 'Size the two pools retrieval-augmented generation (RAG) adds to a design: embedding GPUs and a vector database, and see what sets each one.',
+    design: 'The Departmental RAG Assistant validated preset: Llama 3.3 70B on a Cisco UCS C885A M8 with H200 GPUs, NVIDIA L40S GPUs for embeddings and a Milvus vector database on 128 GB CPU servers.',
+    start: () => lessonBase('ent-rag-assistant', { enableRag: true, corpusSizeGb: 500, selectedEmbeddingModelId: 'bge-large-en-v1.5', avgChunkTokens: 512, ingestionTargetHours: 24, textExtractionRatio: 0.2, selectedVectorDbId: 'milvus', ragQueryQps: 8 }),
+    controls: ['corpusSizeGb', 'selectedEmbeddingModelId', 'avgChunkTokens', 'ingestionTargetHours'],
+    metrics: ['ragChunks', 'ragIndex', 'ragDbNodes', 'ragEmbedGpus', 'ragIngest', 'ragCapex'],
+    math: (s, c) => {
+      const r = s.rag;
+      const usableGb = s.vectorDbPlatform.ramGbPerNode * 0.85;
+      return [
+        { label: 'Text', expr: `${c.corpusSizeGb.toLocaleString()} GB of files × ${Math.round(c.textExtractionRatio * 100)}% that is extractable text`, value: gb(r.extractableTextGb, 0) },
+        { label: 'Chunks', expr: `${gb(r.extractableTextGb, 0)} ÷ (${c.avgChunkTokens} tokens × ~4 characters)`, value: `${(r.numChunks / 1e6).toFixed(1)} million` },
+        { label: 'Per vector', expr: `${r.embeddingModel.dims.toLocaleString()} dims × 4 bytes × 1.15 graph overhead`, value: `${(r.bytesPerVector / 1e3).toFixed(1)} KB` },
+        { label: 'Index', expr: 'chunks × bytes per vector', value: gb(r.indexSizeGb, 0), strong: true },
+        { label: 'Vector DB nodes', expr: `index ÷ ${gb(usableGb, 0)} usable RAM per node (${c.ragQueryQps} queries/s needs ${r.nodesForThroughput})`, value: `${r.vectorDbNodesNeeded}` },
+        { label: 'Embedding work', expr: `2 × ${r.embeddingModel.paramsMillion}M parameters × ${c.avgChunkTokens} tokens × chunks, at 40% of one GPU`, value: `${(r.ingestionTimeSecSingleGpu / 3600).toFixed(0)} GPU-hours` },
+        { label: 'Embedding GPUs', expr: `GPU-hours ÷ ${c.ingestionTargetHours} h re-index window`, value: `${r.embeddingGpusNeeded}`, strong: true },
+      ];
+    },
+    steps: [
+      {
+        kind: 'read',
+        title: 'Two new pools',
+        body: 'A RAG assistant answers from the customer\'s own documents. Before any question is asked, every document is split into chunks and each chunk is turned into a vector (a list of numbers that captures its meaning) by an embedding model. The vectors go into a vector database. At question time the question is embedded the same way, the database returns the closest chunks, and those chunks are added to the prompt.\n\nSo RAG adds two pools to the design: embedding GPUs (small inference GPUs such as the L40S) and vector database servers (CPU servers with plenty of RAM). The retrieved chunks also lengthen every prompt, which grows the KV cache from lesson 2.',
+        highlight: ['ragEmbedGpus', 'ragDbNodes'],
+      },
+      {
+        kind: 'predict',
+        title: 'Predict: how many chunks?',
+        body: 'The customer has 500 GB of files: PDFs, slides and spreadsheets. Only about 20% of that is text once images and formatting are stripped. Chunks are 512 tokens, and a token is about 4 characters of English.',
+        question: 'Roughly how many chunks is that?',
+        options: ['~5 million', '~50 million', '~500 million', '~5 billion'],
+        answer: 1,
+        explain: '500 GB × 20% = 100 GB of text. Each chunk is 512 × 4 ≈ 2 KB, and 100 GB ÷ 2 KB ≈ 49 million chunks.',
+        highlight: ['ragChunks'],
+      },
+      {
+        kind: 'read',
+        title: 'The index lives in memory',
+        body: 'Vector databases keep the index in RAM so a search takes milliseconds. BGE-Large produces 1,024-dimension vectors; at 4 bytes per number, plus about 15% for the HNSW search graph, each vector takes about 4.7 KB. Forty-nine million of them is about 230 GB.\n\nA Milvus node here has 128 GB of RAM, about 109 GB usable, so the index needs three nodes. The query rate (8 per second) would fit on one. For most enterprise RAG, the size of the corpus, not the number of questions, sets the database size.',
+        highlight: ['ragIndex', 'ragDbNodes'],
+      },
+      {
+        kind: 'task',
+        title: 'Index the whole document store',
+        body: 'The customer now wants all their shared drives searchable: 2 TB of files.',
+        task: 'Set the document corpus to 2 TB.',
+        check: (c) => c.corpusSizeGb === 2000 && c.selectedEmbeddingModelId === 'bge-large-en-v1.5' && c.avgChunkTokens === 512 && c.ingestionTargetHours === 24,
+        hint: 'Use the Document corpus control; keep BGE-Large, 512-token chunks and the 24-hour window.',
+        done: 'Four times the files, four times everything: about 195 million chunks, a 920 GB index on nine database nodes, and six L40S GPUs to re-index it all in about 21 hours.',
+        highlight: ['ragChunks', 'ragIndex', 'ragDbNodes', 'ragEmbedGpus'],
+      },
+      {
+        kind: 'predict',
+        title: 'Predict: a bigger embedding model',
+        body: 'Qwen3-Embedding 8B retrieves better than BGE-Large, especially across languages. Its vectors have 4,096 dimensions instead of 1,024, and it has 7.6 billion parameters instead of 335 million.',
+        question: 'For the same 2 TB corpus, what happens to the vector database?',
+        options: ['It stays the same size', 'About twice as large', 'About four times as large', 'About twenty times as large'],
+        answer: 2,
+        explain: 'Index memory scales with dimensions: 4,096 ÷ 1,024 = 4× the bytes per vector. Embedding compute scales with parameters, about 23× more.',
+      },
+      {
+        kind: 'task',
+        title: 'Try the bigger model',
+        body: 'See both effects in the design.',
+        task: 'Select Qwen3-Embedding 8B with the 2 TB corpus.',
+        check: (c) => c.corpusSizeGb === 2000 && c.selectedEmbeddingModelId === 'qwen3-embedding-8b' && c.ingestionTargetHours === 24,
+        hint: 'Use the Embedding model control; keep 2 TB and the 24-hour window.',
+        done: 'The index grows to about 3.7 TB on 34 database nodes, and re-indexing in a day now takes 120 L40S GPUs instead of 6. Choose the embedding model with the customer\'s retrieval quality needs in view: it is often the biggest cost lever in a RAG design.',
+        highlight: ['ragIndex', 'ragDbNodes', 'ragEmbedGpus', 'ragCapex'],
+      },
+      {
+        kind: 'task',
+        title: 'Larger chunks',
+        body: 'Back on BGE-Large, larger chunks mean fewer vectors to store.',
+        task: 'Select BGE-Large and 1,024-token chunks (corpus still 2 TB).',
+        check: (c) => c.corpusSizeGb === 2000 && c.selectedEmbeddingModelId === 'bge-large-en-v1.5' && c.avgChunkTokens === 1024,
+        hint: 'Set the Embedding model back to BGE-Large and the Chunk size to 1024.',
+        done: 'Half the chunks, half the index: about 460 GB on five nodes. Embedding work is unchanged, because the same tokens are embedded either way. The catch is on the LLM side: each retrieved chunk is twice as long, so prompts and KV cache grow, and large chunks can dilute what the search matches.',
+        highlight: ['ragChunks', 'ragIndex', 'ragDbNodes', 'ragEmbedGpus'],
+      },
+      {
+        kind: 'task',
+        title: 'Re-index faster',
+        body: 'Some customers need a changed document set searchable the same morning, not the next day.',
+        task: 'With BGE-Large and 2 TB, set the re-index window to 4 hours.',
+        check: (c) => c.corpusSizeGb === 2000 && c.selectedEmbeddingModelId === 'bge-large-en-v1.5' && c.ingestionTargetHours === 4,
+        hint: 'Use the "Full re-index must finish within" control.',
+        done: 'About 32 embedding GPUs instead of 6. The embedding pool is sized by how fast the whole corpus must be re-indexed, not by live questions (one GPU embeds those easily). Agree the re-index window early, and check whether incremental updates are enough.',
+        highlight: ['ragEmbedGpus', 'ragIngest', 'ragCapex'],
+      },
+      {
+        kind: 'recap',
+        title: 'Recap',
+        points: [
+          'RAG adds an embedding GPU pool and a vector database, and lengthens every prompt with retrieved chunks.',
+          'Chunks ≈ extractable text ÷ (chunk tokens × ~4 characters); index ≈ chunks × dimensions × 4 bytes × 1.15.',
+          'Corpus size and vector dimensions set the database size; for most enterprise RAG the query rate barely matters.',
+          'Embedding GPUs are sized by the re-index window, and scale with the embedding model\'s parameters.',
+          'The embedding model is a major cost lever: check the customer really needs the largest one.',
+        ],
+      },
+    ],
+  },
+
+  serving: {
+    id: 'serving',
+    objective: 'Estimate the gain from speculative decoding, know what makes it work, and recognize when disaggregated serving is worth considering.',
+    design: 'Llama 3.3 70B at FP8 on a Cisco UCS C885A M8 with H200 GPUs, served by vLLM with 32 users generating at once.',
+    start: () => lessonBase('ent-rag-assistant', { selectedModelId: 'llama33-70b', selectedPrecisionId: 'fp8', kvPrecision: 'fp8', concurrency: 32, contextLength: 8192, promptTokenRatio: 0.8, isAutoSharding: true, isAutoDp: true, specMethod: 'draft-model', specDraftParamsB: 1, specNumTokens: 4, specAcceptanceRate: 0.6 }),
+    controls: ['enableSpeculativeDecoding', 'specAcceptanceRate', 'specMethod', { id: 'concurrency', only: [1, 32, 128] }],
+    metrics: ['tpot', 'specSpeedup', 'tokPerStream', 'clusterTps', 'costPer1M', 'gpus'],
+    math: (s, c) => {
+      const sp = s.throughput.speculative;
+      if (!sp) {
+        return [
+          { label: 'Time per token', expr: 'one full read of weights and KV cache per token (lesson 4)', value: `${Number(s.throughput.tpotMs).toFixed(1)} ms`, strong: true },
+          { label: 'Speculative decoding', expr: 'off: turn it on to see the calculation', value: 'Off' },
+        ];
+      }
+      return [
+        { label: 'Tokens per step', expr: `(1 − ${sp.alpha}^${sp.k + 1}) ÷ (1 − ${sp.alpha}), ${sp.k} draft tokens at ${Math.round(sp.alpha * 100)}% acceptance`, value: sp.expectedTokensPerStep.toFixed(2) },
+        { label: 'Step cost', expr: `one verification pass + ${sp.k} ${c.specMethod === 'draft-head' ? 'draft-head' : `${sp.draftParamsB}B draft-model`} steps`, value: `×${(sp.expectedTokensPerStep / sp.speedup).toFixed(2)}` },
+        { label: 'Speed-up', expr: 'tokens per step ÷ step cost', value: `×${sp.speedup.toFixed(2)}` },
+        { label: 'Time per token', expr: `${sp.tpotWithoutMs.toFixed(1)} ms ÷ ${sp.speedup.toFixed(2)}`, value: `${Number(s.throughput.tpotMs).toFixed(1)} ms`, strong: true },
+      ];
+    },
+    steps: [
+      {
+        kind: 'read',
+        title: 'What the serving engine does',
+        body: 'Serving engines such as vLLM, NVIDIA TensorRT-LLM and SGLang do much more than run the model. Continuous batching adds and removes users from the batch at every step, paged attention stores the KV cache in small blocks so little memory is wasted, and chunked prefill and prefix caching smooth out long prompts. The calculator\'s speed figures assume an engine with these features, as validated designs use.\n\nLesson 4 showed that decode is limited by memory bandwidth: each step reads the weights and KV cache to produce one token per user, and most of the GPU\'s compute sits idle. The techniques in this lesson put that idle compute to work.',
+        highlight: ['tpot'],
+      },
+      {
+        kind: 'read',
+        title: 'Speculative decoding',
+        body: 'A small, fast draft (a separate 1B model, or a draft head trained onto the big model, such as EAGLE or DeepSeek\'s multi-token prediction) guesses the next few tokens. The big model then checks all the guesses in one pass, which costs about the same memory reads as producing one token. Every guess up to the first wrong one is kept, plus one token from the big model.\n\nThe output is exactly what the big model would have written on its own, so quality does not change. Only speed does, and the gain depends on how often the draft guesses right.',
+        highlight: ['specSpeedup'],
+      },
+      {
+        kind: 'predict',
+        title: 'Predict: tokens per step',
+        body: 'The draft proposes 4 tokens and each is accepted with a 60% chance (a guess only counts if every earlier guess was accepted too).',
+        question: 'On average, how many tokens does each big-model step produce?',
+        options: ['1.0', 'About 2.3', 'About 4', '5'],
+        answer: 1,
+        explain: '1 + 0.6 + 0.6² + 0.6³ + 0.6⁴ ≈ 2.31: the big model\'s own token, plus each draft token weighted by the chance all guesses before it were right.',
+        highlight: ['specSpeedup'],
+      },
+      {
+        kind: 'task',
+        title: 'Turn it on',
+        body: 'The design serves 32 users at once.',
+        task: 'Turn speculative decoding on (60% acceptance).',
+        check: (c) => c.enableSpeculativeDecoding && c.specAcceptanceRate === 0.6 && c.concurrency === 32,
+        hint: 'Use the Speculative decoding control and keep the acceptance rate at 60%.',
+        done: 'Time per token drops from 39.5 ms to 25.2 ms (×1.56, a little under 2.31 because drafting takes time too). The same GPU now produces about 1,270 tokens per second instead of 810, and the cost per million tokens falls from $3.21 to $2.05.',
+        highlight: ['tpot', 'specSpeedup', 'clusterTps', 'costPer1M'],
+      },
+      {
+        kind: 'task',
+        title: 'A poorly matched draft',
+        body: 'Acceptance depends on the traffic: code, structured output and retrieval answers are predictable; open-ended creative writing is not. A draft trained on different data also guesses worse.',
+        task: 'Lower the acceptance rate to 40%.',
+        check: (c) => c.enableSpeculativeDecoding && c.specAcceptanceRate === 0.4 && c.concurrency === 32,
+        hint: 'Use the Draft acceptance rate control.',
+        done: 'The speed-up shrinks to ×1.12. Speculative decoding is only worth its operational complexity when acceptance is high, so measure it on the customer\'s real prompts before promising a number.',
+        highlight: ['specSpeedup', 'tpot'],
+      },
+      {
+        kind: 'predict',
+        title: 'Predict: one user or many?',
+        body: 'Speculative decoding spends spare compute on draft and verification work.',
+        question: 'At 60% acceptance, where is the speed-up larger?',
+        options: ['With one user', 'With 32 users', 'The same either way'],
+        answer: 0,
+        explain: 'With one user almost all the compute is idle, so drafting is nearly free. With a large batch there is less spare compute, and the gain shrinks.',
+      },
+      {
+        kind: 'task',
+        title: 'Check with one user',
+        body: 'This is the interactive case: one person waiting for an answer.',
+        task: 'Set 60% acceptance and 1 concurrent stream.',
+        check: (c) => c.enableSpeculativeDecoding && c.specAcceptanceRate === 0.6 && c.concurrency === 1,
+        hint: 'Set Draft acceptance rate back to 60% and Concurrent streams to 1.',
+        done: 'About ×1.77: from 20.2 ms to 11.4 ms per token, close to 90 tokens per second for that user. The biggest wins are latency-sensitive services at modest batch sizes, such as coding assistants.',
+        highlight: ['specSpeedup', 'tpot', 'tokPerStream'],
+      },
+      {
+        kind: 'read',
+        title: 'Disaggregated serving',
+        body: 'In the designs so far, every GPU does both phases: prefill (compute-bound) and decode (memory-bound). When a long prompt arrives, its prefill interrupts the decode of everyone else on that GPU, so time per token becomes uneven.\n\nDisaggregated serving (llm-d, NVIDIA Dynamo) splits the cluster into a prefill pool and a decode pool, sized separately and even on different GPUs (for example B200 for prefill, H200 for decode), and moves each request\'s KV cache between them over the RDMA network.\n\nIt pays off at scale, with long prompts and strict time-per-token targets. At small scale it costs more: in this calculator a 70B service for 128 users at 32k context needs 6 GPUs colocated but 24 when split, because each pool is sized and rounded up on its own. Compare both in Advanced mode (Serving Stack) before recommending it.',
+      },
+      {
+        kind: 'recap',
+        title: 'Recap',
+        points: [
+          'Serving engines (vLLM, TensorRT-LLM, SGLang) bring continuous batching, paged attention and prefix caching; sizing assumes them.',
+          'Speculative decoding turns idle compute into speed without changing the output: tokens per step = (1 − α^(k+1)) ÷ (1 − α).',
+          'Its gain depends on acceptance, so measure it on real traffic; it is largest at small batch sizes.',
+          'Faster decode also raises tokens per GPU, which lowers the cost per token.',
+          'Disaggregated serving separates prefill and decode pools; it helps at scale with long prompts and costs more at small scale.',
+        ],
+      },
+    ],
+  },
+
+  guardrails: {
+    id: 'guardrails',
+    objective: 'Size a guardrail pool, estimate the latency it adds, and choose a guard model that meets a latency and budget target.',
+    design: 'Llama 3.3 70B at FP8 on Cisco UCS C885A M8 servers with H200 GPUs, sized for 5,000 active users in the busiest hour, with Llama Guard 3 8B on NVIDIA L40S GPUs checking every prompt and answer.',
+    start: () => lessonBase('ent-rag-assistant', { selectedModelId: 'llama33-70b', selectedPrecisionId: 'fp8', kvPrecision: 'fp8', contextLength: 8192, promptTokenRatio: 0.8, isAutoSharding: true, isAutoDp: true, sizingInputMode: 'traffic', peakActiveUsers: 5000, requestsPerUserPerHour: 10, targetUtilization: 0.7, enableGuardrails: true, selectedGuardModelId: 'llama-guard-3-8b', enableInputGuard: true, enableOutputGuard: true }),
+    controls: ['selectedGuardModelId', 'enableInputGuard', 'enableOutputGuard', { id: 'peakActiveUsers', only: [500, 5000] }],
+    metrics: ['guardGpus', 'guardTtft', 'ttftGuarded', 'guardCapex', 'gpus', 'ttft'],
+    math: (s, c) => {
+      const g = s.guardrails;
+      if (!g.eligible) return [{ label: 'Guardrails', expr: g.reason, value: 'None', strong: true }];
+      const prompt = s.memory.promptTokens;
+      const answer = Math.round(c.contextLength * (1 - c.promptTokenRatio));
+      return [
+        { label: 'Request rate', expr: 'what the LLM cluster serves at full load (the guard must keep up with it)', value: `${g.requestRatePerSec.toFixed(1)} per second` },
+        { label: 'Work per request', expr: `2 × ${g.guardModel.paramsBillion}B parameters × (${c.enableInputGuard ? `${prompt.toLocaleString()} prompt` : '0'} + ${c.enableOutputGuard ? `${answer.toLocaleString()} answer` : '0'} tokens)`, value: `${((2 * g.guardModel.paramsBillion * ((c.enableInputGuard ? prompt : 0) + (c.enableOutputGuard ? answer : 0))) / 1e3).toFixed(1)} TFLOP` },
+        { label: 'Guard GPUs', expr: `work × request rate ÷ (one ${s.guardGpu.name.split(' (')[0].replace('NVIDIA ', '')} at 40% of ${s.guardGpu.fp16Tflops} TFLOPS)`, value: `${g.guardGpusNeeded}`, strong: true },
+        { label: 'Added to first token', expr: 'the prompt check must finish before generation starts', value: sec(g.addedTtftSec) },
+        { label: 'First token, with guards', expr: `${sec(s.throughput.ttftSec)} + ${sec(g.addedTtftSec)}`, value: sec(s.sla.ttftBaselineSec), strong: true },
+      ];
+    },
+    steps: [
+      {
+        kind: 'read',
+        title: 'A model that checks the model',
+        body: 'Guardrails put a small classifier model in the request path. The input guard reads every prompt before the main model sees it (catching jailbreaks, prompt injection and requests for harmful content); the output guard reads every answer before the user does. Open guard models such as Llama Guard, ShieldGemma and IBM Granite Guardian label text against a safety policy.\n\nThey are separate models on separate GPUs, so they need their own pool, and every check adds time.',
+        highlight: ['guardGpus'],
+      },
+      {
+        kind: 'read',
+        title: 'Sizing the pool',
+        body: 'A guard reads text in one pass, like prefill: about 2 × parameters × tokens of work. Every request that reaches the LLM is checked, so the pool must keep up with the cluster\'s full request rate.\n\nHere Llama Guard 3 8B checks about 6,550 prompt tokens and 1,640 answer tokens for each of about 20 requests per second. That takes 18 L40S GPUs, and the prompt check adds about 0.72 s before the first token, more than tripling it.',
+        highlight: ['guardGpus', 'guardTtft', 'ttftGuarded'],
+      },
+      {
+        kind: 'predict',
+        title: 'Predict: input or output?',
+        body: 'Prompts here are four times as long as answers.',
+        question: 'Which guard needs more GPUs?',
+        options: ['The input guard', 'The output guard', 'About the same'],
+        answer: 0,
+        explain: 'Guard work scales with the tokens checked. In RAG and document workloads prompts are long, so the input guard does most of the work, and it is also the one that delays the first token.',
+      },
+      {
+        kind: 'task',
+        title: 'Check answers only',
+        body: 'See how much of the cost and latency comes from checking prompts.',
+        task: 'Turn off the input guard.',
+        check: (c) => !c.enableInputGuard && c.enableOutputGuard && c.selectedGuardModelId === 'llama-guard-3-8b' && c.peakActiveUsers === 5000,
+        hint: 'Use the "Check prompts (input guard)" control; keep the 8B model and 5,000 users.',
+        done: 'Four guard GPUs instead of 18, and nothing added to the first token. But prompts now reach the model unchecked, which is where prompt injection and jailbreaks come in, so most policies need both.',
+        highlight: ['guardGpus', 'guardTtft', 'ttftGuarded'],
+      },
+      {
+        kind: 'brief',
+        title: 'Meet the security team\'s brief',
+        body: 'The security team requires both prompts and answers to be checked. The product owner wants the first token within half a second, and the budget for guardrail hardware is $50,000. Choose a guard model that meets all three.',
+        requirements: [
+          { label: 'Prompts and answers both checked', check: (c) => c.enableInputGuard && c.enableOutputGuard, show: (_s, c) => (c.enableInputGuard && c.enableOutputGuard ? 'Both' : c.enableInputGuard ? 'Prompts only' : c.enableOutputGuard ? 'Answers only' : 'Neither') },
+          { label: 'First token ≤ 0.5 s', check: (_c, s) => (s.sla.ttftBaselineSec ?? s.throughput.ttftSec) <= 0.5, show: (s) => sec(s.sla.ttftBaselineSec ?? s.throughput.ttftSec) },
+          { label: 'Guardrail capex ≤ $50,000', check: (_c, s) => s.guardrails.eligible && s.guardrails.guardrailsComputeCapexUsd <= 50000, show: (s) => usd(s.guardrails.guardrailsComputeCapexUsd ?? 0) },
+        ],
+        hint: 'Guard work and latency scale with the guard model\'s parameters. Keep 5,000 users.',
+        done: 'Smaller guard models meet the brief: Llama Guard 3 1B needs 3 GPUs and adds about 0.09 s; ShieldGemma 2B needs 5 and adds about 0.18 s. The 8B guards are more accurate on subtle cases, so confirm with the security team that a small guard meets their policy, and test it on their red-team prompts.',
+        highlight: ['guardGpus', 'ttftGuarded', 'guardCapex'],
+      },
+      {
+        kind: 'recap',
+        title: 'Recap',
+        points: [
+          'Guardrails add a classifier pool: work ≈ 2 × guard parameters × tokens checked, for every request the cluster serves.',
+          'The input guard delays the first token by its whole check; output guards add to the end of the answer.',
+          'Long prompts make input checking the expensive part in RAG and document workloads.',
+          'Small guard models (1-2B) cut GPUs and latency several-fold; confirm they meet the customer\'s policy.',
+          'Guardrails are one control among several: see the security chapter of the Architecture Guide.',
+        ],
+      },
+    ],
+  },
+
+  resilience: {
+    id: 'resilience',
+    objective: 'Explain RTO and RPO, match a resilience tier to a customer\'s requirements, and estimate what each tier adds to capex and power.',
+    design: 'A full Cisco UCS C885A M8 node (eight H200 GPUs) serving Llama 3.3 70B for 64 users at 32k context, with 350 TB of VAST storage.',
+    start: () => lessonBase('ent-rag-assistant', { selectedModelId: 'llama33-70b', selectedPrecisionId: 'fp8', kvPrecision: 'fp16', concurrency: 64, contextLength: 32768, enableHaDr: true, selectedHaDrTierId: 'backup-restore' }),
+    controls: ['selectedHaDrTierId'],
+    metrics: ['rto', 'rpo', 'haDrExtra', 'capex', 'haDrPower', 'tco'],
+    math: (s) => {
+      const h = s.haDr;
+      const t = s.haDrTier;
+      return [
+        { label: 'Compute', expr: `${usd(h.baseComputeCapexUsd)} of GPUs × (${t.computeMultiplier} − 1)`, value: usd(h.incrementalComputeCapexUsd) },
+        { label: 'Storage', expr: `${usd(h.baseStorageCapexUsd)} of storage × (${t.storageMultiplier} − 1)`, value: usd(h.incrementalStorageCapexUsd) },
+        { label: 'Added capex', expr: t.name, value: usd(h.haDrComputeCapexUsd), strong: true },
+        { label: 'Added IT power', expr: `${s.facility.totalItPowerKw.toFixed(1)} kW × (${t.computeMultiplier} − 1)`, value: `${h.haDrItPowerKw.toFixed(1)} kW` },
+      ];
+    },
+    steps: [
+      {
+        kind: 'read',
+        title: 'Two questions every customer must answer',
+        body: 'Recovery time objective (RTO): how long can the service be down after a failure? Recovery point objective (RPO): how much recent data can be lost?\n\nHigh availability (HA) keeps the service running through the loss of a server or a zone within one site, usually with spare capacity and automatic failover. Disaster recovery (DR) brings it back after losing a whole site or region. Tighter RTO and RPO mean more hardware kept running or kept in sync elsewhere.',
+        highlight: ['rto', 'rpo'],
+      },
+      {
+        kind: 'read',
+        title: 'The tiers',
+        body: 'Backup and restore: copies of models and data shipped to a second site; infrastructure is rebuilt on failover (RTO hours to days).\nPilot light: data continuously replicated to a second site with a minimal core running; the rest is started on failover (RTO hours, RPO minutes).\nWarm standby: a smaller, working copy runs at the second site and is scaled up on failover (RTO minutes).\nMulti-zone HA: about a third more capacity spread across zones in one region, with automatic failover; it does not survive a regional disaster.\nActive-active: two full sites, both serving traffic.',
+        highlight: ['haDrExtra'],
+      },
+      {
+        kind: 'predict',
+        title: 'Predict: active-active',
+        body: 'Two full sites both serve live traffic, each able to carry the whole load.',
+        question: 'How much does that add to the GPU capex?',
+        options: ['About 10%', 'About 33%', 'About 50%', 'About 100%'],
+        answer: 3,
+        explain: 'A second full site doubles the GPUs, and its storage too.',
+      },
+      {
+        kind: 'task',
+        title: 'Price active-active',
+        body: 'See the full cost of the highest tier.',
+        task: 'Select active-active, two sites.',
+        check: (c) => c.selectedHaDrTierId === 'multi-site-active-active',
+        hint: 'Use the Resilience tier control.',
+        done: 'Capex rises from about $399,000 to $742,000: $280,000 more GPUs and $70,000 more storage. IT power doubles to about 24.5 kW, and three-year TCO reaches about $1.29 million. Near-zero RTO and RPO cost as much again as the service itself.',
+        highlight: ['haDrExtra', 'capex', 'haDrPower', 'tco'],
+      },
+      {
+        kind: 'task',
+        title: 'High availability in one region',
+        body: 'Many internal assistants only need to ride through a server or zone failure.',
+        task: 'Select multi-zone HA.',
+        check: (c) => c.selectedHaDrTierId === 'multi-az',
+        hint: 'Use the Resilience tier control.',
+        done: 'About $92,000 more: a third more GPU capacity across zones, with failover in seconds and synchronous data. Remember what it does not cover: losing the whole region.',
+        highlight: ['haDrExtra', 'rto', 'rpo'],
+      },
+      {
+        kind: 'brief',
+        title: 'Meet the resilience brief',
+        body: 'A customer must survive losing the entire data center. They accept a few hours to restore service but no more than minutes of lost data, and the resilience budget is $150,000.',
+        requirements: [
+          { label: 'Survives losing the site', check: (c) => c.selectedHaDrTierId !== 'multi-az', show: (s) => s.haDrTier.scope },
+          { label: 'Restored within hours', check: (c) => c.selectedHaDrTierId !== 'backup-restore', show: (s) => s.haDrTier.rtoDescription },
+          { label: 'Loses at most minutes of data', check: (c) => c.selectedHaDrTierId !== 'backup-restore', show: (s) => s.haDrTier.rpoDescription },
+          { label: 'Adds ≤ $150,000', check: (_c, s) => s.haDr.haDrComputeCapexUsd <= 150000, show: (s) => usd(s.haDr.haDrComputeCapexUsd) },
+        ],
+        hint: 'Rule out the tiers that stay in one region or restore from backups, then compare the rest on cost.',
+        done: 'Pilot light: about $98,000 for continuously replicated data and a minimal running core at the second site. Warm standby would restore faster but costs $210,000. Write the RTO and RPO into the design so everyone agrees what the money buys.',
+        highlight: ['haDrExtra', 'rto', 'rpo'],
+      },
+      {
+        kind: 'recap',
+        title: 'Recap',
+        points: [
+          'RTO is how long the service can be down; RPO is how much data can be lost. Get both from the customer in writing.',
+          'HA survives a server or zone failure within a site; DR survives losing the site.',
+          'Cost climbs with tighter targets: backup and restore adds little, active-active doubles compute.',
+          'Pilot light and warm standby are the usual middle ground for private AI services.',
+          'Training has different needs: checkpoints and spare nodes (lesson 8), not live replicas.',
         ],
       },
     ],

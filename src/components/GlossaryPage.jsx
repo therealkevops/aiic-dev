@@ -6,6 +6,7 @@ import {
   HardDrive, Zap, DollarSign, AlertTriangle, Terminal, ShieldCheck, Menu, X
 } from 'lucide-react';
 import { COMPLIANCE_FRAMEWORKS, CONTROL_DOMAINS, STATUS, evaluateControlDomains } from '../data/security';
+import { HA_DR_TIERS } from '../data/hadr';
 import { Banner, Tag, Rows, Row, SectionLabel } from './ui';
 
 // A decision/trade-off callout is just an info Banner with a fixed title -- same visual
@@ -106,6 +107,13 @@ const DOC_GROUPS = [
         title: 'Security, Compliance & Attestation Controls',
         category: 'Core Foundations',
         icon: ShieldCheck,
+        type: 'core',
+      },
+      {
+        id: 'chap-11-production',
+        title: 'RAG, Guardrails & Resilience Services',
+        category: 'Core Foundations',
+        icon: Database,
         type: 'core',
       }
     ]
@@ -2322,6 +2330,71 @@ const CORE_CONTENT = {
       </div>
     )
   },
+  'chap-11-production': {
+    title: 'RAG, Guardrails & Resilience Services',
+    subtitle: 'The pools a production design adds around the model: embedding GPUs and vector databases, guard classifiers, and standby capacity for HA/DR.',
+    introduction: 'A model on GPUs is not yet a service. Production designs add retrieval over the customer\'s documents, safety checks on prompts and answers, and capacity that keeps the service running (or brings it back) when hardware or a whole site fails. Each is a separate pool with its own sizing rule, and each can move the bill of materials as much as the model choice does. This chapter gives the rules the calculator uses; Learning mode lessons 11, 13 and 14 walk through them on live designs.',
+    content: (
+      <div className="space-y-6 text-[15px] text-zinc-300 leading-relaxed">
+        <h3 className="text-sm font-semibold text-zinc-100 mt-2 mb-2">1. RAG: embedding GPUs and the vector database</h3>
+        <p>
+          Documents are split into chunks, each chunk is turned into a vector by an embedding model, and the vectors are held in a
+          vector database that answers nearest-neighbour searches in milliseconds. Two pools follow from that:
+        </p>
+        <ul className="list-disc pl-5 space-y-2 text-sm">
+          <li><strong>Chunks</strong> = raw corpus × extractable-text share (about 20% for office documents) ÷ (chunk tokens × ~4 characters per token).</li>
+          <li><strong>Vector index</strong> = chunks × dimensions × 4 bytes × ~1.15 for the HNSW graph. The database needs enough RAM to hold it (about 85% of each node is usable) and enough nodes for the query rate; in enterprise RAG the index size almost always decides.</li>
+          <li><strong>Embedding GPUs</strong> = 2 × embedding-model parameters × tokens in the corpus, at about 40% utilization, divided by the window in which a full re-index must finish. Live query embedding is light by comparison.</li>
+        </ul>
+        <DecisionCallout title="The Embedding Model Is a Cost Lever">
+          Moving from a 335M-parameter, 1,024-dimension model (BGE-Large) to a 7.6B-parameter, 4,096-dimension one (Qwen3-Embedding 8B) quadruples the vector database and multiplies embedding compute about 23 times. Larger models retrieve better, particularly across languages; confirm the customer needs that quality before sizing for it. Vector quantization and reduced-dimension embeddings, which cut index memory further, are not modelled here.
+        </DecisionCallout>
+
+        <h3 className="text-sm font-semibold text-zinc-100 mt-6 mb-2">2. Guardrails: classifiers in the request path</h3>
+        <p>
+          Guard models such as Llama Guard, ShieldGemma and Granite Guardian read text in a single pass, so their work is about
+          2 × guard parameters × tokens checked. The pool is sized for the full request rate the LLM cluster can serve, so it never
+          becomes the bottleneck. The input guard must finish before generation starts, so it adds its whole check time to the
+          first token; the output guard adds to the end of the answer (or runs on streamed chunks).
+        </p>
+        <p>
+          In RAG and document workloads prompts are several times longer than answers, so the input guard does most of the work.
+          A 1-2B guard needs several times fewer GPUs and adds a fraction of the latency of an 8B guard; whether it is accurate
+          enough is the customer\'s security team\'s call, tested on their own red-team prompts.
+        </p>
+
+        <h3 className="text-sm font-semibold text-zinc-100 mt-6 mb-2">3. High availability and disaster recovery</h3>
+        <p>
+          Two numbers frame the conversation: the recovery time objective (RTO, how long the service may be down) and the recovery
+          point objective (RPO, how much data may be lost). High availability rides through a server or zone failure inside one
+          region; disaster recovery restores service after losing a site. The calculator prices each tier as a multiple of the
+          primary site\'s GPU and storage capex, and adds the matching IT power:
+        </p>
+        <div className="overflow-x-auto rounded-lg border border-zinc-800">
+          <table className="w-full text-xs text-left border-collapse">
+            <thead className="bg-zinc-900 text-zinc-400 uppercase text-[11px] tracking-wide">
+              <tr><th className="p-3">Tier</th><th className="p-3">Scope</th><th className="p-3">Compute</th><th className="p-3">Storage</th><th className="p-3">RTO</th><th className="p-3">RPO</th></tr>
+            </thead>
+            <tbody className="divide-y divide-zinc-800/70">
+              {HA_DR_TIERS.map((t) => (
+                <tr key={t.id}>
+                  <td className="p-3 font-semibold text-zinc-200">{t.name}</td>
+                  <td className="p-3 text-zinc-400">{t.scope}</td>
+                  <td className="p-3 text-zinc-300 tabular-nums">×{t.computeMultiplier}</td>
+                  <td className="p-3 text-zinc-300 tabular-nums">×{t.storageMultiplier}</td>
+                  <td className="p-3 text-zinc-400">{t.rtoDescription}</td>
+                  <td className="p-3 text-zinc-400">{t.rpoDescription}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <DecisionCallout title="Agree RTO and RPO Before Choosing a Tier">
+          Pilot light and warm standby are the usual middle ground for private AI services: continuously replicated data at a second site for a fraction of the cost of running two full sites. Training jobs need different protection: checkpoints and spare nodes rather than live replicas (see the Storage chapter).
+        </DecisionCallout>
+      </div>
+    )
+  },
   'chap-10-security': {
     title: 'Security, Compliance & Attestation Controls',
     subtitle: 'How the architectural choices this calculator already sizes map onto common compliance-framework control domains -- and where this tool stops.',
@@ -2615,9 +2688,10 @@ export function GlossaryPage({ onBack, initialDocId }) {
                     and disaster recovery across 15 production use-case blueprints.
                   </p>
                   <p className="text-sm text-zinc-400 leading-relaxed mt-3">
-                    Learning the field? <strong className="text-zinc-200">Learning mode</strong> (switch in the header) is a ten-lesson path for
+                    Learning the field? <strong className="text-zinc-200">Learning mode</strong> (switch in the header) is a ten-lesson core path for
                     solutions architects: each lesson works on a real design with the same engine, shows the math, and links to the chapter here
-                    that goes deeper; it ends with a design brief and a scored quiz.
+                    that goes deeper; it ends with a design brief and a scored quiz, followed by four production topics (RAG, serving software,
+                    guardrails, and HA/DR).
                     New to the calculator? <strong className="text-zinc-200">Guided setup</strong> in Advanced mode asks five plain questions
                     (what it will do, how many people use it, how long the documents are, whether it must be air-gapped, and the vendor and budget),
                     sizes every platform from that vendor with latency targets on, and recommends the lowest-cost design that meets them.

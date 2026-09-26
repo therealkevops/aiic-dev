@@ -15,6 +15,7 @@ import { dirname, join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { chromium } from 'playwright';
 import { USE_CASE_PRESETS } from '../../src/data/presets.js';
+import { LESSONS } from '../../src/learning/lessons.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const GOLDEN = join(ROOT, 'tests', 'ui', 'preset-snapshot.json');
@@ -74,7 +75,7 @@ test('every preset renders every tab and matches the golden snapshot', async () 
   const page = await browser.newPage({ viewport: { width: 1600, height: 1000 } });
   const errors = [];
   page.on('pageerror', e => errors.push(e.message));
-  await page.goto(URL, { waitUntil: 'networkidle' });
+  await page.goto(`${URL}#/advanced`, { waitUntil: 'networkidle' });
 
   const snapshot = {};
   for (const preset of USE_CASE_PRESETS) {
@@ -107,7 +108,7 @@ test('pin a scenario, compare it with another, and export a report', async () =>
   const page = await browser.newPage({ viewport: { width: 1600, height: 1000 }, acceptDownloads: true });
   const errors = [];
   page.on('pageerror', e => errors.push(e.message));
-  await page.goto(URL, { waitUntil: 'networkidle' });
+  await page.goto(`${URL}#/advanced`, { waitUntil: 'networkidle' });
   await page.getByTestId('preset-select').selectOption('ent-rag-assistant');
   await page.getByTestId('pin-scenario').click();
   await page.getByTestId('preset-select').selectOption('ent-agent-sql-analysis');
@@ -129,7 +130,7 @@ test('guided setup recommends a design and applies it', async () => {
   const page = await browser.newPage({ viewport: { width: 1600, height: 1000 } });
   const errors = [];
   page.on('pageerror', e => errors.push(e.message));
-  await page.goto(URL, { waitUntil: 'networkidle' });
+  await page.goto(`${URL}#/advanced`, { waitUntil: 'networkidle' });
   await page.getByTestId('guided-setup').click();
   const dialog = page.getByTestId('guided-setup-dialog');
   await dialog.getByRole('button', { name: /^AI agents/ }).click();
@@ -143,4 +144,100 @@ test('guided setup recommends a design and applies it', async () => {
   assert.equal(await page.getByTestId('preset-select').inputValue(), '');
   assert.equal(errors.length, 0, errors.join('; '));
   await page.close();
+});
+
+test('home page on first visit, then the last-used mode', async () => {
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const page = await context.newPage();
+  const errors = [];
+  page.on('pageerror', e => errors.push(e.message));
+  await page.goto(URL, { waitUntil: 'networkidle' });
+  assert.equal(await page.getByTestId('mode-card-learn').count(), 1, 'first visit shows the home page');
+  await page.getByTestId('open-advanced').click();
+  assert.match(page.url(), /#\/advanced$/);
+  assert.equal(await page.getByTestId('kpi-gpus').count(), 1);
+  // A later visit to the root opens the last-used mode.
+  await page.goto(URL, { waitUntil: 'networkidle' });
+  assert.equal(await page.getByTestId('kpi-gpus').count(), 1, 'remembered mode skips the home page');
+  // Switch to Learning from the header; the product name returns home.
+  await page.getByTestId('mode-learn').click();
+  assert.match(page.url(), /#\/learn$/);
+  assert.equal(await page.getByTestId('lesson-list').count(), 1);
+  await page.getByTestId('go-home').click();
+  assert.equal(await page.getByTestId('mode-card-advanced').count(), 1);
+  assert.equal(errors.length, 0, errors.join('; '));
+  await context.close();
+});
+
+test('learning: complete lesson 1 and open the design in Advanced mode', async () => {
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const page = await context.newPage();
+  const errors = [];
+  page.on('pageerror', e => errors.push(e.message));
+  await page.goto(URL, { waitUntil: 'networkidle' });
+  await page.getByTestId('start-learning').click();
+  await page.getByTestId('lesson-memory').click();
+  const next = page.getByTestId('next-step');
+  const control = (id, v) => page.getByTestId(`control-${id}-${v}`).click();
+
+  await next.click();                                   // read
+  await page.getByTestId('predict-option-2').click();   // ~141 GB
+  await next.click();
+  await next.click();                                   // read
+  assert.equal(await next.isDisabled(), true, 'a task blocks Next until it is done');
+  await control('selectedPrecisionId', 'fp8');
+  assert.equal(await page.getByTestId('metric-gpus').innerText().then(t => t.includes('1')), true);
+  await next.click();
+  await page.getByTestId('predict-option-1').click();   // ~405 GB
+  await next.click();
+  await control('selectedModelId', 'llama3-405b');
+  assert.match(await page.getByTestId('metric-gpus').innerText(), /\b4\b/);
+  await next.click();
+  await control('selectedModelId', 'llama33-70b');
+  await control('selectedPrecisionId', 'int4');
+  await next.click();
+  await page.getByTestId('finish-lesson').click();
+  assert.equal(await page.getByTestId('lesson-complete').count(), 1);
+
+  await page.getByTestId('open-in-advanced').click();
+  assert.match(page.url(), /#\/advanced$/);
+  assert.equal(await page.getByTestId('kpi-gpus').innerText(), '1');
+
+  // Progress shows on the home page and the next lesson is offered.
+  await page.getByTestId('go-home').click();
+  assert.match(await page.getByTestId('start-learning').innerText(), /Resume: lesson 2/);
+  assert.equal(errors.length, 0, errors.join('; '));
+  await context.close();
+});
+
+test('learning: capstone brief and scored quiz', async () => {
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const page = await context.newPage();
+  const errors = [];
+  page.on('pageerror', e => errors.push(e.message));
+  await page.goto(`${URL}#/learn/capstone`, { waitUntil: 'networkidle' });
+  const next = page.getByTestId('next-step');
+  await next.click();
+  assert.equal(await next.isDisabled(), true, 'the brief blocks Next until met');
+  assert.equal(await page.getByTestId('brief-met').count(), 0);
+  await page.getByTestId('control-selectedPlatformId-cisco-c885a-h200').click();
+  await page.getByTestId('control-selectedPrecisionId-fp8').click();
+  await page.getByTestId('control-kvPrecision-fp8').click();
+  assert.equal(await page.getByTestId('brief-met').count(), 1);
+  await next.click();
+
+  const quiz = LESSONS.capstone.steps.find(s => s.kind === 'quiz');
+  // Two wrong answers, the rest right: 10/12 = 83%, a pass.
+  for (const [i, q] of quiz.questions.entries()) {
+    const pick = i < 2 ? (q.answer + 1) % q.options.length : q.answer;
+    await page.getByTestId(`quiz-${i}-${pick}`).click();
+  }
+  await page.getByTestId('quiz-submit').click();
+  assert.match(await page.getByTestId('quiz-score').innerText(), /10 of 12 \(83%\)[\s\S]*Passed/);
+  await next.click();
+  await page.getByTestId('finish-lesson').click();
+  await page.getByTestId('all-lessons').click();
+  assert.match(await page.getByTestId('lesson-list').innerText(), /Best quiz score: 83%/);
+  assert.equal(errors.length, 0, errors.join('; '));
+  await context.close();
 });

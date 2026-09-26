@@ -1,6 +1,7 @@
 import React from 'react';
 import { BookOpen, Check, ChevronDown, Compass, Copy, FileDown, Pin, Server } from 'lucide-react';
 import { USE_CASE_PRESETS } from '../data/presets';
+import { ModeSwitch, ProductMark } from './ModeSwitch';
 
 const PRESET_GROUPS = [
   { id: 'enterprise', label: 'Enterprise' },
@@ -39,22 +40,14 @@ function Stat({ label, value, testId }) {
 export function AppHeader({ ctx }) {
   const {
     activePreset, applyPreset, facility, memory, results, selectedPresetId, currentLabel, openGuidedSetup,
-    pinned, pinCurrentScenario, handleExportReport, handleCopyBOM, copiedBOM, setPage,
+    pinned, pinCurrentScenario, handleExportReport, handleCopyBOM, copiedBOM, setPage, navigate,
   } = ctx;
   const modified = !!activePreset && currentLabel.endsWith('(modified)');
 
   return (
     <header className="h-14 px-4 bg-zinc-950 border-b border-zinc-800 shrink-0 z-10 flex items-center gap-4">
-      {/* Product */}
-      <div className="flex items-center gap-2.5 shrink-0">
-        <div className="w-7 h-7 rounded-md bg-sky-600 text-white flex items-center justify-center">
-          <Server className="w-4 h-4" />
-        </div>
-        <div className="leading-tight">
-          <div className="text-sm font-semibold text-white whitespace-nowrap">AI Infrastructure Sizer</div>
-          <div className="text-[10.5px] text-zinc-500 whitespace-nowrap hidden 2xl:block">Private AI capacity, cost and power planning</div>
-        </div>
-      </div>
+      <ProductMark Icon={Server} onHome={() => navigate({ page: 'home' })} tagline="Private AI capacity, cost and power planning" />
+      <ModeSwitch mode="advanced" onChange={(m) => navigate({ page: m })} />
 
       <div className="h-6 w-px bg-zinc-800 shrink-0" />
 

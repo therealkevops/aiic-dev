@@ -2426,8 +2426,8 @@ function ComplianceChecklist({ facts }) {
 
 // ──────────────────────────────── MAIN COMPONENT ────────────────────────────────
 
-export function GlossaryPage({ onBack }) {
-  const [activeDocId, setActiveDocId] = useState('overview');
+export function GlossaryPage({ onBack, initialDocId }) {
+  const [activeDocId, setActiveDocId] = useState(initialDocId || 'overview');
   const [searchQuery, setSearchQuery] = useState('');
   
   // Collapsible section groups state (default all open)
@@ -2588,7 +2588,10 @@ export function GlossaryPage({ onBack }) {
                     and disaster recovery across 15 production use-case blueprints.
                   </p>
                   <p className="text-sm text-zinc-400 leading-relaxed mt-3">
-                    New to the calculator? <strong className="text-zinc-200">Guided setup</strong> in the header asks five plain questions
+                    Learning the field? <strong className="text-zinc-200">Learning mode</strong> (switch in the header) is a ten-lesson path for
+                    solutions architects: each lesson works on a real design with the same engine, shows the math, and links to the chapter here
+                    that goes deeper; it ends with a design brief and a scored quiz.
+                    New to the calculator? <strong className="text-zinc-200">Guided setup</strong> in Advanced mode asks five plain questions
                     (what it will do, how many people use it, how long the documents are, whether it must be air-gapped, and the vendor and budget),
                     sizes every platform from that vendor with latency targets on, and recommends the lowest-cost design that meets them.
                     Every setting stays editable afterwards.

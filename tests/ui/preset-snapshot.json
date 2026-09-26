@@ -145,12 +145,12 @@
       "Private AI Infrastructure Sizing Calculator · Cisco & NVIDIA Datacenter Platforms"
     ],
     "configPaneHashes": {
-      "workload": "f789f052a347",
-      "platform": "fd1ae427b069",
-      "sharding": "69598a12d5bb",
-      "network": "89795e5833bc",
-      "facility": "0b3bcb86bce9",
-      "storage": "a1dcfd05ddf4",
+      "workload": "8264228ddc00",
+      "platform": "aea411420494",
+      "sharding": "dbc39dc66d85",
+      "network": "75c304ffe3ff",
+      "facility": "894b5a53d198",
+      "storage": "7a62f9c172f4",
       "rag": "71203c5231ba",
       "stack": "2ef5ee6aaf79",
       "guardrails": "35046e5f8415",
@@ -158,9 +158,9 @@
       "hadr": "ab0b9398bec4",
       "mlops": "4de425f53b4e",
       "mig": "b5d8b480f2ee",
-      "sla": "eaf296cec6ad",
-      "cost": "4cca465c5cb0",
-      "planning": "5336aab274fc"
+      "sla": "066e63d8abf3",
+      "cost": "2067e5901eba",
+      "planning": "b68486511a54"
     }
   },
   "ent-coding-copilot": {
@@ -307,12 +307,12 @@
       "Private AI Infrastructure Sizing Calculator · Cisco & NVIDIA Datacenter Platforms"
     ],
     "configPaneHashes": {
-      "workload": "ac863fe7f56c",
-      "platform": "fd1ae427b069",
-      "sharding": "a20cdd8c85d3",
-      "network": "28c663d87d43",
-      "facility": "fedfc8c6971b",
-      "storage": "b7388aa18128",
+      "workload": "26a691067cbe",
+      "platform": "aea411420494",
+      "sharding": "ba45a9a333e7",
+      "network": "ff593866fa18",
+      "facility": "407d06b187bd",
+      "storage": "be880cffe623",
       "rag": "3b826620567c",
       "stack": "50ba4bc4fbd2",
       "guardrails": "98e498f1414a",
@@ -320,9 +320,9 @@
       "hadr": "4022232baa7a",
       "mlops": "13b495698e8f",
       "mig": "b5d8b480f2ee",
-      "sla": "d0c00d15b107",
-      "cost": "9a0aab1caa6f",
-      "planning": "df7da9c7439f"
+      "sla": "1ea13ebbe621",
+      "cost": "b1f3bbda1e02",
+      "planning": "0dac30fd56bf"
     }
   },
   "ent-customer-support": {
@@ -461,12 +461,12 @@
       "Private AI Infrastructure Sizing Calculator · Cisco & NVIDIA Datacenter Platforms"
     ],
     "configPaneHashes": {
-      "workload": "0970fc29b533",
-      "platform": "1b035676037b",
-      "sharding": "9319dc0fe3cd",
-      "network": "89795e5833bc",
-      "facility": "68c67e994ba0",
-      "storage": "9e8417e218e5",
+      "workload": "bd8beff2d5ea",
+      "platform": "b4f0a28cc3f1",
+      "sharding": "aa5c19ee7a82",
+      "network": "75c304ffe3ff",
+      "facility": "d8f3b1cc4f82",
+      "storage": "5120da447610",
       "rag": "ac05552d35c0",
       "stack": "2ef5ee6aaf79",
       "guardrails": "794fbf07d7f7",
@@ -474,9 +474,9 @@
       "hadr": "f503b2695388",
       "mlops": "6be903c1a150",
       "mig": "b5d8b480f2ee",
-      "sla": "6568c9745ddf",
-      "cost": "5dcc7dacf33c",
-      "planning": "521507f217f6"
+      "sla": "27c2c8873474",
+      "cost": "4727ea09ebc6",
+      "planning": "3302d4cf5363"
     }
   },
   "ent-document-analysis": {
@@ -625,12 +625,12 @@
       "Private AI Infrastructure Sizing Calculator · Cisco & NVIDIA Datacenter Platforms"
     ],
     "configPaneHashes": {
-      "workload": "92b9d7de37b0",
-      "platform": "fd1ae427b069",
-      "sharding": "0f5b7f9310a4",
-      "network": "085371cd9ae4",
-      "facility": "05abdbf1e97e",
-      "storage": "b39862fc0c4e",
+      "workload": "5dc946afb068",
+      "platform": "aea411420494",
+      "sharding": "ea7898790d66",
+      "network": "4a109cd67adf",
+      "facility": "90e8813662c8",
+      "storage": "39bdeb1d5a29",
       "rag": "4a465d972891",
       "stack": "2ef5ee6aaf79",
       "guardrails": "fbedfc062eaa",
@@ -638,9 +638,9 @@
       "hadr": "45ed1ece242d",
       "mlops": "fab697d9e10b",
       "mig": "b5d8b480f2ee",
-      "sla": "4f1ff97ec1c0",
-      "cost": "d866cc99ccaf",
-      "planning": "0470980f5f1b"
+      "sla": "3416d1662143",
+      "cost": "f7fab77630f1",
+      "planning": "f43085d18614"
     }
   },
   "ent-lora-finetune": {
@@ -780,12 +780,12 @@
       "Private AI Infrastructure Sizing Calculator · Cisco & NVIDIA Datacenter Platforms"
     ],
     "configPaneHashes": {
-      "workload": "a2db61658426",
-      "platform": "a1e295898015",
-      "sharding": "6348a4617f05",
-      "network": "4fcf8a5b91c9",
-      "facility": "37c0bf0b675f",
-      "storage": "a9d14ef36fbb",
+      "workload": "3d72eefe7ed8",
+      "platform": "143ec1f7ef29",
+      "sharding": "db728392a7b8",
+      "network": "a9dc705b9cc2",
+      "facility": "98fde2ee16ac",
+      "storage": "6feb87be2428",
       "rag": "f7cab449b282",
       "stack": "2ef5ee6aaf79",
       "guardrails": "98e498f1414a",
@@ -793,9 +793,9 @@
       "hadr": "fe8ac4269747",
       "mlops": "5067b6453522",
       "mig": "b5d8b480f2ee",
-      "sla": "630b3e0bbaed",
-      "cost": "53a16a51e9db",
-      "planning": "f021a3e9590b"
+      "sla": "10a0064e82a7",
+      "cost": "ea0966a538f2",
+      "planning": "5a83e735320f"
     }
   },
   "ent-full-finetune": {
@@ -935,12 +935,12 @@
       "Private AI Infrastructure Sizing Calculator · Cisco & NVIDIA Datacenter Platforms"
     ],
     "configPaneHashes": {
-      "workload": "3777ac27894f",
-      "platform": "a1e295898015",
-      "sharding": "6d50e6b58f1b",
-      "network": "b045f10505d7",
-      "facility": "50427485a67a",
-      "storage": "4d9bfeea7ef9",
+      "workload": "eed7b52cbe37",
+      "platform": "143ec1f7ef29",
+      "sharding": "d9ab59582be3",
+      "network": "74ca4d6a06d3",
+      "facility": "ca7f948ac1df",
+      "storage": "c1927664113a",
       "rag": "f7cab449b282",
       "stack": "2ef5ee6aaf79",
       "guardrails": "98e498f1414a",
@@ -948,9 +948,9 @@
       "hadr": "c6c47aa0c89f",
       "mlops": "5067b6453522",
       "mig": "b5d8b480f2ee",
-      "sla": "630b3e0bbaed",
-      "cost": "b898b380da5d",
-      "planning": "bda396a99b84"
+      "sla": "10a0064e82a7",
+      "cost": "c9cc131a4de2",
+      "planning": "1ad51bcbd6c6"
     }
   },
   "ent-minimal-airgapped": {
@@ -1085,12 +1085,12 @@
       "Private AI Infrastructure Sizing Calculator · Cisco & NVIDIA Datacenter Platforms"
     ],
     "configPaneHashes": {
-      "workload": "8bbeb03a0211",
-      "platform": "1b035676037b",
-      "sharding": "d718acb573a7",
-      "network": "1a69d76e39ab",
-      "facility": "dce173b4eab6",
-      "storage": "9bcbc8a1fe55",
+      "workload": "04878869f83e",
+      "platform": "b4f0a28cc3f1",
+      "sharding": "4590c60363d2",
+      "network": "c34f5ea761b4",
+      "facility": "241ed2e89a96",
+      "storage": "cb5a342cee17",
       "rag": "f7cab449b282",
       "stack": "2ef5ee6aaf79",
       "guardrails": "f279821c6507",
@@ -1098,9 +1098,9 @@
       "hadr": "95895b16e399",
       "mlops": "5067b6453522",
       "mig": "b5d8b480f2ee",
-      "sla": "1d05b8274ae1",
-      "cost": "174fa7f87244",
-      "planning": "d26ac8b7632a"
+      "sla": "5c634e959ae0",
+      "cost": "49b5b1024b1e",
+      "planning": "f56a907a397c"
     }
   },
   "ent-agent-tool-use": {
@@ -1249,12 +1249,12 @@
       "Private AI Infrastructure Sizing Calculator · Cisco & NVIDIA Datacenter Platforms"
     ],
     "configPaneHashes": {
-      "workload": "0a437a3d3ba8",
-      "platform": "fd1ae427b069",
-      "sharding": "35be0848241c",
-      "network": "085371cd9ae4",
-      "facility": "74e8aa5e7d60",
-      "storage": "87b0ca3a36ec",
+      "workload": "33feebe6be5c",
+      "platform": "aea411420494",
+      "sharding": "04ba4b32f2a0",
+      "network": "4a109cd67adf",
+      "facility": "179b610fea4e",
+      "storage": "bca2542d86c0",
       "rag": "631f4c0c38c8",
       "stack": "73cc2a312391",
       "guardrails": "0a317152a497",
@@ -1262,9 +1262,9 @@
       "hadr": "45ed1ece242d",
       "mlops": "fab697d9e10b",
       "mig": "b5d8b480f2ee",
-      "sla": "af030382cecf",
-      "cost": "8238a83fbc18",
-      "planning": "de11e628a5a2"
+      "sla": "618acb1d2510",
+      "cost": "1aceb4c46854",
+      "planning": "5af7a7cfdc60"
     }
   },
   "ent-agent-swe": {
@@ -1413,12 +1413,12 @@
       "Private AI Infrastructure Sizing Calculator · Cisco & NVIDIA Datacenter Platforms"
     ],
     "configPaneHashes": {
-      "workload": "ac78654e3dbc",
-      "platform": "fd1ae427b069",
-      "sharding": "ae0e268760ba",
-      "network": "1e24eadfd62f",
-      "facility": "70a2a63bf006",
-      "storage": "df6b3c45899a",
+      "workload": "ada40ced62b6",
+      "platform": "aea411420494",
+      "sharding": "8152ea039b05",
+      "network": "d4985b84304a",
+      "facility": "d534e7c37f6d",
+      "storage": "5c0204631c55",
       "rag": "ca62efef9136",
       "stack": "50ba4bc4fbd2",
       "guardrails": "a482274380df",
@@ -1426,9 +1426,9 @@
       "hadr": "7b8c9e9c8dbc",
       "mlops": "a9d707057224",
       "mig": "b5d8b480f2ee",
-      "sla": "e1e28d190d35",
-      "cost": "3c83792b5285",
-      "planning": "ef9c7fbeddcf"
+      "sla": "2a5a2bdbd339",
+      "cost": "aabfac12e690",
+      "planning": "ea3c461cc6cc"
     }
   },
   "ent-agent-deep-research": {
@@ -1579,12 +1579,12 @@
       "Private AI Infrastructure Sizing Calculator · Cisco & NVIDIA Datacenter Platforms"
     ],
     "configPaneHashes": {
-      "workload": "560717c156e0",
-      "platform": "fd1ae427b069",
-      "sharding": "b5349585d68b",
-      "network": "085371cd9ae4",
-      "facility": "fc3277afc18c",
-      "storage": "16c5781526cd",
+      "workload": "c2944ee30a71",
+      "platform": "aea411420494",
+      "sharding": "42b41c32166d",
+      "network": "4a109cd67adf",
+      "facility": "e12dacfbf96c",
+      "storage": "afd7f77dc63b",
       "rag": "7edafd445547",
       "stack": "2ef5ee6aaf79",
       "guardrails": "01873838a683",
@@ -1592,9 +1592,9 @@
       "hadr": "45ed1ece242d",
       "mlops": "fab697d9e10b",
       "mig": "b5d8b480f2ee",
-      "sla": "460db3a0bfe8",
-      "cost": "16f7fe0a0234",
-      "planning": "e1b76ca5be00"
+      "sla": "10c556ad1332",
+      "cost": "2d83d8e0dc7c",
+      "planning": "d84033bc69f9"
     }
   },
   "ent-agent-multi-orchestration": {
@@ -1736,12 +1736,12 @@
       "Private AI Infrastructure Sizing Calculator · Cisco & NVIDIA Datacenter Platforms"
     ],
     "configPaneHashes": {
-      "workload": "528311c91464",
-      "platform": "1b035676037b",
-      "sharding": "68ca303810d2",
-      "network": "8c1508f6a8bf",
-      "facility": "2ce954c42e08",
-      "storage": "5353085cd410",
+      "workload": "bdb77103b249",
+      "platform": "b4f0a28cc3f1",
+      "sharding": "0099efd73c31",
+      "network": "a61ccce15a91",
+      "facility": "068ef7edd922",
+      "storage": "9cdbec3e64ea",
       "rag": "80ef257ae321",
       "stack": "2ef5ee6aaf79",
       "guardrails": "112f2fc9bdb6",
@@ -1749,9 +1749,9 @@
       "hadr": "4c94360039f0",
       "mlops": "d216b591e505",
       "mig": "b5d8b480f2ee",
-      "sla": "20a8057b2e79",
-      "cost": "32ab1ea79eff",
-      "planning": "c2f32adfdb79"
+      "sla": "8e69e6b87916",
+      "cost": "109110b7ed58",
+      "planning": "4990c295b505"
     }
   },
   "ent-agent-sql-analysis": {
@@ -1890,12 +1890,12 @@
       "Private AI Infrastructure Sizing Calculator · Cisco & NVIDIA Datacenter Platforms"
     ],
     "configPaneHashes": {
-      "workload": "219d243b0ef8",
-      "platform": "fd1ae427b069",
-      "sharding": "b401b147f01f",
-      "network": "28c663d87d43",
-      "facility": "42c17b02d551",
-      "storage": "fad99f7f905c",
+      "workload": "cd2fc6d5e27b",
+      "platform": "aea411420494",
+      "sharding": "21e684427a5b",
+      "network": "ff593866fa18",
+      "facility": "ead32665a56e",
+      "storage": "c9a56e32c3ee",
       "rag": "f7cab449b282",
       "stack": "2ef5ee6aaf79",
       "guardrails": "98e498f1414a",
@@ -1903,9 +1903,9 @@
       "hadr": "95895b16e399",
       "mlops": "5067b6453522",
       "mig": "b5d8b480f2ee",
-      "sla": "d1de556baea8",
-      "cost": "04c2b2eb220a",
-      "planning": "88328224cb93"
+      "sla": "52286d232957",
+      "cost": "e573fd70ee29",
+      "planning": "1bb1d39c2f61"
     }
   },
   "neo-frontier-pretrain": {
@@ -2055,12 +2055,12 @@
       "Private AI Infrastructure Sizing Calculator · Cisco & NVIDIA Datacenter Platforms"
     ],
     "configPaneHashes": {
-      "workload": "f0ed8790f39e",
-      "platform": "abdb59984326",
-      "sharding": "d60aaab1a272",
-      "network": "3deab01902dc",
-      "facility": "1bd3848bf9a0",
-      "storage": "c77232e8c455",
+      "workload": "b689baa47183",
+      "platform": "36705161ef61",
+      "sharding": "714a6b4944bd",
+      "network": "53540543d917",
+      "facility": "7f465fa68096",
+      "storage": "fdf51545bc09",
       "rag": "f7cab449b282",
       "stack": "c65e3bdab78e",
       "guardrails": "98e498f1414a",
@@ -2068,9 +2068,9 @@
       "hadr": "039975afef36",
       "mlops": "5067b6453522",
       "mig": "b5d8b480f2ee",
-      "sla": "630b3e0bbaed",
-      "cost": "9184b1695a2d",
-      "planning": "49f956f87a25"
+      "sla": "10a0064e82a7",
+      "cost": "1bc4b55e52f4",
+      "planning": "c0195fbe6896"
     }
   },
   "neo-maas-inference": {
@@ -2223,12 +2223,12 @@
       "Private AI Infrastructure Sizing Calculator · Cisco & NVIDIA Datacenter Platforms"
     ],
     "configPaneHashes": {
-      "workload": "34d722d66929",
-      "platform": "abdb59984326",
-      "sharding": "6f28b16df9a8",
-      "network": "8781c73dd6d7",
-      "facility": "161885be01b6",
-      "storage": "4bd7c992c508",
+      "workload": "997f154589ce",
+      "platform": "36705161ef61",
+      "sharding": "1f29efacdf53",
+      "network": "69f79aa27d16",
+      "facility": "c9120750db95",
+      "storage": "38824411a983",
       "rag": "f7cab449b282",
       "stack": "c65e3bdab78e",
       "guardrails": "038c19e6ad92",
@@ -2236,9 +2236,9 @@
       "hadr": "676fcf4cc95c",
       "mlops": "32dcdaa1e779",
       "mig": "b5d8b480f2ee",
-      "sla": "8b6734489b2b",
-      "cost": "84e3f541c68e",
-      "planning": "a4ddc1eb202c"
+      "sla": "96fc2492cabc",
+      "cost": "61978c536db5",
+      "planning": "06aea01b03b9"
     }
   },
   "neo-llmd-disaggregated": {
@@ -2394,12 +2394,12 @@
       "Private AI Infrastructure Sizing Calculator · Cisco & NVIDIA Datacenter Platforms"
     ],
     "configPaneHashes": {
-      "workload": "feb4a684e3c5",
-      "platform": "abdb59984326",
-      "sharding": "63ad9c40cd17",
-      "network": "1a4f321d2ae7",
-      "facility": "b85d8a71739c",
-      "storage": "40efa98cf306",
+      "workload": "0d1537ed69bf",
+      "platform": "36705161ef61",
+      "sharding": "3de08d5bded9",
+      "network": "0d58318a8b5d",
+      "facility": "697b6b85f985",
+      "storage": "f83de3607c08",
       "rag": "f7cab449b282",
       "stack": "d19b1333536c",
       "guardrails": "98e498f1414a",
@@ -2407,9 +2407,9 @@
       "hadr": "95895b16e399",
       "mlops": "5067b6453522",
       "mig": "b5d8b480f2ee",
-      "sla": "d74c63b6e907",
-      "cost": "f91822b9a927",
-      "planning": "92a6bb93652d"
+      "sla": "47ba742642de",
+      "cost": "e35ae099a440",
+      "planning": "d3ddcd086b1a"
     }
   }
 }

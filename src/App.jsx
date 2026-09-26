@@ -7,6 +7,10 @@ import {
 import { PLATFORM_SYSTEMS, PLATFORM_VENDORS } from './data/platforms';
 import { USE_CASE_PRESETS } from './data/presets';
 import { DEFAULT_CONFIG, applyPresetConfig, withPlatform } from './state/config';
+import { useRoute, rememberedMode } from './state/route';
+import { HomePage } from './components/HomePage';
+import { LearningPage } from './components/learning/LearningPage';
+import { LearnLink } from './components/learning/LearnLink';
 import { computeScenario } from './utils/scenario';
 import { buildBomText } from './utils/bomText';
 import { scenarioMetrics } from './utils/compare';
@@ -46,8 +50,9 @@ function makeSetters(setConfig) {
 }
 
 export default function App() {
-  // --- Top-level page (calculator vs. standalone glossary page) ---
-  const [page, setPage] = useState('calculator'); // 'calculator' | 'glossary'
+  // --- Top-level route: home, learning mode, advanced calculator, or the guide ---
+  const [route, navigate] = useRoute();
+  const setPage = (p) => navigate({ page: p === 'glossary' ? 'guide' : 'advanced' });
   const [config, setConfig] = useState(DEFAULT_CONFIG);
   const setters = useMemo(() => makeSetters(setConfig), []);
   const [activeInputTab, setActiveInputTab] = useState('workload');
@@ -164,7 +169,7 @@ export default function App() {
     ...config, ...setters, ...scenario,
     // In traffic mode the concurrency to size for is solved from the request rate.
     concurrency: scenario.traffic ? scenario.traffic.concurrency : config.concurrency,
-    page, setPage, activeInputTab, setActiveInputTab, selectedPresetId, applyPreset, activePreset,
+    route, navigate, setPage, activeInputTab, setActiveInputTab, selectedPresetId, applyPreset, activePreset,
     handleVendorChange, copiedBOM, technicalNavTabs, economicsNavTabs,
   };
   ctx.config = config;
@@ -193,8 +198,32 @@ export default function App() {
     setTimeout(() => setCopiedBOM(false), 2500);
   };
 
-  if (page === 'glossary') {
-    return <GlossaryPage onBack={() => setPage('calculator')} />;
+  if (route.page === 'guide') {
+    return <GlossaryPage key={route.docId || 'overview'} initialDocId={route.docId} onBack={() => (window.history.length > 1 ? window.history.back() : navigate({ page: rememberedMode() || 'home' }))} />;
+  }
+  if (route.page === 'home') {
+    return (
+      <HomePage
+        onLearn={(lessonId) => navigate({ page: 'learn', lessonId })}
+        onAdvanced={() => navigate({ page: 'advanced' })}
+        onGuidedSetup={() => { navigate({ page: 'advanced' }); setGuidedOpen(true); }}
+        onGuide={() => navigate({ page: 'guide' })}
+      />
+    );
+  }
+  if (route.page === 'learn') {
+    return (
+      <LearningPage
+        lessonId={route.lessonId}
+        navigate={navigate}
+        onOpenInAdvanced={(next) => {
+          setConfig(next);
+          setSelectedPresetId('');
+          setActiveInputTab('workload');
+          navigate({ page: 'advanced' });
+        }}
+      />
+    );
   }
 
   return (
@@ -223,6 +252,8 @@ export default function App() {
 
         {/* PANE 2: Central Configuration Variables Pane (Independently Scrollable) */}
         <main data-testid="config-pane" className="flex-1 min-w-[380px] overflow-y-auto p-4 md:p-6 bg-zinc-950/70 border-r border-zinc-800 space-y-4">
+
+          <LearnLink tabId={activeInputTab} navigate={navigate} />
 
           {/* 1. Workload Mode & Model */}
           {activeInputTab === 'workload' && <WorkloadTab ctx={ctx} />}
